@@ -97,7 +97,7 @@ class BullhornAuth:
                 # Check if this redirect contains the auth code
                 if "code" in query_params:
                     # Only update regional URL if redirected to a Bullhorn domain
-                    if parsed.netloc and "bullhornstaffing.com" in parsed.netloc:
+                    if parsed.netloc and "bullhornstaffing.com" in parsed.netloc and parsed.netloc.startswith("auth"):
                         self._regional_auth_url = f"{parsed.scheme}://{parsed.netloc}"
                     return query_params["code"][0]
 
@@ -130,7 +130,7 @@ class BullhornAuth:
         }
 
         with httpx.Client() as client:
-            response = client.post(url, params=params)
+            response = client.post(url, data=params)
 
             if response.status_code != 200:
                 raise AuthenticationError(
@@ -160,7 +160,7 @@ class BullhornAuth:
         }
 
         with httpx.Client() as client:
-            response = client.post(url, params=params)
+            response = client.post(url, data=params)
 
             if response.status_code != 200:
                 raise AuthenticationError(
