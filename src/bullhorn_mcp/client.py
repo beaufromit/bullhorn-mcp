@@ -163,6 +163,34 @@ class BullhornClient:
         result = self._request("GET", f"/entity/{entity}/{entity_id}", params)
         return result.get("data", {})
 
+    def resolve_owner(self, owner: str | dict) -> dict | list:
+        """Resolve an owner to a Bullhorn CorporateUser ID.
+
+        Args:
+            owner: Either {"id": int} (passed through) or a name string to search.
+
+        Returns:
+            {"id": int} if resolved to a single user, or a list of matching user
+            dicts if multiple users match (caller must disambiguate).
+
+        Raises:
+            ValueError: If no CorporateUser matches the given name.
+        """
+        if isinstance(owner, dict):
+            return owner
+
+        results = self.query(
+            entity="CorporateUser",
+            where=f"name='{owner}'",
+            fields="id,firstName,lastName,email,department",
+        )
+
+        if len(results) == 0:
+            raise ValueError(f"No CorporateUser found matching '{owner}'")
+        if len(results) == 1:
+            return {"id": results[0]["id"]}
+        return results
+
     def get_meta(self, entity: str) -> dict[str, Any]:
         """Get metadata/schema for an entity type.
 

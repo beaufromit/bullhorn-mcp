@@ -394,6 +394,141 @@ class TestCreateCompany:
         )
 
 
+class TestCreateContact:
+    """Tests for create_contact tool."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_create_contact_success(self, mock_client, mock_metadata):
+        """create_contact resolves owner by ID and returns created contact."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.return_value = {
+            "changedEntityId": 54321,
+            "changeType": "INSERT",
+            "data": {"id": 54321, "firstName": "Jane", "lastName": "Doe",
+                     "clientCorporation": {"id": 1}, "owner": {"id": 99}},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 54321
+        assert data["changeType"] == "INSERT"
+
+    def test_create_contact_missing_owner(self, mock_client, mock_metadata):
+        """create_contact returns error when owner key is absent."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({"firstName": "Jane", "clientCorporation": {"id": 1}})
+
+        data = json.loads(result)
+        assert data["error"] == "owner_required"
+        mock_client.create.assert_not_called()
+
+    def test_create_contact_missing_corporation(self, mock_client, mock_metadata):
+        """create_contact returns error when clientCorporation key is absent."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({"firstName": "Jane", "owner": {"id": 1}})
+
+        data = json.loads(result)
+        assert data["error"] == "clientCorporation_required"
+        mock_client.create.assert_not_called()
+
+    def test_create_contact_owner_ambiguous(self, mock_client, mock_metadata):
+        """create_contact returns disambiguation response when multiple users match."""
+        mock_client.resolve_owner.return_value = [
+            {"id": 10, "firstName": "John", "lastName": "Smith", "email": "j1@firm.com", "department": "Sales"},
+            {"id": 11, "firstName": "John", "lastName": "Smith", "email": "j2@firm.com", "department": "Tech"},
+        ]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "Jane", "clientCorporation": {"id": 1}, "owner": "John Smith",
+            })
+
+        data = json.loads(result)
+        assert data["error"] == "owner_ambiguous"
+        assert len(data["matches"]) == 2
+        mock_client.create.assert_not_called()
+
+    def test_create_contact_owner_not_found(self, mock_client, mock_metadata):
+        """create_contact returns error when owner name matches no user."""
+        mock_client.resolve_owner.side_effect = ValueError("No CorporateUser found matching 'Ghost User'")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "Jane", "clientCorporation": {"id": 1}, "owner": "Ghost User",
+            })
+
+        data = json.loads(result)
+        assert data["error"] == "owner_not_found"
+        mock_client.create.assert_not_called()
+
+    def test_create_contact_owner_by_id(self, mock_client, mock_metadata):
+        """create_contact with owner as dict passes through without querying CorporateUser."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.return_value = {
+            "changedEntityId": 1, "changeType": "INSERT",
+            "data": {"id": 1, "firstName": "Jane"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.create_contact({
+                "firstName": "Jane", "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        mock_client.resolve_owner.assert_called_once_with({"id": 99})
+
+
+class TestSprint4E2E:
+    """End-to-end tests for Sprint 4."""
+
+    def test_sprint4_e2e_create_contact_with_name_owner(self, mock_client):
+        """Mock CorporateUser lookup (single match) + create; assert owner resolved."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.return_value = {
+            "changedEntityId": 54321,
+            "changeType": "INSERT",
+            "data": {"id": 54321, "firstName": "Jane", "lastName": "Doe",
+                     "clientCorporation": {"id": 1}, "owner": {"id": 99}},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": "Maryrose Lyons",
+            })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 54321
+        assert data["data"]["owner"]["id"] == 99
+        mock_client.resolve_owner.assert_called_once_with("Maryrose Lyons")
+        # Resolved owner must be written into the fields sent to create
+        create_call_fields = mock_client.create.call_args[0][1]
+        assert create_call_fields["owner"] == {"id": 99}
+
+
 class TestSprint3E2E:
     """End-to-end tests for Sprint 3."""
 
@@ -512,6 +647,7 @@ class TestMCPServerSetup:
         assert "query_entities" in tools
         assert "get_entity_fields" in tools
         assert "create_company" in tools
+        assert "create_contact" in tools
 
     def test_server_name(self):
         """Test server name is set correctly."""

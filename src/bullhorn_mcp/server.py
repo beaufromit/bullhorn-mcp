@@ -377,6 +377,64 @@ def create_company(fields: dict) -> str:
 
 
 @mcp.tool()
+def create_contact(fields: dict) -> str:
+    """Create a new ClientContact record in Bullhorn CRM, linked to a company.
+
+    Args:
+        fields: Dictionary of field names (or display labels) and values.
+                Required keys: owner, clientCorporation (with an id).
+                owner accepts either {"id": 12345} or a consultant name string
+                such as "Maryrose Lyons" (resolved to a Bullhorn CorporateUser ID).
+                clientCorporation must be {"id": <company_id>}.
+                Example: {
+                    "firstName": "Jane", "lastName": "Doe", "name": "Jane Doe",
+                    "email": "jane@acme.com", "title": "VP Engineering",
+                    "clientCorporation": {"id": 98765},
+                    "owner": "Maryrose Lyons"
+                }
+
+    Returns:
+        JSON object with changedEntityId, changeType, and full data of the created record.
+        If owner resolves to multiple users, returns disambiguation JSON instead of creating.
+
+    Examples:
+        - create_contact({"firstName": "Jane", "lastName": "Doe", "name": "Jane Doe",
+                          "clientCorporation": {"id": 98765}, "owner": {"id": 12345}})
+        - create_contact({"firstName": "John", "lastName": "Smith",
+                          "clientCorporation": {"id": 1}, "owner": "Maryrose Lyons"})
+    """
+    try:
+        client = get_client()
+
+        if "owner" not in fields:
+            return format_response({"error": "owner_required", "message": "owner is required to create a ClientContact."})
+
+        if "clientCorporation" not in fields:
+            return format_response({"error": "clientCorporation_required", "message": "clientCorporation is required to create a ClientContact."})
+
+        owner_result = client.resolve_owner(fields["owner"])
+
+        if isinstance(owner_result, list):
+            return format_response({
+                "error": "owner_ambiguous",
+                "matches": owner_result,
+                "message": "Multiple users found. Specify owner by ID.",
+            })
+
+        contact_fields = dict(fields)
+        contact_fields["owner"] = owner_result
+
+        resolved = get_metadata().resolve_fields("ClientContact", contact_fields)
+        result = client.create("ClientContact", resolved)
+        return format_response(result)
+
+    except ValueError as e:
+        return format_response({"error": "owner_not_found", "message": str(e)})
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
 def get_entity_fields(
     entity: str,
     label: str | None = None,

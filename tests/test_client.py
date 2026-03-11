@@ -368,6 +368,63 @@ class TestCreateEntity:
         assert "400" in str(exc_info.value)
 
 
+class TestResolveOwner:
+    """Tests for BullhornClient.resolve_owner()."""
+
+    @respx.mock
+    def test_resolve_owner_by_id_passthrough(self, mock_auth, mock_session):
+        """resolve_owner returns {"id": int} unchanged without querying Bullhorn."""
+        client = BullhornClient(mock_auth)
+        result = client.resolve_owner({"id": 42})
+        assert result == {"id": 42}
+
+    @respx.mock
+    def test_resolve_owner_by_name_single_match(self, mock_auth, mock_session):
+        """resolve_owner returns {"id": user_id} when name matches exactly one user."""
+        respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": 99, "firstName": "Maryrose", "lastName": "Lyons",
+                                "email": "m.lyons@firm.com", "department": "Sales"}]},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.resolve_owner("Maryrose Lyons")
+        assert result == {"id": 99}
+
+    @respx.mock
+    def test_resolve_owner_by_name_multiple_matches(self, mock_auth, mock_session):
+        """resolve_owner returns list of matches when name is ambiguous."""
+        respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [
+                    {"id": 10, "firstName": "John", "lastName": "Smith", "email": "j.smith1@firm.com", "department": "Sales"},
+                    {"id": 11, "firstName": "John", "lastName": "Smith", "email": "j.smith2@firm.com", "department": "Tech"},
+                ]},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.resolve_owner("John Smith")
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert result[0]["id"] == 10
+        assert result[1]["id"] == 11
+
+    @respx.mock
+    def test_resolve_owner_by_name_no_match(self, mock_auth, mock_session):
+        """resolve_owner raises ValueError when no user found."""
+        respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(ValueError, match="No CorporateUser found matching"):
+            client.resolve_owner("Nobody Here")
+
+
 class TestEdgeCases:
     """Tests for edge cases and error scenarios."""
 
