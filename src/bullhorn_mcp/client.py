@@ -23,7 +23,11 @@ class BullhornClient:
         self.auth = auth
 
     def _request(
-        self, method: str, endpoint: str, params: dict[str, Any] | None = None
+        self,
+        method: str,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Make authenticated request to Bullhorn API."""
         session = self.auth.session
@@ -32,21 +36,36 @@ class BullhornClient:
         headers = {"BhRestToken": session.bh_rest_token}
 
         with httpx.Client() as client:
-            response = client.request(method, url, params=params, headers=headers)
+            response = client.request(method, url, params=params, json=json, headers=headers)
 
             if response.status_code == 401:
                 # Session expired, force refresh and retry
                 self.auth._refresh_session()
                 session = self.auth.session
                 headers = {"BhRestToken": session.bh_rest_token}
-                response = client.request(method, url, params=params, headers=headers)
+                response = client.request(method, url, params=params, json=json, headers=headers)
 
-            if response.status_code != 200:
+            if response.status_code not in (200, 201):
                 raise BullhornAPIError(
                     f"API request failed: {response.status_code} - {response.text}"
                 )
 
             return response.json()
+
+    def create(self, entity: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Create a new entity in Bullhorn.
+
+        Args:
+            entity: Entity type (ClientCorporation, ClientContact, etc.)
+            data: Field values for the new entity
+
+        Returns:
+            Dict with changedEntityId, changeType, and full data of created record
+        """
+        result = self._request("PUT", f"/entity/{entity}", json=data)
+        entity_id = result["changedEntityId"]
+        record = self.get(entity, entity_id)
+        return {"changedEntityId": entity_id, "changeType": "INSERT", "data": record}
 
     def search(
         self,

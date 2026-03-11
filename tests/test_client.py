@@ -287,6 +287,87 @@ class TestDefaultFields:
         assert "dateAdded" in DEFAULT_FIELDS["ClientCorporation"]
 
 
+class TestCreateEntity:
+    """Tests for BullhornClient.create() and _request() JSON body support."""
+
+    @respx.mock
+    def test_request_with_json_body(self, mock_auth, mock_session):
+        """_request() sends JSON body in PUT request."""
+        route = respx.put(f"{mock_session.rest_url}/entity/ClientCorporation").mock(
+            return_value=httpx.Response(
+                200,
+                json={"changedEntityId": 123, "changeType": "INSERT"},
+            )
+        )
+        # Mock the subsequent GET for create()
+        respx.get(f"{mock_session.rest_url}/entity/ClientCorporation/123").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 123, "name": "Acme"}})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.create("ClientCorporation", {"name": "Acme", "status": "Prospect"})
+
+        request = route.calls[0].request
+        import json
+        body = json.loads(request.content)
+        assert body["name"] == "Acme"
+        assert body["status"] == "Prospect"
+
+    @respx.mock
+    def test_request_accepts_201_status(self, mock_auth, mock_session):
+        """_request() treats 201 as success (no error raised)."""
+        respx.put(f"{mock_session.rest_url}/entity/ClientCorporation").mock(
+            return_value=httpx.Response(
+                201,
+                json={"changedEntityId": 456, "changeType": "INSERT"},
+            )
+        )
+        respx.get(f"{mock_session.rest_url}/entity/ClientCorporation/456").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 456}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.create("ClientCorporation", {"name": "Beta Corp"})
+        assert result["changedEntityId"] == 456
+
+    @respx.mock
+    def test_create_returns_insert_response(self, mock_auth, mock_session):
+        """create() returns combined dict with changedEntityId, changeType, and data."""
+        respx.put(f"{mock_session.rest_url}/entity/ClientCorporation").mock(
+            return_value=httpx.Response(
+                200,
+                json={"changedEntityId": 123, "changeType": "INSERT"},
+            )
+        )
+        respx.get(f"{mock_session.rest_url}/entity/ClientCorporation/123").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"id": 123, "name": "Acme Corp", "status": "Prospect"}},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.create("ClientCorporation", {"name": "Acme Corp", "status": "Prospect"})
+
+        assert result["changedEntityId"] == 123
+        assert result["changeType"] == "INSERT"
+        assert result["data"]["id"] == 123
+        assert result["data"]["name"] == "Acme Corp"
+
+    @respx.mock
+    def test_create_raises_on_api_error(self, mock_auth, mock_session):
+        """create() raises BullhornAPIError on non-200/201 response."""
+        respx.put(f"{mock_session.rest_url}/entity/ClientCorporation").mock(
+            return_value=httpx.Response(400, text="Bad Request: missing required field")
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError) as exc_info:
+            client.create("ClientCorporation", {})
+
+        assert "400" in str(exc_info.value)
+
+
 class TestEdgeCases:
     """Tests for edge cases and error scenarios."""
 

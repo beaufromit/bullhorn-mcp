@@ -327,6 +327,99 @@ class TestSprint1E2E:
         assert "id" in companies_data[0]
 
 
+class TestCreateCompany:
+    """Tests for create_company tool."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_create_company_success(self, mock_client, mock_metadata):
+        """create_company returns JSON with changedEntityId on success."""
+        mock_client.create.return_value = {
+            "changedEntityId": 98765,
+            "changeType": "INSERT",
+            "data": {"id": 98765, "name": "Acme Holdings Ltd", "status": "Prospect"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_company({"name": "Acme Holdings Ltd", "status": "Prospect"})
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 98765
+        assert data["changeType"] == "INSERT"
+        assert data["data"]["name"] == "Acme Holdings Ltd"
+        mock_client.create.assert_called_once_with(
+            "ClientCorporation", {"name": "Acme Holdings Ltd", "status": "Prospect"}
+        )
+
+    def test_create_company_api_error(self, mock_client, mock_metadata):
+        """create_company returns ERROR prefix on API failure."""
+        mock_client.create.side_effect = BullhornAPIError("missing required field")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_company({"status": "Prospect"})
+
+        assert result.startswith("ERROR:")
+        assert "missing required field" in result
+
+    def test_create_company_label_resolution(self, mock_client):
+        """create_company resolves field labels to API names before creating."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        # Simulate label "Industry" resolving to API name "industryList"
+        meta.resolve_fields.return_value = {"name": "Acme", "industryList": "Technology"}
+        mock_client.create.return_value = {
+            "changedEntityId": 1,
+            "changeType": "INSERT",
+            "data": {"id": 1, "name": "Acme"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            server.create_company({"name": "Acme", "Industry": "Technology"})
+
+        meta.resolve_fields.assert_called_once_with(
+            "ClientCorporation", {"name": "Acme", "Industry": "Technology"}
+        )
+        mock_client.create.assert_called_once_with(
+            "ClientCorporation", {"name": "Acme", "industryList": "Technology"}
+        )
+
+
+class TestSprint3E2E:
+    """End-to-end tests for Sprint 3."""
+
+    def test_sprint3_e2e_create_and_retrieve_company(self, mock_client):
+        """Mock PUT create then GET retrieve; assert response has changedEntityId and data.name."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        mock_client.create.return_value = {
+            "changedEntityId": 98765,
+            "changeType": "INSERT",
+            "data": {"id": 98765, "name": "Acme", "status": "Prospect"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            result = server.create_company({"name": "Acme", "status": "Prospect"})
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 98765
+        assert data["data"]["name"] == "Acme"
+        assert data["changeType"] == "INSERT"
+
+
 class TestGetEntityFields:
     """Tests for get_entity_fields tool."""
 
@@ -418,6 +511,7 @@ class TestMCPServerSetup:
         assert "search_entities" in tools
         assert "query_entities" in tools
         assert "get_entity_fields" in tools
+        assert "create_company" in tools
 
     def test_server_name(self):
         """Test server name is set correctly."""

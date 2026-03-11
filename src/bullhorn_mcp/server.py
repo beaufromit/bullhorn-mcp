@@ -350,6 +350,33 @@ def query_entities(
 
 
 @mcp.tool()
+def create_company(fields: dict) -> str:
+    """Create a new ClientCorporation record in Bullhorn CRM.
+
+    Args:
+        fields: Dictionary of field names (or display labels) and values for the new company.
+                Field labels are resolved to API names automatically (e.g. "Industry" → "industryList").
+                Example: {"name": "Acme Holdings Ltd", "status": "Prospect", "phone": "+1 555 0100"}
+
+    Returns:
+        JSON object with changedEntityId, changeType, and full data of the created record.
+
+    Examples:
+        - create_company({"name": "Acme Corp", "status": "Prospect"})
+        - create_company({"name": "Globex", "status": "Active Account", "phone": "+1 212 555 0100",
+                          "address": {"city": "New York", "state": "NY"}})
+    """
+    try:
+        client = get_client()
+        resolved = get_metadata().resolve_fields("ClientCorporation", fields)
+        result = client.create("ClientCorporation", resolved)
+        return format_response(result)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
 def get_entity_fields(
     entity: str,
     label: str | None = None,
