@@ -20,10 +20,12 @@ def mock_client(sample_job, sample_candidate):
 
 @pytest.fixture(autouse=True)
 def reset_client():
-    """Reset the global client before each test."""
+    """Reset the global client and metadata cache before each test."""
     server._client = None
+    server._metadata = None
     yield
     server._client = None
+    server._metadata = None
 
 
 class TestListJobs:
@@ -325,6 +327,81 @@ class TestSprint1E2E:
         assert "id" in companies_data[0]
 
 
+class TestGetEntityFields:
+    """Tests for get_entity_fields tool."""
+
+    SAMPLE_FIELDS = [
+        {"name": "id", "label": "Contact ID", "type": "ID", "required": False},
+        {"name": "recruiterUserID", "label": "Consultant", "type": "TO_ONE", "required": True},
+        {"name": "clientCorporation", "label": "Company", "type": "TO_ONE", "required": True},
+    ]
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.get_fields.return_value = self.SAMPLE_FIELDS
+        meta.resolve_label_to_api.side_effect = lambda entity, label: (
+            "recruiterUserID" if label.lower() == "consultant" else None
+        )
+        meta.resolve_api_to_label.side_effect = lambda entity, api: (
+            "Company" if api == "clientCorporation" else None
+        )
+        return meta
+
+    def test_get_entity_fields_returns_list(self, mock_client, mock_metadata):
+        """No label/api_name returns full field list."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.get_entity_fields(entity="ClientContact")
+
+        data = json.loads(result)
+        assert isinstance(data, list)
+        assert len(data) == 3
+        assert any(f["name"] == "recruiterUserID" for f in data)
+
+    def test_get_entity_fields_resolve_label(self, mock_client, mock_metadata):
+        """Providing label returns resolved api_name."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.get_entity_fields(entity="ClientContact", label="Consultant")
+
+        data = json.loads(result)
+        assert data["label"] == "Consultant"
+        assert data["api_name"] == "recruiterUserID"
+
+    def test_get_entity_fields_resolve_api_name(self, mock_client, mock_metadata):
+        """Providing api_name returns resolved label."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.get_entity_fields(entity="ClientContact", api_name="clientCorporation")
+
+        data = json.loads(result)
+        assert data["api_name"] == "clientCorporation"
+        assert data["label"] == "Company"
+
+    def test_get_entity_fields_unresolvable_label(self, mock_client, mock_metadata):
+        """Unresolvable label returns null api_name without error."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.get_entity_fields(entity="ClientContact", label="NonExistent")
+
+        data = json.loads(result)
+        assert data["label"] == "NonExistent"
+        assert data["api_name"] is None
+
+    def test_get_entity_fields_api_error(self, mock_client, mock_metadata):
+        """API error returns ERROR prefix."""
+        mock_metadata.get_fields.side_effect = BullhornAPIError("meta failed")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.get_entity_fields(entity="ClientContact")
+
+        assert result.startswith("ERROR:")
+
+
 class TestMCPServerSetup:
     """Tests for MCP server configuration."""
 
@@ -334,10 +411,13 @@ class TestMCPServerSetup:
 
         assert "list_jobs" in tools
         assert "list_candidates" in tools
+        assert "list_contacts" in tools
+        assert "list_companies" in tools
         assert "get_job" in tools
         assert "get_candidate" in tools
         assert "search_entities" in tools
         assert "query_entities" in tools
+        assert "get_entity_fields" in tools
 
     def test_server_name(self):
         """Test server name is set correctly."""

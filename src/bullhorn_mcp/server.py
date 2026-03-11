@@ -1,4 +1,4 @@
-"""Bullhorn CRM MCP Server - Query jobs and candidates via natural language."""
+"""Bullhorn CRM MCP Server - Query and manage CRM data via AI assistants."""
 
 import json
 from mcp.server.fastmcp import FastMCP
@@ -6,15 +6,21 @@ from mcp.server.fastmcp import FastMCP
 from .config import BullhornConfig
 from .auth import BullhornAuth, AuthenticationError
 from .client import BullhornClient, BullhornAPIError
+from .metadata import BullhornMetadata
 
 # Initialize MCP server
 mcp = FastMCP(
     "Bullhorn CRM",
-    instructions="Query Bullhorn CRM data - jobs, candidates, and placements",
+    instructions=(
+        "Query and manage Bullhorn CRM data — jobs, candidates, contacts, companies, "
+        "and placements. Supports field metadata resolution between API names and "
+        "display labels."
+    ),
 )
 
-# Global client instance (initialized on first use)
+# Global instances (initialized on first use)
 _client: BullhornClient | None = None
+_metadata: BullhornMetadata | None = None
 
 
 def get_client() -> BullhornClient:
@@ -25,6 +31,14 @@ def get_client() -> BullhornClient:
         auth = BullhornAuth(config)
         _client = BullhornClient(auth)
     return _client
+
+
+def get_metadata() -> BullhornMetadata:
+    """Get or create the Bullhorn metadata resolver."""
+    global _metadata
+    if _metadata is None:
+        _metadata = BullhornMetadata(get_client())
+    return _metadata
 
 
 def format_response(data: list | dict) -> str:
@@ -330,6 +344,47 @@ def query_entities(
         )
 
         return format_response(results)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def get_entity_fields(
+    entity: str,
+    label: str | None = None,
+    api_name: str | None = None,
+) -> str:
+    """Query field metadata for a Bullhorn entity type, with optional label resolution.
+
+    Args:
+        entity: Entity type (e.g. ClientContact, ClientCorporation, JobOrder)
+        label: Display label to resolve to its API field name (e.g. "Consultant")
+        api_name: API field name to resolve to its display label (e.g. "recruiterUserID")
+
+    Returns:
+        If neither label nor api_name: JSON array of all fields with name, label, type, required.
+        If label provided: JSON object with the resolved api_name (null if not found).
+        If api_name provided: JSON object with the resolved label (null if not found).
+
+    Examples:
+        - get_entity_fields(entity="ClientContact") - List all fields
+        - get_entity_fields(entity="ClientContact", label="Consultant") - Resolve label -> API name
+        - get_entity_fields(entity="ClientContact", api_name="recruiterUserID") - Resolve API name -> label
+    """
+    try:
+        metadata = get_metadata()
+
+        if label is not None:
+            resolved = metadata.resolve_label_to_api(entity, label)
+            return format_response({"label": label, "api_name": resolved})
+
+        if api_name is not None:
+            resolved = metadata.resolve_api_to_label(entity, api_name)
+            return format_response({"api_name": api_name, "label": resolved})
+
+        fields = metadata.get_fields(entity)
+        return format_response(fields)
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
