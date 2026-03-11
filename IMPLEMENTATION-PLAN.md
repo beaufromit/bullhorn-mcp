@@ -16,9 +16,9 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 2 | **COMPLETE** | Field Metadata and Label Resolution — 90 tests passing, tagged v0.0.2 |
 | Sprint 3 | **COMPLETE** | Create ClientCorporation — 98 tests passing, tagged v0.0.3 |
 | Sprint 4 | **COMPLETE** | Create ClientContact with Owner Resolution — 109 tests passing, tagged v0.0.4 |
-| Sprint 5 | **NEXT** | Duplicate Detection |
-| Sprint 6 | PENDING | Update Records and Add Notes |
-| Sprint 7 | PENDING | Bulk Import |
+| Sprint 5 | **COMPLETE** | Duplicate Detection — 149 tests passing, tagged v0.0.5 |
+| Sprint 6 | **COMPLETE** | Update Records and Add Notes — 163 tests passing, tagged v0.0.6 |
+| Sprint 7 | **NEXT** | Bulk Import |
 
 ---
 
@@ -27,28 +27,27 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 ### Existing modules (implemented)
 - `src/bullhorn_mcp/config.py` — `BullhornConfig` dataclass with env loading
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
-- `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`
+- `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note()`
 - `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching
-- `src/bullhorn_mcp/server.py` — MCP server with 11 tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`. Includes `get_client()` and `get_metadata()` helpers.
+- `src/bullhorn_mcp/server.py` — MCP server with 15 tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`. Includes `get_client()` and `get_metadata()` helpers.
+- `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules to be created
-- `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring (Sprint 5)
 - `src/bullhorn_mcp/bulk.py` — Bulk import orchestration logic (Sprint 7)
 
 ### Existing modules to be extended
-- `src/bullhorn_mcp/client.py` — Add `update()`, `add_note()` methods (Sprints 6)
-- `src/bullhorn_mcp/server.py` — Add 5 more MCP tools: `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import` (Sprints 5, 6, 7)
+- `src/bullhorn_mcp/server.py` — Add `bulk_import` MCP tool (Sprint 7)
 
 ### Existing test files
 - `tests/test_auth.py` — 12 tests (auth flow, regional servers)
 - `tests/test_config.py` — 6 tests
-- `tests/test_client.py` — 30 tests (search, query, get, pagination, create, resolve_owner, edge cases)
+- `tests/test_client.py` — 35 tests (search, query, get, pagination, create, resolve_owner, edge cases)
 - `tests/test_metadata.py` — 14 tests (get_fields, label resolution, resolve_fields, e2e)
-- `tests/test_server.py` — 47 tests (all 11 tools + server setup + E2E tests)
-- **Total: 109 tests, all passing**
+- `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
+- `tests/test_server.py` — 71 tests (all 15 tools + server setup + E2E tests)
+- **Total: 163 tests, all passing**
 
 ### New test files to be created
-- `tests/test_fuzzy.py` (Sprint 5)
 - `tests/test_bulk.py` (Sprint 7)
 
 ### Existing test files to be extended
@@ -183,6 +182,10 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 ## Sprint 5: Duplicate Detection
 
+**Tag:** v0.0.5
+
+**What was delivered:** Created `fuzzy.py` with `normalize()` (strips legal suffixes ltd/inc/plc/corp/llc/pty, punctuation, collapses whitespace), `score_company_match()` (SequenceMatcher on normalized strings + stop-word-aware acronym detection — BNY vs "Bank of New York Mellon" scores 0.82 "likely"), `categorize_score()` (exact ≥ 0.95 / likely 0.75–0.95 / possible 0.50–0.75 / none < 0.50), and `score_contact_match()` (SequenceMatcher on full name). Added `find_duplicate_companies` MCP tool (broad Lucene search, score all results, filter ≥ 0.50, sort by confidence). Added `find_duplicate_contacts` MCP tool (search by clientCorporation.id, score name pairs, flag records with email as `partial_match`). Updated `test_server_has_tools`. 149 tests passing (109 pre-existing + 29 new fuzzy tests + 11 new server tests).
+
 **User stories:** US-6, US-7, US-8 — satisfies NFR-5
 **Goal:** Create `fuzzy.py` module with normalization and confidence scoring. Add `find_duplicate_companies` and `find_duplicate_contacts` MCP tools.
 
@@ -190,7 +193,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 ### Tasks
 
-#### T5.1 — Create `fuzzy.py` with normalization helpers
+#### T5.1 — Create `fuzzy.py` with normalization helpers (DONE)
 **File:** `src/bullhorn_mcp/fuzzy.py` (new)
 - `normalize(name: str) -> str` — lowercase, strip legal suffixes (`ltd`, `limited`, `inc`, `incorporated`, `plc`, `corp`, `corporation`, `llc`, `pty`, `co`), strip punctuation, collapse whitespace.
 - No standalone `expand_abbreviations` function — acronym handling is done inline in `score_company_match` (see T5.2). A separate function returning a list of expansions would add untested complexity for a narrow case; the inline check is simpler and sufficient.
@@ -199,7 +202,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_fuzzy.py::test_normalize_case_insensitive` — `"ACME CORP"` -> `"acme"`.
 - **Unit test:** `tests/test_fuzzy.py::test_normalize_strips_punctuation` — `"Acme, Inc."` -> `"acme"`.
 
-#### T5.2 — Implement `score_company_match()` confidence scoring
+#### T5.2 — Implement `score_company_match()` confidence scoring (DONE)
 **File:** `src/bullhorn_mcp/fuzzy.py`
 - `score_company_match(query: str, candidate: str) -> float` — returns 0.0-1.0.
 - Strategy: normalize both; compute `difflib.SequenceMatcher` ratio on normalized strings. Inline acronym check: if the query is all-uppercase and its length matches the number of words in the candidate, compare query letters against candidate word initials and apply a score bonus if they match. Return clamped float.
@@ -212,7 +215,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_fuzzy.py::test_score_possible_match` — `"Acme Holdings"` vs `"Acme Group"` -> `0.50-0.75`.
 - **Unit test:** `tests/test_fuzzy.py::test_categorize_score_thresholds` — verify all four categories at boundary values.
 
-#### T5.3 — Implement `score_contact_match()` confidence scoring
+#### T5.3 — Implement `score_contact_match()` confidence scoring (DONE)
 **File:** `src/bullhorn_mcp/fuzzy.py`
 - `score_contact_match(query_first: str, query_last: str, candidate: dict) -> float` — score against `firstName`/`lastName` fields. Exact name match -> 1.0. Normalize and use SequenceMatcher on full name.
 - Flag partial match when email differs (attach `"partial_match": true` in result dict upstream).
@@ -220,7 +223,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_fuzzy.py::test_contact_partial_match` — same name different email -> high score but caller flags partial.
 - **Unit test:** `tests/test_fuzzy.py::test_contact_no_match` — different name -> `< 0.50`.
 
-#### T5.4 — Add `find_duplicate_companies` MCP tool
+#### T5.4 — Add `find_duplicate_companies` MCP tool (DONE)
 **File:** `src/bullhorn_mcp/server.py`
 - Parameters: `name: str`, `website: str | None = None`, `phone: str | None = None`.
 - Calls `client.search("ClientCorporation", query=f"name:{broad_terms}*", fields="id,name,status,phone", count=50)`.
@@ -231,7 +234,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_server.py::test_find_duplicate_companies_likely` — mock search returning similar company, assert category "likely".
 - **Unit test:** `tests/test_server.py::test_find_duplicate_companies_no_match` — mock empty search results, assert empty matches list.
 
-#### T5.5 — Add `find_duplicate_contacts` MCP tool
+#### T5.5 — Add `find_duplicate_contacts` MCP tool (DONE)
 **File:** `src/bullhorn_mcp/server.py`
 - Parameters: `first_name: str`, `last_name: str`, `client_corporation_id: int`.
 - Calls `client.search("ClientContact", query=f"clientCorporation.id:{client_corporation_id}", fields="id,firstName,lastName,email,phone,clientCorporation", count=100)`.
@@ -243,12 +246,16 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_server.py::test_find_duplicate_contacts_no_match` — assert empty results.
 
 ### Sprint 5 End-to-End Tests
-- `tests/test_fuzzy.py::test_sprint5_e2e_company_duplicate_detection` — call `find_duplicate_companies("BNY")` with mocked search returning `"Bank of New York Mellon"`; assert response has category `"likely"`, confidence in `[0.75, 0.95]`, and `exact_match == false`.
-- `tests/test_server.py::test_sprint5_e2e_contact_duplicate_flow` — call `find_duplicate_contacts("John", "Smith", 123)` with mocked search; assert JSON matches structure from PRD section 10.
+- `tests/test_fuzzy.py::test_sprint5_e2e_company_duplicate_detection` (DONE) — call `find_duplicate_companies("BNY")` with mocked search returning `"Bank of New York Mellon"`; assert response has category `"likely"`, confidence in `[0.75, 0.95]`, and `exact_match == false`.
+- `tests/test_server.py::test_sprint5_e2e_contact_duplicate_flow` (DONE) — call `find_duplicate_contacts("John", "Smith", 123)` with mocked search; assert JSON matches structure from PRD section 10.
 
 ---
 
 ## Sprint 6: Update Records and Add Notes
+
+**Tag:** v0.0.6
+
+**What was delivered:** Added `update()` to `BullhornClient` (POST `/entity/{entity}/{id}` with JSON body, then GET for full record, returns `{changedEntityId, changeType, data}`). Added `add_note()` to `BullhornClient` (constructs Note payload with `personReference`+`commentingPerson` for `ClientContact` or `clientCorporation` for `ClientCorporation`, PUT `/entity/Note`, returns created Note). Added `update_record` MCP tool with label resolution and company reassignment guard that fires AFTER label resolution (blocks bypass via label "Company"). Added `add_note` MCP tool with entity validation. Updated `test_server_has_tools`. 163 tests passing (149 pre-existing + 5 new client tests + 9 new server tests).
 
 **User stories:** US-12, US-13, US-14, US-15, US-16
 **Goal:** Add `update()` and `add_note()` methods to `BullhornClient`. Add `update_record` and `add_note` MCP tools. Enforce company reassignment guard. Integrate field label resolution.
@@ -257,7 +264,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 ### Tasks
 
-#### T6.1 — Add `update()` method to `BullhornClient`
+#### T6.1 — Add `update()` method to `BullhornClient` (DONE)
 **File:** `src/bullhorn_mcp/client.py`
 - `update(entity: str, entity_id: int, data: dict) -> dict` — POST to `/entity/{entity}/{entity_id}` with JSON body.
 - Uses `_request()` with `json=data` parameter (extended in T3.1).
@@ -266,7 +273,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_client.py::test_update_returns_update_response` — mock POST and GET, assert combined dict returned.
 - **Unit test:** `tests/test_client.py::test_update_raises_on_api_error` — mock 400, assert `BullhornAPIError`.
 
-#### T6.2 — Add `update_record` MCP tool
+#### T6.2 — Add `update_record` MCP tool (DONE)
 **File:** `src/bullhorn_mcp/server.py`
 - Parameters: `entity: str`, `entity_id: int`, `fields: dict`.
 - Guard: if `entity == "ClientContact"` and `"clientCorporation"` in `fields`, return error `"Company reassignment is not supported."` without calling API.
@@ -280,7 +287,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_server.py::test_update_record_api_error` — assert `"ERROR:"` prefix returned.
 - **Unit test:** `tests/test_server.py::test_update_record_company_reassignment_blocked_via_label` — provide `"Company"` label instead of `clientCorporation`, assert guard still triggers after resolution.
 
-#### T6.3 — Add `add_note()` method to `BullhornClient`
+#### T6.3 — Add `add_note()` method to `BullhornClient` (DONE)
 **File:** `src/bullhorn_mcp/client.py`
 - `add_note(entity: str, entity_id: int, action: str, comments: str) -> dict` — constructs Note payload.
 - For `ClientContact`: sets `personReference: {"id": entity_id}` and `commentingPerson: {"id": entity_id}`.
@@ -294,7 +301,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_client.py::test_add_note_to_company` — assert `clientCorporation` set correctly.
 - **Unit test:** `tests/test_client.py::test_add_note_raises_on_api_error` — mock 400, assert `BullhornAPIError`.
 
-#### T6.4 — Add `add_note` MCP tool
+#### T6.4 — Add `add_note` MCP tool (DONE)
 **File:** `src/bullhorn_mcp/server.py`
 - Parameters: `entity: str`, `entity_id: int`, `action: str`, `comments: str`.
 - Validate `entity` is `"ClientContact"` or `"ClientCorporation"`; return error otherwise.
@@ -305,7 +312,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_server.py::test_add_note_api_error` — assert `"ERROR:"` prefix returned.
 
 ### Sprint 6 End-to-End Tests
-- `tests/test_server.py::test_sprint6_e2e_update_then_note` — mock update POST/GET and note PUT; call `update_record("ClientContact", 54321, {"title": "CTO"})`; assert title updated; then call `add_note("ClientContact", 54321, "General Note", "Updated via test")`; assert Note ID returned.
+- `tests/test_server.py::test_sprint6_e2e_update_then_note` — mock update POST/GET and note PUT; call `update_record("ClientContact", 54321, {"title": "CTO"})`; assert title updated; then call `add_note("ClientContact", 54321, "General Note", "Updated via test")`; assert Note ID returned. (DONE)
 
 ---
 
