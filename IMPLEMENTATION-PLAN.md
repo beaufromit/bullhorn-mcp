@@ -27,33 +27,33 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 ### Existing modules (implemented)
 - `src/bullhorn_mcp/config.py` — `BullhornConfig` dataclass with env loading
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
-- `src/bullhorn_mcp/client.py` — `BullhornClient` with `search()`, `query()`, `get()`, `get_meta()`, `_request()` (GET only, params dict, 200-only success check)
+- `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`
 - `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching
-- `src/bullhorn_mcp/server.py` — MCP server with 9 tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`. Includes `get_client()` and `get_metadata()` helpers.
+- `src/bullhorn_mcp/server.py` — MCP server with 11 tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`. Includes `get_client()` and `get_metadata()` helpers.
 
 ### New modules to be created
-- `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring for duplicate detection (Sprint 5)
+- `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring (Sprint 5)
 - `src/bullhorn_mcp/bulk.py` — Bulk import orchestration logic (Sprint 7)
 
 ### Existing modules to be extended
-- `src/bullhorn_mcp/client.py` — Extend `_request()` to support JSON bodies and multiple success codes; add `create()`, `update()`, `add_note()`, `resolve_owner()` methods
-- `src/bullhorn_mcp/server.py` — Add 7 new MCP tool functions (`create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`)
+- `src/bullhorn_mcp/client.py` — Add `update()`, `add_note()` methods (Sprints 6)
+- `src/bullhorn_mcp/server.py` — Add 5 more MCP tools: `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import` (Sprints 5, 6, 7)
 
 ### Existing test files
-- `tests/test_auth.py` — 13 tests (auth flow, regional servers)
+- `tests/test_auth.py` — 12 tests (auth flow, regional servers)
 - `tests/test_config.py` — 6 tests
-- `tests/test_client.py` — 26 tests (search, query, get, pagination, edge cases)
-- `tests/test_metadata.py` — 14 tests (get_fields, resolve_label_to_api, resolve_api_to_label, resolve_fields, e2e)
-- `tests/test_server.py` — 31 tests (all 9 tools + server setup)
-- **Total: 90 tests, all passing**
+- `tests/test_client.py` — 30 tests (search, query, get, pagination, create, resolve_owner, edge cases)
+- `tests/test_metadata.py` — 14 tests (get_fields, label resolution, resolve_fields, e2e)
+- `tests/test_server.py` — 47 tests (all 11 tools + server setup + E2E tests)
+- **Total: 109 tests, all passing**
 
 ### New test files to be created
 - `tests/test_fuzzy.py` (Sprint 5)
 - `tests/test_bulk.py` (Sprint 7)
 
 ### Existing test files to be extended
-- `tests/test_client.py` — New client methods (Sprints 3, 4, 6)
-- `tests/test_server.py` — New server tools (Sprints 3, 4, 5, 6, 7)
+- `tests/test_client.py` — `update()`, `add_note()` methods (Sprint 6)
+- `tests/test_server.py` — New server tools (Sprints 5, 6, 7)
 
 ---
 
