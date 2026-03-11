@@ -11,8 +11,8 @@ DEFAULT_FIELDS = {
     "JobOrder": "id,title,status,employmentType,dateAdded,startDate,salary,clientCorporation,owner,description,numOpenings,isOpen",
     "Candidate": "id,firstName,lastName,email,phone,status,dateAdded,occupation,skillSet,owner",
     "Placement": "id,candidate,jobOrder,status,dateBegin,dateEnd,salary,payRate",
-    "ClientCorporation": "id,name,status,phone,address",
-    "ClientContact": "id,firstName,lastName,email,phone,clientCorporation",
+    "ClientCorporation": "id,name,status,phone,address,dateAdded",
+    "ClientContact": "id,firstName,lastName,email,phone,status,title,dateAdded,clientCorporation,owner",
 }
 
 

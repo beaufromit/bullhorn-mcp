@@ -277,6 +277,15 @@ class TestDefaultFields:
         assert "firstName" in DEFAULT_FIELDS["ClientContact"]
         assert "clientCorporation" in DEFAULT_FIELDS["ClientContact"]
 
+    def test_default_fields_client_contact_includes_owner(self):
+        """Test ClientContact default fields include owner and status."""
+        assert "owner" in DEFAULT_FIELDS["ClientContact"]
+        assert "status" in DEFAULT_FIELDS["ClientContact"]
+
+    def test_default_fields_client_corporation_includes_date_added(self):
+        """Test ClientCorporation default fields include dateAdded."""
+        assert "dateAdded" in DEFAULT_FIELDS["ClientCorporation"]
+
 
 class TestEdgeCases:
     """Tests for edge cases and error scenarios."""

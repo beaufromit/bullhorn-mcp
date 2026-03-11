@@ -125,6 +125,97 @@ def list_candidates(
 
 
 @mcp.tool()
+def list_contacts(
+    query: str | None = None,
+    status: str | None = None,
+    limit: int = 20,
+    fields: str | None = None,
+) -> str:
+    """List and filter client contacts from Bullhorn CRM.
+
+    Args:
+        query: Lucene search query (e.g., "lastName:Smith" or "title:Manager")
+        status: Filter by contact status (e.g., "Active")
+        limit: Maximum number of results (1-500, default 20)
+        fields: Comma-separated fields to return
+
+    Returns:
+        JSON array of client contacts
+
+    Examples:
+        - list_contacts() - Get recent contacts
+        - list_contacts(query="lastName:Smith") - Find contacts named Smith
+        - list_contacts(query="title:Manager AND clientCorporation.name:Acme")
+        - list_contacts(status="Active", limit=50)
+    """
+    try:
+        client = get_client()
+
+        # Build search query
+        search_query = query or "isDeleted:0"
+        if status:
+            search_query = f"({search_query}) AND status:\"{status}\""
+
+        results = client.search(
+            entity="ClientContact",
+            query=search_query,
+            fields=fields,
+            count=limit,
+            sort="-dateAdded",
+        )
+
+        return format_response(results)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def list_companies(
+    query: str | None = None,
+    status: str | None = None,
+    limit: int = 20,
+    fields: str | None = None,
+) -> str:
+    """List and filter client companies from Bullhorn CRM.
+
+    Args:
+        query: Lucene search query (e.g., "name:Acme*" or "phone:555*")
+        status: Filter by company status (e.g., "Active")
+        limit: Maximum number of results (1-500, default 20)
+        fields: Comma-separated fields to return
+
+    Returns:
+        JSON array of client companies
+
+    Examples:
+        - list_companies() - Get recent companies
+        - list_companies(query="name:Acme*") - Find companies starting with Acme
+        - list_companies(status="Active", limit=50)
+    """
+    try:
+        client = get_client()
+
+        # Build search query
+        search_query = query or "isDeleted:0"
+        if status:
+            search_query = f"({search_query}) AND status:\"{status}\""
+
+        results = client.search(
+            entity="ClientCorporation",
+            query=search_query,
+            fields=fields,
+            count=limit,
+            sort="-dateAdded",
+        )
+
+        return format_response(results)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
 def get_job(job_id: int, fields: str | None = None) -> str:
     """Get details for a specific job order by ID.
 

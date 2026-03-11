@@ -238,6 +238,93 @@ class TestFormatResponse:
         assert "2024" in result
 
 
+class TestListContacts:
+    """Tests for list_contacts tool."""
+
+    def test_list_contacts_default(self, mock_client):
+        """Test basic contact listing returns JSON list."""
+        mock_client.search.return_value = [{"id": 111, "firstName": "Alice", "lastName": "Jones"}]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_contacts()
+
+        data = json.loads(result)
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["id"] == 111
+        mock_client.search.assert_called_once()
+
+    def test_list_contacts_with_status(self, mock_client):
+        """Test contact listing with status filter appended to query."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_contacts(status="Active")
+
+        call_args = mock_client.search.call_args
+        assert 'status:"Active"' in call_args.kwargs["query"]
+
+    def test_list_contacts_api_error(self, mock_client):
+        """Test error handling returns ERROR prefix."""
+        mock_client.search.side_effect = BullhornAPIError("fail")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_contacts()
+
+        assert result.startswith("ERROR:")
+
+
+class TestListCompanies:
+    """Tests for list_companies tool."""
+
+    def test_list_companies_default(self, mock_client):
+        """Test basic company listing returns JSON list with ClientCorporation entity."""
+        mock_client.search.return_value = [{"id": 222, "name": "Acme Corp"}]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_companies()
+
+        data = json.loads(result)
+        assert isinstance(data, list)
+        assert len(data) == 1
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["entity"] == "ClientCorporation"
+
+    def test_list_companies_with_query(self, mock_client):
+        """Test that a custom query is passed through to the search call."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_companies(query="name:Acme*")
+
+        call_args = mock_client.search.call_args
+        assert "name:Acme*" in call_args.kwargs["query"]
+
+
+class TestSprint1E2E:
+    """End-to-end tests for Sprint 1 tools."""
+
+    def test_sprint1_e2e_list_contacts_and_companies(self, mock_client):
+        """Call list_contacts and list_companies in sequence, assert both return valid JSON."""
+        sample_contact = {"id": 1, "firstName": "Alice", "lastName": "Jones"}
+        sample_company = {"id": 2, "name": "Acme Corp"}
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            mock_client.search.return_value = [sample_contact]
+            contacts_result = server.list_contacts()
+
+            mock_client.search.return_value = [sample_company]
+            companies_result = server.list_companies()
+
+        contacts_data = json.loads(contacts_result)
+        assert isinstance(contacts_data, list)
+        assert "id" in contacts_data[0]
+
+        companies_data = json.loads(companies_result)
+        assert isinstance(companies_data, list)
+        assert "id" in companies_data[0]
+
+
 class TestMCPServerSetup:
     """Tests for MCP server configuration."""
 

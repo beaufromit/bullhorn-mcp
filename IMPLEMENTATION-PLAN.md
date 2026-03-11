@@ -30,14 +30,16 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 ---
 
-## Sprint 1: Convenience Listing Tools
+## Sprint 1: Convenience Listing Tools — COMPLETED
+
+**Sprint 1 Status:** All tasks completed on 2026-03-11. All 52 tests (26 pre-existing + 8 new) passed.
 
 **User stories:** US-19, US-20, US-21
 **Goal:** Add `list_contacts` and `list_companies` MCP tools. Extend `DEFAULT_FIELDS` for both entity types. Verify all existing tests pass.
 
 ### Tasks
 
-#### T1.1 — Extend DEFAULT_FIELDS for ClientContact and ClientCorporation
+#### T1.1 — Extend DEFAULT_FIELDS for ClientContact and ClientCorporation — COMPLETED
 **File:** `src/bullhorn_mcp/client.py`
 - Update `DEFAULT_FIELDS["ClientContact"]` to: `"id,firstName,lastName,email,phone,status,title,dateAdded,clientCorporation,owner"`
 - Update `DEFAULT_FIELDS["ClientCorporation"]` to: `"id,name,status,phone,address,dateAdded"`
@@ -45,7 +47,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_client.py::test_default_fields_client_contact_includes_owner` — assert `"owner"` and `"status"` are in the ClientContact default fields string.
 - **Unit test:** `tests/test_client.py::test_default_fields_client_corporation_includes_date_added` — assert `"dateAdded"` is in the ClientCorporation default fields string.
 
-#### T1.2 — Add `list_contacts` MCP tool
+#### T1.2 — Add `list_contacts` MCP tool — COMPLETED
 **File:** `src/bullhorn_mcp/server.py`
 - Mirror the pattern of `list_candidates`.
 - Parameters: `query: str | None`, `status: str | None`, `limit: int = 20`, `fields: str | None`.
@@ -55,7 +57,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_server.py::test_list_contacts_with_status` — assert status filter is appended to query.
 - **Unit test:** `tests/test_server.py::test_list_contacts_api_error` — assert `"ERROR:"` prefix returned on `BullhornAPIError`.
 
-#### T1.3 — Add `list_companies` MCP tool
+#### T1.3 — Add `list_companies` MCP tool — COMPLETED
 **File:** `src/bullhorn_mcp/server.py`
 - Parameters: `query: str | None`, `status: str | None`, `limit: int = 20`, `fields: str | None`.
 - Build search query defaulting to `"isDeleted:0"`, appending status filter when provided.
@@ -63,7 +65,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_server.py::test_list_companies_default` — mock `/search/ClientCorporation`, assert returns JSON list.
 - **Unit test:** `tests/test_server.py::test_list_companies_with_query` — assert custom query is passed through.
 
-### Sprint 1 End-to-End Tests
+### Sprint 1 End-to-End Tests — COMPLETED
 - `tests/test_server.py::test_sprint1_e2e_list_contacts_and_companies` — mock two search endpoints, call `list_contacts` and `list_companies` in sequence, assert both return well-formed JSON with expected field keys.
 
 ---
