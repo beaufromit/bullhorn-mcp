@@ -931,7 +931,66 @@ class TestMCPServerSetup:
         assert "find_duplicate_contacts" in tools
         assert "update_record" in tools
         assert "add_note" in tools
+        assert "bulk_import" in tools
 
     def test_server_name(self):
         """Test server name is set correctly."""
         assert server.mcp.name == "Bullhorn CRM"
+
+
+class TestBulkImport:
+    """Tests for bulk_import MCP tool."""
+
+    def test_bulk_import_success(self, mock_client):
+        """Mock all sub-operations; assert summary structure correct."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        # Company search returns no existing records
+        mock_client.search.return_value = []
+        # Company create returns new ID
+        mock_client.create.return_value = {
+            "changedEntityId": 101,
+            "changeType": "INSERT",
+            "data": {"id": 101, "name": "Acme"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            result = server.bulk_import(
+                companies=[{"name": "Acme", "status": "Prospect"}],
+                contacts=[],
+            )
+
+        data = json.loads(result)
+        assert data["halted"] is False
+        assert "summary" in data
+        assert "companies" in data["summary"]
+        assert "contacts" in data["summary"]
+        assert data["summary"]["companies"]["created"] == 1
+        assert data["details"]["companies"][0]["status"] == "created"
+
+    def test_bulk_import_halts_on_errors(self, mock_client):
+        """Three consecutive create failures trigger halted=True in response."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        mock_client.search.return_value = []
+        mock_client.create.side_effect = BullhornAPIError("Server error")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            result = server.bulk_import(
+                companies=[{"name": "A"}, {"name": "B"}, {"name": "C"}],
+                contacts=[],
+            )
+
+        data = json.loads(result)
+        assert data["halted"] is True
+        assert data["summary"]["companies"]["failed"] == 3

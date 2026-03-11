@@ -8,6 +8,7 @@ from .auth import BullhornAuth, AuthenticationError
 from .client import BullhornClient, BullhornAPIError
 from .metadata import BullhornMetadata
 from .fuzzy import score_company_match, categorize_score, score_contact_match
+from .bulk import BulkImporter
 
 # Initialize MCP server
 mcp = FastMCP(
@@ -652,6 +653,51 @@ def get_entity_fields(
 
         fields = metadata.get_fields(entity)
         return format_response(fields)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def bulk_import(companies: list, contacts: list) -> str:
+    """Import a batch of companies and contacts into Bullhorn CRM.
+
+    Companies are processed first (with duplicate detection), then contacts
+    (with company resolution, owner resolution, and duplicate detection).
+    Halts after 3 consecutive create errors to surface systemic issues.
+
+    Args:
+        companies: List of company field dicts. Each must include "name".
+                   Standard fields: name, status, phone, address, industry, etc.
+                   Example: [{"name": "Acme Ltd", "status": "Prospect"}]
+        contacts: List of contact field dicts. Required keys: owner.
+                  Use "company_name" (str) to reference a company by name,
+                  or "clientCorporation" ({"id": <int>}) to reference by ID.
+                  owner accepts either {"id": int} or a consultant name string.
+                  Example: [{"firstName": "Jane", "lastName": "Doe",
+                             "company_name": "Acme Ltd", "owner": "Mary Lyons"}]
+
+    Returns:
+        JSON object: {
+            "halted": bool,
+            "summary": {
+                "companies": {"created": int, "existing": int, "flagged": int, "failed": int},
+                "contacts": {"created": int, "existing": int, "flagged": int, "failed": int}
+            },
+            "details": {"companies": [...], "contacts": [...]}
+        }
+
+    Examples:
+        - bulk_import(
+            companies=[{"name": "Acme", "status": "Prospect"}],
+            contacts=[{"firstName": "Jane", "lastName": "Doe",
+                       "company_name": "Acme", "owner": "Mary Lyons"}]
+          )
+    """
+    try:
+        importer = BulkImporter(get_client(), get_metadata())
+        result = importer.process(companies, contacts)
+        return format_response(result)
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
