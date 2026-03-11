@@ -495,6 +495,151 @@ class TestCreateContact:
         mock_client.resolve_owner.assert_called_once_with({"id": 99})
 
 
+class TestUpdateRecord:
+    """Tests for update_record tool."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_update_record_success(self, mock_client, mock_metadata):
+        """update_record returns updated record JSON."""
+        mock_client.update.return_value = {
+            "changedEntityId": 54321,
+            "changeType": "UPDATE",
+            "data": {"id": 54321, "firstName": "Jane", "title": "CTO"},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_record("ClientContact", 54321, {"title": "CTO"})
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 54321
+        assert data["changeType"] == "UPDATE"
+        assert data["data"]["title"] == "CTO"
+
+    def test_update_record_company_reassignment_blocked(self, mock_client, mock_metadata):
+        """update_record blocks clientCorporation change on ClientContact."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_record("ClientContact", 1, {"clientCorporation": {"id": 2}})
+
+        data = json.loads(result)
+        assert data["error"] == "company_reassignment_not_supported"
+        mock_client.update.assert_not_called()
+
+    def test_update_record_company_reassignment_blocked_via_label(self, mock_client):
+        """update_record blocks reassignment even when key is provided as a label."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        # "Company" label resolves to "clientCorporation"
+        meta.resolve_fields.return_value = {"clientCorporation": {"id": 99}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            result = server.update_record("ClientContact", 1, {"Company": {"id": 99}})
+
+        data = json.loads(result)
+        assert data["error"] == "company_reassignment_not_supported"
+        mock_client.update.assert_not_called()
+
+    def test_update_record_label_resolution(self, mock_client):
+        """update_record applies label resolution before calling update."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.return_value = {"recruiterUserID": {"id": 42}}
+        mock_client.update.return_value = {
+            "changedEntityId": 1, "changeType": "UPDATE", "data": {"id": 1},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            server.update_record("ClientContact", 1, {"Consultant": {"id": 42}})
+
+        mock_client.update.assert_called_once_with("ClientContact", 1, {"recruiterUserID": {"id": 42}})
+
+    def test_update_record_api_error(self, mock_client, mock_metadata):
+        """update_record returns ERROR prefix on API failure."""
+        mock_client.update.side_effect = BullhornAPIError("update failed")
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_record("ClientContact", 1, {"title": "CTO"})
+        assert result.startswith("ERROR:")
+
+
+class TestAddNote:
+    """Tests for add_note tool."""
+
+    def test_add_note_to_contact_success(self, mock_client):
+        """add_note returns Note ID on success."""
+        mock_client.add_note.return_value = {
+            "changedEntityId": 88901,
+            "changeType": "INSERT",
+            "data": {"id": 88901, "action": "General Note", "comments": "Test"},
+        }
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.add_note("ClientContact", 54321, "General Note", "Test")
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 88901
+        assert data["changeType"] == "INSERT"
+
+    def test_add_note_invalid_entity(self, mock_client):
+        """add_note returns error for unsupported entity type."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.add_note("JobOrder", 1, "General Note", "Test")
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_entity"
+        mock_client.add_note.assert_not_called()
+
+    def test_add_note_api_error(self, mock_client):
+        """add_note returns ERROR prefix on API failure."""
+        mock_client.add_note.side_effect = BullhornAPIError("invalid action type")
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.add_note("ClientContact", 1, "Bad Action", "note")
+        assert result.startswith("ERROR:")
+
+
+class TestSprint6E2E:
+    """End-to-end tests for Sprint 6."""
+
+    def test_sprint6_e2e_update_then_note(self, mock_client):
+        """Update a contact's title then add a note; assert both return expected IDs."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        mock_client.update.return_value = {
+            "changedEntityId": 54321,
+            "changeType": "UPDATE",
+            "data": {"id": 54321, "title": "CTO"},
+        }
+        mock_client.add_note.return_value = {
+            "changedEntityId": 88901,
+            "changeType": "INSERT",
+            "data": {"id": 88901, "action": "General Note"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            update_result = server.update_record("ClientContact", 54321, {"title": "CTO"})
+            note_result = server.add_note("ClientContact", 54321, "General Note", "Updated via test")
+
+        update_data = json.loads(update_result)
+        assert update_data["changedEntityId"] == 54321
+        assert update_data["data"]["title"] == "CTO"
+
+        note_data = json.loads(note_result)
+        assert note_data["changedEntityId"] == 88901
+
+
 class TestFindDuplicateCompanies:
     """Tests for find_duplicate_companies tool."""
 
@@ -784,6 +929,8 @@ class TestMCPServerSetup:
         assert "create_contact" in tools
         assert "find_duplicate_companies" in tools
         assert "find_duplicate_contacts" in tools
+        assert "update_record" in tools
+        assert "add_note" in tools
 
     def test_server_name(self):
         """Test server name is set correctly."""

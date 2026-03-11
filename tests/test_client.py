@@ -368,6 +368,104 @@ class TestCreateEntity:
         assert "400" in str(exc_info.value)
 
 
+class TestUpdateEntity:
+    """Tests for BullhornClient.update()."""
+
+    @respx.mock
+    def test_update_returns_update_response(self, mock_auth, mock_session):
+        """update() POSTs fields then GETs full record, returning combined dict."""
+        respx.post(f"{mock_session.rest_url}/entity/ClientContact/54321").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 54321, "changeType": "UPDATE"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/ClientContact/54321").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"id": 54321, "firstName": "Jane", "title": "CTO"}},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.update("ClientContact", 54321, {"title": "CTO"})
+
+        assert result["changedEntityId"] == 54321
+        assert result["changeType"] == "UPDATE"
+        assert result["data"]["title"] == "CTO"
+
+    @respx.mock
+    def test_update_raises_on_api_error(self, mock_auth, mock_session):
+        """update() raises BullhornAPIError on non-200/201 response."""
+        respx.post(f"{mock_session.rest_url}/entity/ClientContact/54321").mock(
+            return_value=httpx.Response(400, text="Bad Request")
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError):
+            client.update("ClientContact", 54321, {"title": "CTO"})
+
+
+class TestAddNote:
+    """Tests for BullhornClient.add_note()."""
+
+    @respx.mock
+    def test_add_note_to_contact(self, mock_auth, mock_session):
+        """add_note() for ClientContact sets personReference and commentingPerson."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88901, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88901").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"id": 88901, "action": "General Note",
+                               "personReference": {"id": 54321}}},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note("ClientContact", 54321, "General Note", "Test note")
+
+        assert result["changedEntityId"] == 88901
+        assert result["changeType"] == "INSERT"
+        import json as _json
+        body = _json.loads(route.calls[0].request.content)
+        assert body["personReference"] == {"id": 54321}
+        assert body["commentingPerson"] == {"id": 54321}
+        assert body["action"] == "General Note"
+        assert body["comments"] == "Test note"
+
+    @respx.mock
+    def test_add_note_to_company(self, mock_auth, mock_session):
+        """add_note() for ClientCorporation sets clientCorporation field."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88902, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88902").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"id": 88902, "action": "General Note",
+                               "clientCorporation": {"id": 98765}}},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note("ClientCorporation", 98765, "General Note", "Company note")
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["clientCorporation"] == {"id": 98765}
+        assert "personReference" not in body
+        assert result["changedEntityId"] == 88902
+
+    @respx.mock
+    def test_add_note_raises_on_api_error(self, mock_auth, mock_session):
+        """add_note() raises BullhornAPIError on non-200/201 response."""
+        respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(400, text="Invalid action")
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError):
+            client.add_note("ClientContact", 1, "Invalid Action", "note")
+
+
 class TestResolveOwner:
     """Tests for BullhornClient.resolve_owner()."""
 

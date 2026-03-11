@@ -436,6 +436,76 @@ def create_contact(fields: dict) -> str:
 
 
 @mcp.tool()
+def update_record(entity: str, entity_id: int, fields: dict) -> str:
+    """Update fields on an existing ClientCorporation or ClientContact record.
+
+    Args:
+        entity: "ClientContact" or "ClientCorporation"
+        entity_id: Bullhorn ID of the record to update
+        fields: Dictionary of field names (or display labels) and new values.
+                Field labels are resolved to API names automatically.
+                Company reassignment (changing clientCorporation on a ClientContact) is not supported.
+
+    Returns:
+        JSON object with changedEntityId, changeType, and full updated record.
+
+    Examples:
+        - update_record("ClientContact", 54321, {"title": "CTO"})
+        - update_record("ClientCorporation", 98765, {"status": "Active Account"})
+        - update_record("ClientContact", 54321, {"Consultant": {"id": 99}})
+    """
+    try:
+        client = get_client()
+        resolved = get_metadata().resolve_fields(entity, fields)
+
+        # Guard: reject company reassignment (check after resolution so label bypass is blocked)
+        if entity == "ClientContact" and "clientCorporation" in resolved:
+            return format_response({
+                "error": "company_reassignment_not_supported",
+                "message": "Company reassignment is not supported. Changing a ClientContact's associated ClientCorporation is not allowed.",
+            })
+
+        result = client.update(entity, entity_id, resolved)
+        return format_response(result)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def add_note(entity: str, entity_id: int, action: str, comments: str) -> str:
+    """Add a Note to a ClientContact or ClientCorporation record.
+
+    Args:
+        entity: "ClientContact" or "ClientCorporation"
+        entity_id: Bullhorn ID of the record to attach the note to
+        action: Note action type — must match a valid action in your Bullhorn instance (e.g. "General Note")
+        comments: Note body text
+
+    Returns:
+        JSON object with changedEntityId, changeType, and full Note record data.
+
+    Examples:
+        - add_note("ClientContact", 54321, "General Note", "Discovered via weekly scan")
+        - add_note("ClientCorporation", 98765, "General Note", "PE-backed, growing headcount")
+    """
+    try:
+        client = get_client()
+
+        if entity not in ("ClientContact", "ClientCorporation"):
+            return format_response({
+                "error": "invalid_entity",
+                "message": f"add_note only supports ClientContact or ClientCorporation, got '{entity}'.",
+            })
+
+        result = client.add_note(entity, entity_id, action, comments)
+        return format_response(result)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
 def find_duplicate_companies(
     name: str,
     website: str | None = None,

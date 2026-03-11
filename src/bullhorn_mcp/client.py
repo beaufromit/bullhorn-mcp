@@ -163,6 +163,46 @@ class BullhornClient:
         result = self._request("GET", f"/entity/{entity}/{entity_id}", params)
         return result.get("data", {})
 
+    def update(self, entity: str, entity_id: int, data: dict[str, Any]) -> dict[str, Any]:
+        """Update an existing entity in Bullhorn.
+
+        Args:
+            entity: Entity type (ClientCorporation, ClientContact, etc.)
+            entity_id: ID of the entity to update
+            data: Fields to update
+
+        Returns:
+            Dict with changedEntityId, changeType, and full updated record data
+        """
+        self._request("POST", f"/entity/{entity}/{entity_id}", json=data)
+        record = self.get(entity, entity_id)
+        return {"changedEntityId": entity_id, "changeType": "UPDATE", "data": record}
+
+    def add_note(self, entity: str, entity_id: int, action: str, comments: str) -> dict[str, Any]:
+        """Add a Note entity linked to a ClientContact or ClientCorporation.
+
+        Args:
+            entity: "ClientContact" or "ClientCorporation"
+            entity_id: ID of the entity to attach the note to
+            action: Note action type (e.g. "General Note")
+            comments: Note body text
+
+        Returns:
+            Dict with changedEntityId, changeType, and full Note record data
+        """
+        payload: dict[str, Any] = {"action": action, "comments": comments}
+
+        if entity == "ClientContact":
+            payload["personReference"] = {"id": entity_id}
+            payload["commentingPerson"] = {"id": entity_id}
+        elif entity == "ClientCorporation":
+            payload["clientCorporation"] = {"id": entity_id}
+
+        result = self._request("PUT", "/entity/Note", json=payload)
+        note_id = result["changedEntityId"]
+        record = self.get("Note", note_id)
+        return {"changedEntityId": note_id, "changeType": "INSERT", "data": record}
+
     def resolve_owner(self, owner: str | dict) -> dict | list:
         """Resolve an owner to a Bullhorn CorporateUser ID.
 
