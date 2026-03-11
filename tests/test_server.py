@@ -495,6 +495,140 @@ class TestCreateContact:
         mock_client.resolve_owner.assert_called_once_with({"id": 99})
 
 
+class TestFindDuplicateCompanies:
+    """Tests for find_duplicate_companies tool."""
+
+    def test_find_duplicate_companies_exact(self, mock_client):
+        """Returns exact_match=True when a company name matches exactly."""
+        mock_client.search.return_value = [
+            {"id": 1, "name": "Acme Holdings Ltd", "status": "Active", "phone": None}
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_companies(name="Acme Holdings Ltd")
+
+        data = json.loads(result)
+        assert data["exact_match"] is True
+        assert data["matches"][0]["category"] == "exact"
+        assert data["matches"][0]["confidence"] >= 0.95
+
+    def test_find_duplicate_companies_likely(self, mock_client):
+        """Returns likely match for acronym like BNY vs Bank of New York Mellon."""
+        mock_client.search.return_value = [
+            {"id": 2, "name": "Bank of New York Mellon", "status": "Active", "phone": None}
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_companies(name="BNY")
+
+        data = json.loads(result)
+        assert data["exact_match"] is False
+        assert data["matches"][0]["category"] == "likely"
+
+    def test_find_duplicate_companies_no_match(self, mock_client):
+        """Returns empty matches list when search returns nothing."""
+        mock_client.search.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_companies(name="Globex Corporation")
+
+        data = json.loads(result)
+        assert data["matches"] == []
+        assert data["exact_match"] is False
+
+    def test_find_duplicate_companies_filters_low_scores(self, mock_client):
+        """Companies scoring below 0.50 are excluded from results."""
+        mock_client.search.return_value = [
+            {"id": 1, "name": "Unrelated Business Corp", "status": "Active", "phone": None}
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_companies(name="Acme")
+
+        data = json.loads(result)
+        assert data["matches"] == []
+
+    def test_find_duplicate_companies_api_error(self, mock_client):
+        """Returns ERROR prefix on API failure."""
+        mock_client.search.side_effect = BullhornAPIError("search failed")
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_companies(name="Acme")
+        assert result.startswith("ERROR:")
+
+
+class TestFindDuplicateContacts:
+    """Tests for find_duplicate_contacts tool."""
+
+    def test_find_duplicate_contacts_exact(self, mock_client):
+        """Returns exact match when name matches exactly."""
+        mock_client.search.return_value = [
+            {"id": 11, "firstName": "John", "lastName": "Smith",
+             "email": "j.smith@co.com", "phone": None, "clientCorporation": {"id": 123}}
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts("John", "Smith", 123)
+
+        data = json.loads(result)
+        assert data["exact_match"] is True
+        assert data["matches"][0]["category"] == "exact"
+
+    def test_find_duplicate_contacts_partial(self, mock_client):
+        """Same name with email present is flagged as partial_match."""
+        mock_client.search.return_value = [
+            {"id": 11, "firstName": "John", "lastName": "Smith",
+             "email": "other@co.com", "phone": None, "clientCorporation": {"id": 123}}
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts("John", "Smith", 123)
+
+        data = json.loads(result)
+        assert data["matches"][0].get("partial_match") is True
+
+    def test_find_duplicate_contacts_no_match(self, mock_client):
+        """Returns empty matches when no contacts found."""
+        mock_client.search.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts("Jane", "Doe", 123)
+
+        data = json.loads(result)
+        assert data["matches"] == []
+        assert data["exact_match"] is False
+
+    def test_find_duplicate_contacts_query_structure(self, mock_client):
+        """Response query object has expected structure."""
+        mock_client.search.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts("Jane", "Doe", 456)
+
+        data = json.loads(result)
+        assert data["query"]["firstName"] == "Jane"
+        assert data["query"]["lastName"] == "Doe"
+        assert data["query"]["clientCorporation"]["id"] == 456
+
+    def test_find_duplicate_contacts_api_error(self, mock_client):
+        """Returns ERROR prefix on API failure."""
+        mock_client.search.side_effect = BullhornAPIError("search failed")
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts("John", "Smith", 1)
+        assert result.startswith("ERROR:")
+
+
+class TestSprint5E2E:
+    """End-to-end tests for Sprint 5 MCP tools."""
+
+    def test_sprint5_e2e_contact_duplicate_flow(self, mock_client):
+        """Full contact duplicate check returns structure matching PRD section 10."""
+        mock_client.search.return_value = [
+            {"id": 11234, "firstName": "John", "lastName": "Smith",
+             "email": "john.smith@bnymellon.com", "phone": "+1 212 495 2000",
+             "clientCorporation": {"id": 44321, "name": "Bank of New York Mellon"}}
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts("John", "Smith", 44321)
+
+        data = json.loads(result)
+        assert data["exact_match"] is True
+        assert data["matches"][0]["record"]["id"] == 11234
+        assert data["matches"][0]["confidence"] >= 0.95
+        assert "partial_match" in data["matches"][0]  # has email so partial_match present
+
+
 class TestSprint4E2E:
     """End-to-end tests for Sprint 4."""
 
@@ -648,6 +782,8 @@ class TestMCPServerSetup:
         assert "get_entity_fields" in tools
         assert "create_company" in tools
         assert "create_contact" in tools
+        assert "find_duplicate_companies" in tools
+        assert "find_duplicate_contacts" in tools
 
     def test_server_name(self):
         """Test server name is set correctly."""

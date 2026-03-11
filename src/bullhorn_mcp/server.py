@@ -7,6 +7,7 @@ from .config import BullhornConfig
 from .auth import BullhornAuth, AuthenticationError
 from .client import BullhornClient, BullhornAPIError
 from .metadata import BullhornMetadata
+from .fuzzy import score_company_match, categorize_score, score_contact_match
 
 # Initialize MCP server
 mcp = FastMCP(
@@ -430,6 +431,117 @@ def create_contact(fields: dict) -> str:
 
     except ValueError as e:
         return format_response({"error": "owner_not_found", "message": str(e)})
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def find_duplicate_companies(
+    name: str,
+    website: str | None = None,
+    phone: str | None = None,
+) -> str:
+    """Check whether a company already exists in Bullhorn using fuzzy name matching.
+
+    Args:
+        name: Company name to search for
+        website: Optional website for additional context (not used in matching currently)
+        phone: Optional phone for additional context (not used in matching currently)
+
+    Returns:
+        JSON object: {"query": name, "matches": [...], "exact_match": bool}
+        Each match includes confidence score, category (exact/likely/possible), and record fields.
+
+    Examples:
+        - find_duplicate_companies(name="BNY") - Returns "Bank of New York Mellon" as likely match
+        - find_duplicate_companies(name="Acme Holdings Ltd") - Returns exact match if exists
+    """
+    try:
+        client = get_client()
+        # Use first word of name as broad search term to cast a wide net
+        broad_term = name.split()[0] if name.strip() else name
+        results = client.search(
+            "ClientCorporation",
+            query=f"name:{broad_term}*",
+            fields="id,name,status,phone",
+            count=50,
+        )
+
+        matches = []
+        for record in results:
+            score = score_company_match(name, record.get("name", ""))
+            if score >= 0.50:
+                matches.append({
+                    "confidence": round(score, 4),
+                    "category": categorize_score(score),
+                    "record": record,
+                })
+
+        matches.sort(key=lambda m: m["confidence"], reverse=True)
+        exact_match = bool(matches and matches[0]["category"] == "exact")
+
+        return format_response({"query": name, "matches": matches, "exact_match": exact_match})
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def find_duplicate_contacts(
+    first_name: str,
+    last_name: str,
+    client_corporation_id: int,
+) -> str:
+    """Check whether a contact already exists at a given company in Bullhorn.
+
+    Args:
+        first_name: Contact's first name
+        last_name: Contact's last name
+        client_corporation_id: Bullhorn ClientCorporation ID to scope the search
+
+    Returns:
+        JSON object: {"query": {...}, "matches": [...], "exact_match": bool}
+        Partial matches (same name, different email) are flagged with "partial_match": true.
+
+    Examples:
+        - find_duplicate_contacts("John", "Smith", 123)
+    """
+    try:
+        client = get_client()
+        results = client.search(
+            "ClientContact",
+            query=f"clientCorporation.id:{client_corporation_id}",
+            fields="id,firstName,lastName,email,phone,clientCorporation",
+            count=100,
+        )
+
+        query_email_map: dict[int, str] = {}  # not used for scoring but for partial flag
+        matches = []
+        for record in results:
+            score = score_contact_match(first_name, last_name, record)
+            if score >= 0.50:
+                match_entry: dict = {
+                    "confidence": round(score, 4),
+                    "category": categorize_score(score),
+                    "record": record,
+                }
+                # Flag as partial if same name but email is present and differs
+                query_full = f"{first_name} {last_name}".lower().strip()
+                cand_full = f"{record.get('firstName', '')} {record.get('lastName', '')}".lower().strip()
+                if query_full == cand_full and record.get("email"):
+                    match_entry["partial_match"] = True
+                matches.append(match_entry)
+
+        matches.sort(key=lambda m: m["confidence"], reverse=True)
+        exact_match = bool(matches and matches[0]["category"] == "exact")
+
+        return format_response({
+            "query": {"firstName": first_name, "lastName": last_name,
+                      "clientCorporation": {"id": client_corporation_id}},
+            "matches": matches,
+            "exact_match": exact_match,
+        })
+
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
 
