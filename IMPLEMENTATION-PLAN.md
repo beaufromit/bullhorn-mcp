@@ -8,6 +8,20 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 ---
 
+## Current Status
+
+| Sprint | Status | Summary |
+|--------|--------|---------|
+| Sprint 1 | **COMPLETE** | Convenience listing tools — 71 tests passing, tagged v0.0.1 |
+| Sprint 2 | **COMPLETE** | Field Metadata and Label Resolution — 90 tests passing, tagged v0.0.2 |
+| Sprint 3 | **NEXT** | Create ClientCorporation |
+| Sprint 4 | PENDING | Create ClientContact with Owner Resolution |
+| Sprint 5 | PENDING | Duplicate Detection |
+| Sprint 6 | PENDING | Update Records and Add Notes |
+| Sprint 7 | PENDING | Bulk Import |
+
+---
+
 ## Architecture Overview
 
 ### New modules to be created
@@ -32,45 +46,15 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 ## Sprint 1: Convenience Listing Tools — COMPLETED
 
-**Sprint 1 Status:** All tasks completed on 2026-03-11. All 52 tests (26 pre-existing + 8 new) passed.
-
 **User stories:** US-19, US-20, US-21
-**Goal:** Add `list_contacts` and `list_companies` MCP tools. Extend `DEFAULT_FIELDS` for both entity types. Verify all existing tests pass.
 
-### Tasks
-
-#### T1.1 — Extend DEFAULT_FIELDS for ClientContact and ClientCorporation — COMPLETED
-**File:** `src/bullhorn_mcp/client.py`
-- Update `DEFAULT_FIELDS["ClientContact"]` to: `"id,firstName,lastName,email,phone,status,title,dateAdded,clientCorporation,owner"`
-- Update `DEFAULT_FIELDS["ClientCorporation"]` to: `"id,name,status,phone,address,dateAdded"`
-- **Risk:** Changing existing `DEFAULT_FIELDS` entries is a behaviour change — `search_entities` and `query_entities` will return more fields when called without an explicit `fields` argument for these entity types. Existing tests (`test_client_contact_defaults`, `test_client_corporation_defaults`) only assert field presence (not exact string equality), so they will not break. However, verify no other tests assert exact field strings before modifying.
-- **Unit test:** `tests/test_client.py::test_default_fields_client_contact_includes_owner` — assert `"owner"` and `"status"` are in the ClientContact default fields string.
-- **Unit test:** `tests/test_client.py::test_default_fields_client_corporation_includes_date_added` — assert `"dateAdded"` is in the ClientCorporation default fields string.
-
-#### T1.2 — Add `list_contacts` MCP tool — COMPLETED
-**File:** `src/bullhorn_mcp/server.py`
-- Mirror the pattern of `list_candidates`.
-- Parameters: `query: str | None`, `status: str | None`, `limit: int = 20`, `fields: str | None`.
-- Build search query defaulting to `"isDeleted:0"`, appending `AND status:"<status>"` when provided.
-- Call `client.search(entity="ClientContact", ..., sort="-dateAdded")`.
-- **Unit test:** `tests/test_server.py::test_list_contacts_default` — mock `/search/ClientContact`, assert returns JSON list.
-- **Unit test:** `tests/test_server.py::test_list_contacts_with_status` — assert status filter is appended to query.
-- **Unit test:** `tests/test_server.py::test_list_contacts_api_error` — assert `"ERROR:"` prefix returned on `BullhornAPIError`.
-
-#### T1.3 — Add `list_companies` MCP tool — COMPLETED
-**File:** `src/bullhorn_mcp/server.py`
-- Parameters: `query: str | None`, `status: str | None`, `limit: int = 20`, `fields: str | None`.
-- Build search query defaulting to `"isDeleted:0"`, appending status filter when provided.
-- Call `client.search(entity="ClientCorporation", ..., sort="-dateAdded")`.
-- **Unit test:** `tests/test_server.py::test_list_companies_default` — mock `/search/ClientCorporation`, assert returns JSON list.
-- **Unit test:** `tests/test_server.py::test_list_companies_with_query` — assert custom query is passed through.
-
-### Sprint 1 End-to-End Tests — COMPLETED
-- `tests/test_server.py::test_sprint1_e2e_list_contacts_and_companies` — mock two search endpoints, call `list_contacts` and `list_companies` in sequence, assert both return well-formed JSON with expected field keys.
+**What was delivered:** Extended `DEFAULT_FIELDS` for `ClientContact` (added `owner`, `status`, `title`, `dateAdded`, `clientCorporation`) and `ClientCorporation` (added `dateAdded`). Added `list_contacts` and `list_companies` MCP tools in `server.py`, mirroring the existing `list_candidates`/`list_jobs` pattern. Both tools support optional `query`, `status`, `limit`, and `fields` parameters. All 71 tests pass (63 pre-existing + 8 new). Tests are in `test_server.py` (TestListContacts: 3 tests, TestListCompanies: 2 tests, TestSprint1E2E: 1 test) and `test_client.py` (2 default-fields assertions).
 
 ---
 
 ## Sprint 2: Field Metadata and Label Resolution
+
+**What was delivered:** Created `BullhornMetadata` class (`metadata.py`) with session-level caching, bidirectional label↔API-name resolution (`resolve_label_to_api`, `resolve_api_to_label`), and `resolve_fields()` for converting label-keyed dicts to API names. Added `get_entity_fields` MCP tool supporting full field listing and label/api_name lookup in either direction. Wired `_metadata` global and `get_metadata()` helper into `server.py`. Updated `reset_client` test fixture and `test_server_has_tools` assertion. 90 tests passing (71 pre-existing + 14 new metadata tests + 5 new server tests).
 
 **User stories:** US-17, US-18
 **Goal:** Create `BullhornMetadata` class with session-level caching. Add `get_entity_fields` MCP tool. Implement bidirectional label↔API-name resolution used internally by other tools.
@@ -108,6 +92,8 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - Instantiate a module-level `_metadata: BullhornMetadata | None = None`.
 - Add `get_metadata() -> BullhornMetadata` helper that creates and returns `BullhornMetadata(get_client())`.
 - **Test fixture update:** The existing `reset_client` fixture in `tests/test_server.py` resets `server._client = None`. Update it to also reset `server._metadata = None` to prevent metadata cache leaking between tests.
+- **Test update:** The existing `test_server_has_tools` test only asserts the original 6 tools. Update it to also assert that `list_contacts` and `list_companies` are registered (these were added in Sprint 1 but the test was not updated to check for them).
+- **MCP instructions update:** The `server.py` MCP instructions string currently reads `"Query Bullhorn CRM data - jobs, candidates, and placements"`. Update this to reflect the expanded capabilities (contacts, companies, field metadata) now that the server covers more than read-only job/candidate queries.
 
 ### Sprint 2 End-to-End Tests
 - `tests/test_metadata.py::test_sprint2_e2e_full_resolution_cycle` — mock meta endpoint with realistic ClientContact field list; call `get_fields`, then `resolve_label_to_api("Consultant")`, then `resolve_api_to_label("recruiterUserID")`; assert round-trip is consistent.
