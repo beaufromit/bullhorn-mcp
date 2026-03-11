@@ -4,7 +4,7 @@
 
 All 10 functional requirements (FR-1 through FR-10) are covered by user stories US-1 through US-21. No user stories were found that implement features outside the stated requirements.
 
-**Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 4 and Sprint 5 tasks — label resolution via the metadata module will be applied consistently to create operations per NFR-4, without requiring a new user story.
+**Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
 
 ---
 
@@ -14,9 +14,9 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 |--------|--------|---------|
 | Sprint 1 | **COMPLETE** | Convenience listing tools — 71 tests passing, tagged v0.0.1 |
 | Sprint 2 | **COMPLETE** | Field Metadata and Label Resolution — 90 tests passing, tagged v0.0.2 |
-| Sprint 3 | **NEXT** | Create ClientCorporation |
-| Sprint 4 | PENDING | Create ClientContact with Owner Resolution |
-| Sprint 5 | PENDING | Duplicate Detection |
+| Sprint 3 | **COMPLETE** | Create ClientCorporation — 98 tests passing, tagged v0.0.3 |
+| Sprint 4 | **COMPLETE** | Create ClientContact with Owner Resolution — 109 tests passing, tagged v0.0.4 |
+| Sprint 5 | **NEXT** | Duplicate Detection |
 | Sprint 6 | PENDING | Update Records and Add Notes |
 | Sprint 7 | PENDING | Bulk Import |
 
@@ -24,97 +24,92 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 ## Architecture Overview
 
+### Existing modules (implemented)
+- `src/bullhorn_mcp/config.py` — `BullhornConfig` dataclass with env loading
+- `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
+- `src/bullhorn_mcp/client.py` — `BullhornClient` with `search()`, `query()`, `get()`, `get_meta()`, `_request()` (GET only, params dict, 200-only success check)
+- `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching
+- `src/bullhorn_mcp/server.py` — MCP server with 9 tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`. Includes `get_client()` and `get_metadata()` helpers.
+
 ### New modules to be created
-- `src/bullhorn_mcp/metadata.py` — Field metadata cache and label/API-name resolver (`BullhornMetadata`)
-- `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring for duplicate detection
-- `src/bullhorn_mcp/bulk.py` — Bulk import orchestration logic
+- `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring for duplicate detection (Sprint 5)
+- `src/bullhorn_mcp/bulk.py` — Bulk import orchestration logic (Sprint 7)
 
 ### Existing modules to be extended
-- `src/bullhorn_mcp/client.py` — Add `create()`, `update()`, `add_note()`, `resolve_owner()` methods; extend `_request()` to support JSON request bodies
-- `src/bullhorn_mcp/server.py` — Add 9 new MCP tool functions
+- `src/bullhorn_mcp/client.py` — Extend `_request()` to support JSON bodies and multiple success codes; add `create()`, `update()`, `add_note()`, `resolve_owner()` methods
+- `src/bullhorn_mcp/server.py` — Add 7 new MCP tool functions (`create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`)
+
+### Existing test files
+- `tests/test_auth.py` — 13 tests (auth flow, regional servers)
+- `tests/test_config.py` — 6 tests
+- `tests/test_client.py` — 26 tests (search, query, get, pagination, edge cases)
+- `tests/test_metadata.py` — 14 tests (get_fields, resolve_label_to_api, resolve_api_to_label, resolve_fields, e2e)
+- `tests/test_server.py` — 31 tests (all 9 tools + server setup)
+- **Total: 90 tests, all passing**
 
 ### New test files to be created
-- `tests/test_metadata.py`
-- `tests/test_fuzzy.py`
-- `tests/test_bulk.py`
+- `tests/test_fuzzy.py` (Sprint 5)
+- `tests/test_bulk.py` (Sprint 7)
 
 ### Existing test files to be extended
-- `tests/test_client.py` — New client methods
-- `tests/test_server.py` — New server tools
+- `tests/test_client.py` — New client methods (Sprints 3, 4, 6)
+- `tests/test_server.py` — New server tools (Sprints 3, 4, 5, 6, 7)
 
 ---
 
-## Sprint 1: Convenience Listing Tools — COMPLETED
+## Sprint 1: Convenience Listing Tools — COMPLETE
 
 **User stories:** US-19, US-20, US-21
+**Tag:** v0.0.1
 
 **What was delivered:** Extended `DEFAULT_FIELDS` for `ClientContact` (added `owner`, `status`, `title`, `dateAdded`, `clientCorporation`) and `ClientCorporation` (added `dateAdded`). Added `list_contacts` and `list_companies` MCP tools in `server.py`, mirroring the existing `list_candidates`/`list_jobs` pattern. Both tools support optional `query`, `status`, `limit`, and `fields` parameters. All 71 tests pass (63 pre-existing + 8 new). Tests are in `test_server.py` (TestListContacts: 3 tests, TestListCompanies: 2 tests, TestSprint1E2E: 1 test) and `test_client.py` (2 default-fields assertions).
 
 ---
 
-## Sprint 2: Field Metadata and Label Resolution
-
-**What was delivered:** Created `BullhornMetadata` class (`metadata.py`) with session-level caching, bidirectional label↔API-name resolution (`resolve_label_to_api`, `resolve_api_to_label`), and `resolve_fields()` for converting label-keyed dicts to API names. Added `get_entity_fields` MCP tool supporting full field listing and label/api_name lookup in either direction. Wired `_metadata` global and `get_metadata()` helper into `server.py`. Updated `reset_client` test fixture and `test_server_has_tools` assertion. 90 tests passing (71 pre-existing + 14 new metadata tests + 5 new server tests).
+## Sprint 2: Field Metadata and Label Resolution — COMPLETE
 
 **User stories:** US-17, US-18
-**Goal:** Create `BullhornMetadata` class with session-level caching. Add `get_entity_fields` MCP tool. Implement bidirectional label↔API-name resolution used internally by other tools.
+**Tag:** v0.0.2
 
-### Tasks
+**What was delivered:** Created `BullhornMetadata` class (`metadata.py`) with session-level caching, bidirectional label/API-name resolution (`resolve_label_to_api`, `resolve_api_to_label`), and `resolve_fields()` for converting label-keyed dicts to API names. Added `get_entity_fields` MCP tool supporting full field listing and label/api_name lookup in either direction. Wired `_metadata` global and `get_metadata()` helper into `server.py`. Updated `reset_client` test fixture to also reset `_metadata`. Updated `test_server_has_tools` assertion to include all 9 tools (original 6 + `list_contacts`, `list_companies`, `get_entity_fields`). Updated MCP instructions string to reflect expanded capabilities. 90 tests passing (71 pre-existing + 14 new metadata tests + 5 new server tests).
 
-#### T2.1 — Create `metadata.py` with `BullhornMetadata` class
-**File:** `src/bullhorn_mcp/metadata.py` (new)
-- `BullhornMetadata(client: BullhornClient)` stores a dict cache keyed by entity type.
-- `get_fields(entity: str) -> list[dict]` — calls `client.get_meta(entity)`, parses `fields` array from response, caches result. Returns list of `{"name": str, "label": str, "type": str, "required": bool}`.
-- `resolve_label_to_api(entity: str, label: str) -> str | None` — returns API field name for a given label (case-insensitive).
-- `resolve_api_to_label(entity: str, api_name: str) -> str | None` — returns label for a given API field name.
-- `resolve_fields(entity: str, fields: dict) -> dict` — given a dict of `{field_name_or_label: value}`, returns a new dict with all keys resolved to API field names. Keys that are already API names pass through unchanged.
-- **Unit test:** `tests/test_metadata.py::test_get_fields_parses_response` — mock `/meta/ClientContact`, assert returns list with expected dicts.
-- **Unit test:** `tests/test_metadata.py::test_get_fields_caches_result` — call `get_fields` twice, assert HTTP only called once.
-- **Unit test:** `tests/test_metadata.py::test_resolve_label_to_api` — assert `"Consultant"` resolves to `"recruiterUserID"`.
-- **Unit test:** `tests/test_metadata.py::test_resolve_api_to_label` — assert `"clientCorporation"` resolves to `"Company"`.
-- **Unit test:** `tests/test_metadata.py::test_resolve_label_case_insensitive` — assert `"consultant"` resolves same as `"Consultant"`.
-- **Unit test:** `tests/test_metadata.py::test_resolve_fields_mixed_keys` — dict with one label and one API name both resolve correctly.
-- **Unit test:** `tests/test_metadata.py::test_resolve_fields_unknown_key_passes_through` — key not in metadata returns unchanged.
+### Tasks (completed)
 
-#### T2.2 — Add `get_entity_fields` MCP tool
-**File:** `src/bullhorn_mcp/server.py`
-- Parameters: `entity: str`, `label: str | None = None`, `api_name: str | None = None`.
-- If neither `label` nor `api_name` provided: return full field list as JSON.
-- If `label` provided: return `{"label": label, "api_name": resolved_or_null}`.
-- If `api_name` provided: return `{"api_name": api_name, "label": resolved_or_null}`.
-- **Unit test:** `tests/test_server.py::test_get_entity_fields_returns_list` — assert returns JSON list of field dicts.
-- **Unit test:** `tests/test_server.py::test_get_entity_fields_resolve_label` — assert correct api_name returned.
-- **Unit test:** `tests/test_server.py::test_get_entity_fields_resolve_api_name` — assert correct label returned.
-- **Unit test:** `tests/test_server.py::test_get_entity_fields_unresolvable_label` — assert `null` api_name returned without error.
+#### T2.1 — Create `metadata.py` with `BullhornMetadata` class (DONE)
+#### T2.2 — Add `get_entity_fields` MCP tool (DONE)
+#### T2.3 — Wire `BullhornMetadata` into `get_client()` (DONE)
+- Includes: `_metadata` global, `get_metadata()` helper, `reset_client` fixture update, `test_server_has_tools` assertion update, MCP instructions update.
 
-#### T2.3 — Wire `BullhornMetadata` into `get_client()`
-**File:** `src/bullhorn_mcp/server.py`
-- Instantiate a module-level `_metadata: BullhornMetadata | None = None`.
-- Add `get_metadata() -> BullhornMetadata` helper that creates and returns `BullhornMetadata(get_client())`.
-- **Test fixture update:** The existing `reset_client` fixture in `tests/test_server.py` resets `server._client = None`. Update it to also reset `server._metadata = None` to prevent metadata cache leaking between tests.
-- **Test update:** The existing `test_server_has_tools` test only asserts the original 6 tools. Update it to also assert that `list_contacts` and `list_companies` are registered (these were added in Sprint 1 but the test was not updated to check for them).
-- **MCP instructions update:** The `server.py` MCP instructions string currently reads `"Query Bullhorn CRM data - jobs, candidates, and placements"`. Update this to reflect the expanded capabilities (contacts, companies, field metadata) now that the server covers more than read-only job/candidate queries.
-
-### Sprint 2 End-to-End Tests
-- `tests/test_metadata.py::test_sprint2_e2e_full_resolution_cycle` — mock meta endpoint with realistic ClientContact field list; call `get_fields`, then `resolve_label_to_api("Consultant")`, then `resolve_api_to_label("recruiterUserID")`; assert round-trip is consistent.
+### Sprint 2 End-to-End Tests (DONE)
+- `tests/test_metadata.py::test_sprint2_e2e_full_resolution_cycle`
 
 ---
 
 ## Sprint 3: Create ClientCorporation
+
+**Tag:** v0.0.3
+
+**What was delivered:** Extended `_request()` with optional `json` parameter (forwarded on 401 retry) and now accepts both 200 and 201 as success codes. Added `create()` method to `BullhornClient` (PUT `/entity/{entity}`, then GET to return created record, returns `{changedEntityId, changeType, data}`). Added `create_company` MCP tool that resolves field labels via `get_metadata()` before calling `client.create("ClientCorporation", ...)`. Updated `test_server_has_tools` to assert `create_company` is registered. 98 tests passing (90 pre-existing + 4 new client tests + 4 new server tests).
 
 **User stories:** US-1 (partial — company creation only)
 **Goal:** Add `create()` method to `BullhornClient`. Add `create_company` MCP tool. Lay the foundation for all create/update operations by extending `_request()` to support JSON bodies.
 
 ### Tasks
 
-#### T3.1 — Extend `_request()` to support JSON request bodies
+#### T3.1 — Extend `_request()` to support JSON request bodies (DONE)
 **File:** `src/bullhorn_mcp/client.py`
-- Add optional `json: dict | None = None` parameter to `_request()`.
-- Pass `json=json` to `httpx.Client.request()`.
-- Handle 201 status code as success in addition to 200 (Bullhorn returns 200 for PUT creates).
-- **Unit test:** `tests/test_client.py::test_request_with_json_body` — mock PUT endpoint, assert JSON body is sent correctly.
 
-#### T3.2 — Add `create()` method to `BullhornClient`
+**Current state:** `_request()` signature is `(self, method, endpoint, params=None)`. It only passes `params` to `httpx.Client.request()` and only treats status 200 as success. It does not support sending a JSON body.
+
+**Changes needed:**
+- Add optional `json: dict | None = None` parameter to `_request()`.
+- Pass `json=json` to `httpx.Client.request()` alongside existing `params`.
+- Accept both 200 and 201 as success status codes. (Bullhorn typically returns 200 for PUT entity creates, but 201 should also be accepted for safety.)
+- The 401 retry path must also forward the `json` parameter on retry.
+- **Unit test:** `tests/test_client.py::test_request_with_json_body` — mock PUT endpoint, assert JSON body is sent correctly.
+- **Unit test:** `tests/test_client.py::test_request_accepts_201_status` — mock endpoint returning 201, assert no error raised.
+
+#### T3.2 — Add `create()` method to `BullhornClient` (DONE)
 **File:** `src/bullhorn_mcp/client.py`
 - `create(entity: str, data: dict) -> dict` — PUT to `/entity/{entity}`, sends `data` as JSON body.
 - Returns full response dict (includes `changedEntityId`, `changeType`).
@@ -123,27 +118,36 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_client.py::test_create_returns_insert_response` — mock PUT `/entity/ClientCorporation` returning `{"changedEntityId": 123, "changeType": "INSERT"}`, mock GET `/entity/ClientCorporation/123`, assert method returns combined dict.
 - **Unit test:** `tests/test_client.py::test_create_raises_on_api_error` — mock 400 response, assert `BullhornAPIError` raised.
 
-#### T3.3 — Add `create_company` MCP tool
+#### T3.3 — Add `create_company` MCP tool (DONE)
 **File:** `src/bullhorn_mcp/server.py`
 - Parameters: `fields: dict` (all company fields as a dictionary).
-- Calls `client.create("ClientCorporation", fields)`.
+- Apply field label resolution: `get_metadata().resolve_fields("ClientCorporation", fields)` (NFR-4 — labels must be accepted in create operations too).
+- Calls `client.create("ClientCorporation", resolved_fields)`.
 - Returns formatted JSON response.
+- **Note:** `get_metadata()` already exists in `server.py` from Sprint 2, so no additional wiring is needed.
 - **Unit test:** `tests/test_server.py::test_create_company_success` — mock create flow, assert returns JSON with `changedEntityId`.
 - **Unit test:** `tests/test_server.py::test_create_company_api_error` — assert `"ERROR:"` prefix returned.
+- **Unit test:** `tests/test_server.py::test_create_company_label_resolution` — mock meta endpoint, provide label key in fields, assert API called with resolved API name.
 
 ### Sprint 3 End-to-End Tests
-- `tests/test_server.py::test_sprint3_e2e_create_and_retrieve_company` — mock PUT create then GET retrieve; call `create_company({"name": "Acme", "status": "Prospect"})`; assert response contains `changedEntityId` and `data.name == "Acme"`.
+- `tests/test_server.py::test_sprint3_e2e_create_and_retrieve_company` (DONE) — mock PUT create then GET retrieve; call `create_company({"name": "Acme", "status": "Prospect"})`; assert response contains `changedEntityId` and `data.name == "Acme"`.
 
 ---
 
 ## Sprint 4: Create ClientContact with Owner Resolution
 
+**Tag:** v0.0.4
+
+**What was delivered:** Added `resolve_owner()` to `BullhornClient` (passes `{"id": int}` through unchanged; queries `CorporateUser` by name, returning `{"id"}` for a single match, a list for multiple matches, raising `ValueError` for zero matches). Added `create_contact` MCP tool that validates `owner` and `clientCorporation` are present, resolves owner name to CorporateUser ID, returns disambiguation JSON if ambiguous, applies field label resolution via `get_metadata()`, then calls `client.create("ClientContact", ...)`. Updated `test_server_has_tools` to assert `create_contact` is registered. 109 tests passing (98 pre-existing + 4 new client tests + 7 new server tests).
+
 **User stories:** US-2, US-4, US-5
 **Goal:** Add `resolve_owner()` to client. Add `create_contact` MCP tool that requires owner, resolves consultant names to CorporateUser IDs, and handles disambiguation.
 
+**Dependency:** Sprint 3 must be complete (requires `create()` method and `_request()` JSON body support).
+
 ### Tasks
 
-#### T4.1 — Add `resolve_owner()` method to `BullhornClient`
+#### T4.1 — Add `resolve_owner()` method to `BullhornClient` (DONE)
 **File:** `src/bullhorn_mcp/client.py`
 - `resolve_owner(owner: str | dict) -> dict | list` — if `owner` is already `{"id": int}`, return as-is. If string, search `CorporateUser` entity by name using `query(entity="CorporateUser", where=f"name='{owner}'", fields="id,firstName,lastName,email,department")`.
 - If exactly one result: return `{"id": result["id"]}`.
@@ -154,7 +158,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_client.py::test_resolve_owner_by_name_multiple_matches` — mock two results, assert returns list.
 - **Unit test:** `tests/test_client.py::test_resolve_owner_by_name_no_match` — assert raises `ValueError`.
 
-#### T4.2 — Add `create_contact` MCP tool
+#### T4.2 — Add `create_contact` MCP tool (DONE)
 **File:** `src/bullhorn_mcp/server.py`
 - Parameters: `fields: dict` (all contact fields as a dictionary; `owner` and `clientCorporation` are required).
 - Validate `owner` key present in fields; return error if missing.
@@ -162,7 +166,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - Call `client.resolve_owner(fields["owner"])`.
 - If owner resolves to a list (multiple matches): return disambiguation response — do NOT create the record. Return JSON: `{"error": "owner_ambiguous", "matches": [...], "message": "Multiple users found. Specify owner by ID."}`.
 - Replace `fields["owner"]` with `{"id": resolved_id}`.
-- Apply field label resolution via `get_metadata().resolve_fields("ClientContact", fields)` (NFR-4).
+- Apply field label resolution via `get_metadata().resolve_fields("ClientContact", fields)` (NFR-4). **Note:** `get_metadata()` is already implemented in `server.py` from Sprint 2.
 - Call `client.create("ClientContact", resolved_fields)`.
 - Returns formatted JSON response.
 - **Unit test:** `tests/test_server.py::test_create_contact_success` — mock owner resolution and create flow, assert returns JSON with `changedEntityId`.
@@ -173,7 +177,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_server.py::test_create_contact_owner_by_id` — provide `owner: {"id": 99}`, assert passes through without CorporateUser query.
 
 ### Sprint 4 End-to-End Tests
-- `tests/test_server.py::test_sprint4_e2e_create_contact_with_name_owner` — mock CorporateUser query (single match), mock ClientContact PUT, mock GET retrieve; call `create_contact({"firstName": "Jane", "lastName": "Doe", "clientCorporation": {"id": 1}, "owner": "Maryrose Lyons"})`; assert response has `changedEntityId` and `data.owner.id` matches resolved user.
+- `tests/test_server.py::test_sprint4_e2e_create_contact_with_name_owner` (DONE) — mock CorporateUser query (single match), mock ClientContact PUT, mock GET retrieve; call `create_contact({"firstName": "Jane", "lastName": "Doe", "clientCorporation": {"id": 1}, "owner": "Maryrose Lyons"})`; assert response has `changedEntityId` and `data.owner.id` matches resolved user.
 
 ---
 
@@ -182,37 +186,39 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 **User stories:** US-6, US-7, US-8 — satisfies NFR-5
 **Goal:** Create `fuzzy.py` module with normalization and confidence scoring. Add `find_duplicate_companies` and `find_duplicate_contacts` MCP tools.
 
+**Dependency:** None on Sprints 3-4 directly, but Sprint 7 depends on this sprint. Can be developed in parallel with Sprint 4 if desired.
+
 ### Tasks
 
 #### T5.1 — Create `fuzzy.py` with normalization helpers
 **File:** `src/bullhorn_mcp/fuzzy.py` (new)
 - `normalize(name: str) -> str` — lowercase, strip legal suffixes (`ltd`, `limited`, `inc`, `incorporated`, `plc`, `corp`, `corporation`, `llc`, `pty`, `co`), strip punctuation, collapse whitespace.
 - No standalone `expand_abbreviations` function — acronym handling is done inline in `score_company_match` (see T5.2). A separate function returning a list of expansions would add untested complexity for a narrow case; the inline check is simpler and sufficient.
-- **Unit test:** `tests/test_fuzzy.py::test_normalize_strips_ltd` — `"Acme Ltd"` → `"acme"`.
-- **Unit test:** `tests/test_fuzzy.py::test_normalize_strips_incorporated` — `"Acme Incorporated"` → `"acme"`.
-- **Unit test:** `tests/test_fuzzy.py::test_normalize_case_insensitive` — `"ACME CORP"` → `"acme"`.
-- **Unit test:** `tests/test_fuzzy.py::test_normalize_strips_punctuation` — `"Acme, Inc."` → `"acme"`.
+- **Unit test:** `tests/test_fuzzy.py::test_normalize_strips_ltd` — `"Acme Ltd"` -> `"acme"`.
+- **Unit test:** `tests/test_fuzzy.py::test_normalize_strips_incorporated` — `"Acme Incorporated"` -> `"acme"`.
+- **Unit test:** `tests/test_fuzzy.py::test_normalize_case_insensitive` — `"ACME CORP"` -> `"acme"`.
+- **Unit test:** `tests/test_fuzzy.py::test_normalize_strips_punctuation` — `"Acme, Inc."` -> `"acme"`.
 
 #### T5.2 — Implement `score_company_match()` confidence scoring
 **File:** `src/bullhorn_mcp/fuzzy.py`
-- `score_company_match(query: str, candidate: str) -> float` — returns 0.0–1.0.
+- `score_company_match(query: str, candidate: str) -> float` — returns 0.0-1.0.
 - Strategy: normalize both; compute `difflib.SequenceMatcher` ratio on normalized strings. Inline acronym check: if the query is all-uppercase and its length matches the number of words in the candidate, compare query letters against candidate word initials and apply a score bonus if they match. Return clamped float.
-- Thresholds: `>= 0.95` → exact, `0.75–0.95` → likely, `0.50–0.75` → possible, `< 0.50` → no match.
+- Thresholds: `>= 0.95` -> exact, `0.75-0.95` -> likely, `0.50-0.75` -> possible, `< 0.50` -> no match.
 - `categorize_score(score: float) -> str` — returns `"exact"`, `"likely"`, `"possible"`, or `"none"`.
-- **Unit test:** `tests/test_fuzzy.py::test_score_exact_match` — `"Acme Holdings Ltd"` vs `"Acme Holdings Ltd"` → `>= 0.95`.
-- **Unit test:** `tests/test_fuzzy.py::test_score_acronym_match` — `"BNY"` vs `"Bank of New York Mellon"` → `0.75–0.95`.
-- **Unit test:** `tests/test_fuzzy.py::test_score_suffix_variation` — `"Acme Ltd"` vs `"Acme Limited"` → `>= 0.95`.
-- **Unit test:** `tests/test_fuzzy.py::test_score_unrelated` — `"Acme"` vs `"Globex"` → `< 0.50`.
-- **Unit test:** `tests/test_fuzzy.py::test_score_possible_match` — `"Acme Holdings"` vs `"Acme Group"` → `0.50–0.75`.
+- **Unit test:** `tests/test_fuzzy.py::test_score_exact_match` — `"Acme Holdings Ltd"` vs `"Acme Holdings Ltd"` -> `>= 0.95`.
+- **Unit test:** `tests/test_fuzzy.py::test_score_acronym_match` — `"BNY"` vs `"Bank of New York Mellon"` -> `0.75-0.95`.
+- **Unit test:** `tests/test_fuzzy.py::test_score_suffix_variation` — `"Acme Ltd"` vs `"Acme Limited"` -> `>= 0.95`.
+- **Unit test:** `tests/test_fuzzy.py::test_score_unrelated` — `"Acme"` vs `"Globex"` -> `< 0.50`.
+- **Unit test:** `tests/test_fuzzy.py::test_score_possible_match` — `"Acme Holdings"` vs `"Acme Group"` -> `0.50-0.75`.
 - **Unit test:** `tests/test_fuzzy.py::test_categorize_score_thresholds` — verify all four categories at boundary values.
 
 #### T5.3 — Implement `score_contact_match()` confidence scoring
 **File:** `src/bullhorn_mcp/fuzzy.py`
-- `score_contact_match(query_first: str, query_last: str, candidate: dict) -> float` — score against `firstName`/`lastName` fields. Exact name match → 1.0. Normalize and use SequenceMatcher on full name.
+- `score_contact_match(query_first: str, query_last: str, candidate: dict) -> float` — score against `firstName`/`lastName` fields. Exact name match -> 1.0. Normalize and use SequenceMatcher on full name.
 - Flag partial match when email differs (attach `"partial_match": true` in result dict upstream).
-- **Unit test:** `tests/test_fuzzy.py::test_contact_exact_match` — same first and last → `>= 0.95`.
-- **Unit test:** `tests/test_fuzzy.py::test_contact_partial_match` — same name different email → high score but caller flags partial.
-- **Unit test:** `tests/test_fuzzy.py::test_contact_no_match` — different name → `< 0.50`.
+- **Unit test:** `tests/test_fuzzy.py::test_contact_exact_match` — same first and last -> `>= 0.95`.
+- **Unit test:** `tests/test_fuzzy.py::test_contact_partial_match` — same name different email -> high score but caller flags partial.
+- **Unit test:** `tests/test_fuzzy.py::test_contact_no_match` — different name -> `< 0.50`.
 
 #### T5.4 — Add `find_duplicate_companies` MCP tool
 **File:** `src/bullhorn_mcp/server.py`
@@ -247,11 +253,14 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 **User stories:** US-12, US-13, US-14, US-15, US-16
 **Goal:** Add `update()` and `add_note()` methods to `BullhornClient`. Add `update_record` and `add_note` MCP tools. Enforce company reassignment guard. Integrate field label resolution.
 
+**Dependency:** Sprint 3 must be complete (requires `_request()` JSON body support). Sprint 2's `get_metadata()` is already available.
+
 ### Tasks
 
 #### T6.1 — Add `update()` method to `BullhornClient`
 **File:** `src/bullhorn_mcp/client.py`
 - `update(entity: str, entity_id: int, data: dict) -> dict` — POST to `/entity/{entity}/{entity_id}` with JSON body.
+- Uses `_request()` with `json=data` parameter (extended in T3.1).
 - After update, call `get(entity, entity_id)` to return full record.
 - Returns `{"changedEntityId": entity_id, "changeType": "UPDATE", "data": dict}`.
 - **Unit test:** `tests/test_client.py::test_update_returns_update_response` — mock POST and GET, assert combined dict returned.
@@ -261,13 +270,15 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 **File:** `src/bullhorn_mcp/server.py`
 - Parameters: `entity: str`, `entity_id: int`, `fields: dict`.
 - Guard: if `entity == "ClientContact"` and `"clientCorporation"` in `fields`, return error `"Company reassignment is not supported."` without calling API.
-- Apply field label resolution: `get_metadata().resolve_fields(entity, fields)`.
+- Apply field label resolution: `get_metadata().resolve_fields(entity, fields)`. **Note:** `get_metadata()` is already implemented from Sprint 2.
+- **Important:** The company reassignment guard must check for `clientCorporation` in the resolved fields (after label resolution), not just the input fields. Otherwise a caller could bypass the guard by using the label "Company" instead of the API name `clientCorporation`.
 - Call `client.update(entity, entity_id, resolved_fields)`.
 - Returns formatted JSON.
 - **Unit test:** `tests/test_server.py::test_update_record_success` — mock POST+GET, assert returns updated record.
 - **Unit test:** `tests/test_server.py::test_update_record_company_reassignment_blocked` — assert error returned without API call.
 - **Unit test:** `tests/test_server.py::test_update_record_label_resolution` — mock meta endpoint, provide label key, assert API called with resolved name.
 - **Unit test:** `tests/test_server.py::test_update_record_api_error` — assert `"ERROR:"` prefix returned.
+- **Unit test:** `tests/test_server.py::test_update_record_company_reassignment_blocked_via_label` — provide `"Company"` label instead of `clientCorporation`, assert guard still triggers after resolution.
 
 #### T6.3 — Add `add_note()` method to `BullhornClient`
 **File:** `src/bullhorn_mcp/client.py`
@@ -275,7 +286,10 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - For `ClientContact`: sets `personReference: {"id": entity_id}` and `commentingPerson: {"id": entity_id}`.
 - For `ClientCorporation`: sets `clientCorporation: {"id": entity_id}`.
 - Sets `action` and `comments` fields.
-- PUT to `/entity/Note`, returns `{"changedEntityId": int, "changeType": "INSERT", "data": dict}`.
+- PUT to `/entity/Note` using `_request()` with `json=payload` (extended in T3.1).
+- After create, call `get("Note", changedEntityId)` to return full Note record.
+- Returns `{"changedEntityId": int, "changeType": "INSERT", "data": dict}`.
+- **Design note on `commentingPerson`:** The PRD (FR-7) states "sets `commentingPerson` to automate the NoteEntity association." In Bullhorn, setting `commentingPerson` on a Note auto-creates a NoteEntity link, which is a known pattern for ensuring the note appears on the correct entity's Notes tab. Using the contact's own ID here is consistent with the PRD's intent. If a different behaviour is needed (e.g. setting `commentingPerson` to the authenticated CorporateUser), this should be revisited during implementation with a real Bullhorn instance.
 - **Unit test:** `tests/test_client.py::test_add_note_to_contact` — mock PUT `/entity/Note`, assert `personReference` set correctly.
 - **Unit test:** `tests/test_client.py::test_add_note_to_company` — assert `clientCorporation` set correctly.
 - **Unit test:** `tests/test_client.py::test_add_note_raises_on_api_error` — mock 400, assert `BullhornAPIError`.
@@ -300,6 +314,8 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 **User stories:** US-3, US-9, US-10, US-11
 **Goal:** Implement `bulk_import` orchestration. Create `bulk.py` module. Add `bulk_import` MCP tool. Handle on-the-fly company creation, consecutive error halting, and summary generation.
 
+**Dependency:** Requires all previous sprints. Uses `client.create()` (Sprint 3), `client.resolve_owner()` (Sprint 4), `score_company_match`/`score_contact_match` from `fuzzy.py` (Sprint 5), and `get_metadata()` (Sprint 2).
+
 ### Tasks
 
 #### T7.1 — Create `bulk.py` with `BulkImporter` class
@@ -311,12 +327,12 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 #### T7.2 — Implement company processing phase
 **File:** `src/bullhorn_mcp/bulk.py`
-- `_process_companies(companies: list[dict]) -> dict[str, int]` — returns map of `input_name → bullhorn_id`.
+- `_process_companies(companies: list[dict]) -> dict[str, int]` — returns map of `input_name -> bullhorn_id`.
 - For each company:
   1. Call `find_duplicate_companies` logic (reuse `score_company_match` from fuzzy module against search results).
   2. If exact match (`>= 0.95`): record as `"existing"`, use existing ID.
   3. If likely/possible match: record as `"flagged"`, use existing ID (do not create), include match confidence.
-  4. If no match: call `client.create("ClientCorporation", company_data)`, record as `"created"`.
+  4. If no match: apply field label resolution via `metadata.resolve_fields()` (NFR-4), then call `client.create("ClientCorporation", resolved_data)`, record as `"created"`.
   5. On `BullhornAPIError`: increment `_consecutive_errors`. If `>= 3`: set `halted=True`, stop.
   6. On success: reset `_consecutive_errors = 0`.
 - **Unit test:** `tests/test_bulk.py::test_process_companies_creates_new` — mock search (no results), mock create; assert status "created".
@@ -330,20 +346,22 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - For each contact:
   1. Resolve company: look up `company_name` in `company_id_map`. If not found, search Bullhorn. If still not found, create company on-the-fly (US-3) and add to map.
   2. Set `clientCorporation: {"id": resolved_id}` in contact fields.
-  3. Check owner: call `client.resolve_owner(contact["owner"])`. If ambiguous: record as `"flagged"`.
+  3. Check owner: call `client.resolve_owner(contact["owner"])`. If ambiguous (returns list): record as `"flagged"` with the match list for user review — do NOT error or halt. This is correct per PRD FR-5 ("flag it and include it in the results for user review"). If owner not found (raises `ValueError`): record as `"failed"`.
   4. Run contact duplicate detection using `score_contact_match`.
   5. If exact match: record as `"existing"`.
-  6. If no match: call `client.create("ClientContact", ...)`, record as `"created"`.
+  6. If no match: apply field label resolution via `metadata.resolve_fields()` (NFR-4), then call `client.create("ClientContact", ...)`, record as `"created"`.
   7. On `BullhornAPIError`: increment `_consecutive_errors`. If `>= 3`: halt.
   8. On success: reset `_consecutive_errors = 0`.
 - **Unit test:** `tests/test_bulk.py::test_process_contacts_resolves_company_from_map` — assert company ID from previous phase used, no extra search.
 - **Unit test:** `tests/test_bulk.py::test_process_contacts_creates_company_on_the_fly` — mock company search (no results), mock company create, mock contact create; assert both created.
 - **Unit test:** `tests/test_bulk.py::test_process_contacts_skips_existing` — mock contact duplicate detection with exact match; assert status "existing".
-- **Unit test:** `tests/test_bulk.py::test_process_contacts_flags_ambiguous_owner` — mock multiple CorporateUser results; assert status "flagged".
+- **Unit test:** `tests/test_bulk.py::test_process_contacts_flags_ambiguous_owner` — mock multiple CorporateUser results; assert status "flagged", not "failed".
+- **Unit test:** `tests/test_bulk.py::test_process_contacts_fails_on_owner_not_found` — mock zero CorporateUser results (ValueError); assert status "failed".
 
 #### T7.4 — Implement summary generation
 **File:** `src/bullhorn_mcp/bulk.py`
 - `_build_summary(company_details: list, contact_details: list) -> dict` — aggregates counts per status for both entity types.
+- Summary structure per entity type: `{"created": int, "existing": int, "flagged": int, "failed": int}`.
 - **Unit test:** `tests/test_bulk.py::test_build_summary_correct_counts` — provide mixed status list, assert all count fields correct.
 
 #### T7.5 — Add `bulk_import` MCP tool
@@ -356,7 +374,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - **Unit test:** `tests/test_server.py::test_bulk_import_halts_on_errors` — mock consecutive failures, assert halted flag in response.
 
 ### Sprint 7 End-to-End Tests
-- `tests/test_bulk.py::test_sprint7_e2e_full_batch_import` — mock: company search (no results), company create, contact owner resolution, contact search (no results), contact create ×2; call `BulkImporter.process(2 companies, 2 contacts)`; assert `summary.companies.created == 2`, `summary.contacts.created == 2`, `halted == False`, and `details` array has 4 entries.
+- `tests/test_bulk.py::test_sprint7_e2e_full_batch_import` — mock: company search (no results), company create, contact owner resolution, contact search (no results), contact create x2; call `BulkImporter.process(2 companies, 2 contacts)`; assert `summary.companies.created == 2`, `summary.contacts.created == 2`, `halted == False`, and `details` array has 4 entries.
 - `tests/test_bulk.py::test_sprint7_e2e_halt_on_consecutive_errors` — mock 3 consecutive company creates to raise `BullhornAPIError`; assert `halted == True` and results up to failure are included.
 
 ---
@@ -369,7 +387,7 @@ After all sprints are implemented, run the complete test suite:
 .venv/bin/pytest
 ```
 
-Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1–7.
+Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-7.
 
 Key regression checks:
 - `tests/test_server.py` — all existing `list_jobs`, `list_candidates`, `get_job`, `get_candidate`, `search_entities`, `query_entities` tests pass.
@@ -382,7 +400,9 @@ Key regression checks:
 ## Dependency Notes
 
 - **No new third-party packages required** — fuzzy matching uses Python's built-in `difflib.SequenceMatcher`. All HTTP mocking continues with `respx`.
-- Sprint 5 depends on Sprints 3 and 4 (duplicate detection is used internally by bulk import).
-- Sprint 7 depends on all previous sprints (orchestrates create, duplicate detection, owner resolution, and metadata).
-- Sprints 1 and 2 are independent and can be developed in any order.
-- Sprints 3 and 4 must be done in order (contact create builds on `_request` extensions from Sprint 3).
+- Sprints 1 and 2 are independent and complete.
+- Sprint 3 is the foundation for all write operations (extends `_request()`, adds `create()`).
+- Sprint 4 depends on Sprint 3 (`create()` method, `_request()` JSON body support).
+- Sprint 5 has no direct dependency on Sprints 3-4 (fuzzy module is standalone), but the MCP tools use `client.search()` which already exists. Can be developed in parallel with Sprint 4.
+- Sprint 6 depends on Sprint 3 (`_request()` JSON body support for `update()` and `add_note()`).
+- Sprint 7 depends on all previous sprints (orchestrates create, duplicate detection, owner resolution, metadata, and field label resolution).
