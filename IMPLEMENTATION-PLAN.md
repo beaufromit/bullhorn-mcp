@@ -22,6 +22,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 8 | **COMPLETE** | CR1: Fix title/occupation field mapping bug — 182 tests passing, tagged v0.0.8 |
 | Sprint 9 | **COMPLETE** | CR2: Audit and fix auto-injected fields — 190 tests passing, tagged v0.0.9 |
 | Sprint 10 | **COMPLETE** | CR3: Fix broken owner name resolution and department field leak — 195 tests passing, tagged v0.0.10 |
+| Sprint 11 | **COMPLETE** | CR4: Fix incorrect title field in docstrings — 198 tests passing, tagged v0.0.11 |
 
 ---
 
@@ -596,6 +597,19 @@ Assert:
 
 ---
 
+## Sprint 11: CR4 — Fix Incorrect Title Field in Docstrings — COMPLETE
+
+**Tag:** v0.0.11
+
+**What was delivered:** Fixed two docstring errors where `title` was incorrectly used to mean job title for ClientContact:
+- `update_record` docstring example changed from `{"title": "CTO"}` to `{"occupation": "CTO"}`.
+- `list_contacts` docstring example changed from `title:Manager` to `occupation:Manager` in the Lucene query example.
+Added `TestSprint11DocstringRegression` in `test_server.py` with 3 regression guards to prevent recurrence. 198 tests passing.
+
+**User stories addressed:** US-12, US-15
+
+---
+
 ## Full Regression Test Suite (All Sprints Complete)
 
 After all sprints are implemented, run the complete test suite:
@@ -604,7 +618,7 @@ After all sprints are implemented, run the complete test suite:
 .venv/bin/pytest
 ```
 
-Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-10.
+Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-11.
 
 Key regression checks:
 - `tests/test_server.py` — all existing `list_jobs`, `list_candidates`, `get_job`, `get_candidate`, `search_entities`, `query_entities` tests pass.
