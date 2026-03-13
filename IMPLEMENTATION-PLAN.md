@@ -23,6 +23,9 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 9 | **COMPLETE** | CR2: Audit and fix auto-injected fields — 190 tests passing, tagged v0.0.9 |
 | Sprint 10 | **COMPLETE** | CR3: Fix broken owner name resolution and department field leak — 195 tests passing, tagged v0.0.10 |
 | Sprint 11 | **COMPLETE** | CR4: Fix incorrect title field in docstrings — 198 tests passing, tagged v0.0.11 |
+| Sprint 12 | **COMPLETE** | CR6: Investigate and fix title field injection in update_record — 201 tests passing, tagged v0.0.12 |
+| Sprint 13 | **PLANNED** | CR7: Strip title from ClientContact write payloads with warning |
+| Sprint 14 | **PLANNED** | CR5: Add duplicate check to create_contact before creation |
 
 ---
 
@@ -48,9 +51,9 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
 - `tests/test_metadata.py` — 21 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 71 tests (all 16 tools + server setup + E2E tests Sprints 1–9)
+- `tests/test_server.py` — 74 tests (all 16 tools + server setup + E2E tests Sprints 1–12)
 - `tests/test_bulk.py` — 14 tests (company processing, contact processing, summary, E2E)
-- **Total: 195 tests, all passing**
+- **Total: 201 tests, all passing**
 
 ---
 
@@ -610,6 +613,217 @@ Added `TestSprint11DocstringRegression` in `test_server.py` with 3 regression gu
 
 ---
 
+---
+
+## Sprint 12: CR6 — Investigate and Fix title Field Injection in update_record — COMPLETE
+
+**Tag:** v0.0.12
+**Change request:** CR6.md
+**User stories affected:** US-12, US-13, US-15
+
+**Goal:** Find and eliminate the source of the spurious `title` field that appears in every `update_record` POST to Bullhorn for ClientContact, regardless of what fields the caller provides. Add a regression test capturing the raw POST body.
+
+**Dependency:** All previous sprints complete.
+
+**What was delivered:** Full execution-path audit of `update_record` found NO code-level injection. Specifically:
+- `server.py` `update_record` — passes `fields: dict` directly to `get_metadata().resolve_fields()` with no additions.
+- `metadata.py` `resolve_fields()` — iterates only over input keys, never adds new keys.
+- `client.py` `update()` — passes `data` directly to `_request("POST", ...)` without mutation.
+- `client.py` `_request()` — passes the `json` argument directly to httpx without mutation.
+- `DEFAULT_FIELDS["ClientContact"]` (which contains `title`) is referenced only in read paths (`search()`, `query()`, `get()`), never in `update()` or `create()`.
+
+**Root cause:** The injection originates from the calling agent, not from MCP server code. When the agent calls `update_record`, it is adding `title` to the `fields` dict it passes — likely because Bullhorn's metadata for ClientContact includes a `title` field and the agent inferred it was required or appropriate. No code change was required.
+
+Added `TestSprint12TitleInjectionRegression` in `test_server.py` with 3 regression tests that capture the raw HTTP POST body via `respx`. These guard against any future code-level injection being introduced:
+1. `test_update_record_post_body_exact_keys` — `{"firstName": "Test"}` is sent as-is.
+2. `test_update_record_post_body_exact_keys_occupation` — `{"occupation": "CTO"}` is sent as-is.
+3. `test_sprint12_e2e_update_no_title_injection` — full stack E2E from server tool to HTTP POST.
+
+201 tests passing.
+
+---
+
+### Background
+
+Every `update_record` call on a ClientContact returns `"Invalid field 'title' at position 42"` from Bullhorn even when `title` is not present in the caller's `fields` dict. This means `title` is being added to the POST body somewhere between the MCP tool entry and the HTTP request. The same injection may affect `create_contact`.
+
+The five suspected injection sites (from CR6) are:
+
+1. `resolve_fields()` in `metadata.py` — could silently remap a caller key to `title` via label lookup.
+2. `client.update()` or `_request()` — could be mutating the JSON body.
+3. **MCP tool schema** — if `update_record` (or `create_contact`) previously had `title` as an explicit named parameter in its signature, the MCP framework encodes it in the tool schema. Calling agents (Claude, etc.) read the schema and include every listed parameter in each call, sending `title: null` or `title: ""` when they don't intend to set it. This is the most likely cause given the symptom ("regardless of what fields I passed").
+4. `DEFAULT_FIELDS` — already confirmed not to affect write paths in Sprint 9, but worth a final check.
+5. The calling agent itself — if the agent received `title` from a prior read response, it may have forwarded it. Captured request bodies will distinguish this from a code-level injection.
+
+---
+
+### Tasks
+
+#### T12.1 — Audit `update_record` tool signature and MCP schema
+**File:** `src/bullhorn_mcp/server.py`
+
+Inspect the `update_record` function signature and its `@mcp.tool()` decorator. Determine whether `title` appears as an explicit named parameter (e.g. `title: str | None = None`). If it does:
+- Remove `title` from the signature. The tool's `fields: dict` parameter already accepts any arbitrary field — `title` should not be a separate top-level parameter.
+- After removing it, `update_record(entity, entity_id, {"firstName": "Test"})` should no longer include `title` in the POST body.
+
+Also inspect `create_contact` and any other write tool for the same pattern.
+
+- **Unit test:** `tests/test_server.py::test_update_record_post_body_exact_keys` — call `update_record("ClientContact", 1, {"firstName": "Test"})` with a mock that captures the raw JSON body sent to Bullhorn; assert body is exactly `{"firstName": "Test"}` — no `title`, no other keys.
+- **Unit test:** `tests/test_server.py::test_update_record_post_body_exact_keys_occupation` — same pattern with `{"occupation": "CTO"}`; assert body is exactly `{"occupation": "CTO"}`.
+
+#### T12.2 — Audit `_request()` and `client.update()` for body mutation
+**File:** `src/bullhorn_mcp/client.py`
+
+Confirm that `_request("POST", endpoint, json=data)` does not mutate `data` before or during the HTTP call. Confirm that `update(entity, entity_id, data)` does not add keys to `data`. If any mutation is found, remove it.
+
+This is primarily a verification task; no code change expected if Sprint 9 audit was correct.
+
+#### T12.3 — Document root cause in "What was delivered" section
+After completing T12.1–T12.2, fill in the "What was delivered" section for Sprint 12 with:
+- Where the injection was found (e.g. explicit `title` parameter in tool signature, or a specific line in another file).
+- What was removed.
+- Why it was there (likely a leftover from an earlier draft of the tool signature).
+
+### Sprint 12 End-to-End Tests
+
+- `tests/test_server.py::test_sprint12_e2e_update_no_title_injection` — mock ClientContact POST (capture body) and GET; call `update_record("ClientContact", 1, {"firstName": "Aleksandr"})`; assert POST body is exactly `{"firstName": "Aleksandr"}` and response contains `changedEntityId`. This is the canonical regression guard for CR6.
+
+---
+
+## Sprint 13: CR7 — Strip title From ClientContact Write Payloads and Log Warning
+
+**Tag:** v0.0.13
+**Change request:** CR7.md
+**User stories affected:** US-2, US-12, US-15
+
+**Goal:** After Sprint 12 removes the active injection, add defense-in-depth: if `title` ever reaches a ClientContact write payload (from a calling agent that misunderstands the field), strip it silently with a logged warning and a `warnings` array in the response. This prevents Bullhorn from rejecting the operation while communicating the issue to the caller.
+
+**Dependency:** Sprint 12 must be complete (removes the active injection; this sprint adds the guard).
+
+---
+
+### Background
+
+Even after the Sprint 12 fix removes the schema-level injection, callers may still send `title` meaning "job title" (a documented misunderstanding addressed in CR1/CR4). Rather than silently failing with a Bullhorn API error, the MCP should strip the field and warn. The chosen approach (Option C from CR7) avoids permanently hiding the real `title` (salutation) field behind an alias.
+
+**Important:** This guard applies only to ClientContact write payloads. Other entities (e.g. JobOrder) have a valid writable `title` field.
+
+---
+
+### Tasks
+
+#### T13.1 — Add `_strip_contact_title(fields: dict) -> tuple[dict, list[str]]` utility
+**File:** `src/bullhorn_mcp/server.py` (or a shared helper)
+
+A small function that:
+- Takes `fields: dict` and `entity: str`.
+- If `entity == "ClientContact"` and `"title"` is in `fields`: removes it, appends a warning string, logs a `logging.warning(...)`.
+- Returns `(cleaned_fields, warnings_list)`.
+
+Warning message: `"Field 'title' was stripped from the ClientContact payload. Use 'occupation' for job title or 'namePrefix' for salutation."`
+
+This function is called in both `create_contact` and `update_record` **after** field label resolution (so that label-resolved keys are also checked).
+
+#### T13.2 — Apply title stripping in `create_contact`
+**File:** `src/bullhorn_mcp/server.py`
+
+After `resolve_fields("ClientContact", fields)` and before calling `client.create()`:
+- Call `_strip_contact_title(resolved_fields, "ClientContact")`.
+- If `warnings` is non-empty, include `"warnings": warnings` in the response dict returned to the caller.
+
+- **Unit test:** `tests/test_server.py::test_create_contact_title_stripped_with_warning` — call `create_contact({"firstName": "Jane", "lastName": "Doe", "clientCorporation": {"id": 1}, "owner": {"id": 99}, "title": "CTO"})` with a mock capturing the PUT body; assert PUT body does not contain `"title"`, and response contains `"warnings"` with the expected message.
+- **Unit test:** `tests/test_server.py::test_create_contact_no_warning_without_title` — call without `title`; assert response does not contain `"warnings"` key.
+
+#### T13.3 — Apply title stripping in `update_record`
+**File:** `src/bullhorn_mcp/server.py`
+
+After `resolve_fields(entity, fields)` and before calling `client.update()`:
+- Call `_strip_contact_title(resolved_fields, entity)` — only strips if entity is ClientContact.
+- If `warnings` is non-empty, include `"warnings": warnings` in the response dict.
+
+- **Unit test:** `tests/test_server.py::test_update_record_title_stripped_with_warning` — call `update_record("ClientContact", 1, {"title": "VP"})` with a mock capturing the POST body; assert POST body does not contain `"title"`, and response contains `"warnings"`.
+- **Unit test:** `tests/test_server.py::test_update_record_joborder_title_not_stripped` — call `update_record("JobOrder", 1, {"title": "Senior Engineer"})` with a mock; assert POST body contains `"title": "Senior Engineer"` (not stripped for non-ClientContact entities).
+- **Unit test:** `tests/test_server.py::test_update_record_occupation_no_warning` — call `update_record("ClientContact", 1, {"occupation": "VP"})`; assert no `"warnings"` in response.
+
+#### T13.4 — Confirm `DEFAULT_FIELDS` read paths are unaffected
+**File:** `src/bullhorn_mcp/client.py`
+
+Verify (read-only audit) that `DEFAULT_FIELDS["ClientContact"]` continues to include `title` for GET/search/query responses. `_strip_contact_title` only applies in write paths; read operations must not be modified.
+
+No code change expected. Document the confirmation in the "What was delivered" section.
+
+### Sprint 13 End-to-End Tests
+
+- `tests/test_server.py::test_sprint13_e2e_create_contact_title_stripped` — mock owner resolution (by ID), metadata (resolves nothing new), ClientContact PUT (capture body), ClientContact GET; call `create_contact({"firstName": "Conor", "lastName": "Warren", "clientCorporation": {"id": 1}, "owner": {"id": 42}, "title": "CEO"})`; assert PUT body lacks `"title"`, response has `changedEntityId` and `warnings` array containing the expected message.
+
+---
+
+## Sprint 14: CR5 — Add Duplicate Check to create_contact Before Creation
+
+**Tag:** v0.0.14
+**Change request:** CR5.md
+**User stories affected:** US-2, US-7
+
+**Goal:** Add a pre-creation duplicate check to `create_contact` so that callers who retry after a (transient or bug-induced) error do not silently create duplicate contacts. Reuse the existing `score_contact_match` logic already used in `bulk_import`.
+
+**Dependency:** Sprints 12 and 13 must be complete (the duplicates described in CR5 were caused by the title injection fixed in those sprints; this sprint adds a guard so retries are safe regardless of root cause).
+
+---
+
+### Background
+
+During real usage, `create_contact` calls failed with `"Invalid field 'title'"` errors (the bug addressed in CR6/CR7). Bullhorn partially persisted the records before returning the error. When callers retried, they created additional duplicate contacts (IDs 170841, 170842, 170843). A pre-creation duplicate check would have caught the second and third attempts.
+
+`bulk_import` already performs this check via `score_contact_match`. `create_contact` should do the same so individual creation is equally safe.
+
+**Important:** `bulk_import` is **not** affected by this sprint. It calls `client.create()` directly (not `create_contact`) and manages its own duplicate detection.
+
+---
+
+### Tasks
+
+#### T14.1 — Add duplicate detection before creation in `create_contact`
+**File:** `src/bullhorn_mcp/server.py`
+
+After resolving the owner and stripping `title` (Sprints 12–13), and before calling `client.create("ClientContact", ...)`:
+
+1. Extract `clientCorporation.id` from the resolved fields.
+2. Extract `firstName` and `lastName` from the resolved fields.
+3. Call `client.search("ClientContact", query=f"clientCorporation.id:{corp_id}", fields="id,firstName,lastName,email,phone,clientCorporation", count=100)`.
+4. Score each result with `score_contact_match(firstName, lastName, candidate)` from `fuzzy.py`.
+5. Find the highest-scoring match.
+
+Decision logic:
+- **Score >= 0.95 (exact):** Return without creating. Response: `{"duplicate_found": True, "match": {"confidence": score, "category": "exact", "record": {...}}, "message": "A contact matching this name already exists at this company. Use update_record to modify the existing record, or set force=True to create regardless."}`.
+- **Score 0.50–0.95 (likely/possible):** Return without creating. Response: same shape but `category` reflects the confidence band, with message asking caller to confirm.
+- **No match:** Proceed with `client.create()` as normal.
+
+- **Unit test:** `tests/test_server.py::test_create_contact_blocks_on_exact_duplicate` — mock contact search returning a contact with the same name at the same company; call `create_contact(...)` without `force=True`; assert response contains `duplicate_found: true`, no PUT call made.
+- **Unit test:** `tests/test_server.py::test_create_contact_blocks_on_near_duplicate` — mock search returning a near-match (score 0.50–0.95); assert `duplicate_found: true` with appropriate category, no PUT call made.
+- **Unit test:** `tests/test_server.py::test_create_contact_proceeds_when_no_duplicate` — mock search returning no matches; assert PUT called and `changedEntityId` in response.
+
+#### T14.2 — Add `force: bool = False` parameter to `create_contact`
+**File:** `src/bullhorn_mcp/server.py`
+
+Add `force: bool = False` as an optional parameter to `create_contact`. When `force=True`, skip the duplicate check (step T14.1) entirely and proceed directly to `client.create()`.
+
+Update the `create_contact` docstring to document the `force` parameter.
+
+- **Unit test:** `tests/test_server.py::test_create_contact_force_bypasses_duplicate_check` — mock search (would return a duplicate if consulted), but pass `force=True`; assert no search call is made (or its result is ignored) and PUT is called.
+
+#### T14.3 — Handle missing `clientCorporation` gracefully in duplicate check
+**File:** `src/bullhorn_mcp/server.py`
+
+If `clientCorporation` is absent from `fields` (already validated earlier in `create_contact`), the duplicate check cannot run. This should not happen in practice because `create_contact` already returns an error if `clientCorporation` is missing. Confirm the existing validation covers this before the duplicate check path is reached. No new validation needed.
+
+### Sprint 14 End-to-End Tests
+
+- `tests/test_server.py::test_sprint14_e2e_create_contact_duplicate_blocked` — mock: CorporateUser query (owner by name), ClientContact search (returns existing contact with same name/company), no PUT mock; call `create_contact({"firstName": "Conor", "lastName": "Warren", "clientCorporation": {"id": 10666}, "owner": "Beau Warren"})`; assert response has `duplicate_found: true`, `match.record.id` is the existing contact ID, no creation occurred.
+
+- `tests/test_server.py::test_sprint14_e2e_create_contact_force_creates_despite_duplicate` — mock: CorporateUser query, ClientContact search (returns existing), ClientContact PUT, ClientContact GET; call `create_contact({..., "force": True})`; assert PUT is called and `changedEntityId` is in response.
+
+---
+
 ## Full Regression Test Suite (All Sprints Complete)
 
 After all sprints are implemented, run the complete test suite:
@@ -618,7 +832,7 @@ After all sprints are implemented, run the complete test suite:
 .venv/bin/pytest
 ```
 
-Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-11.
+Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-14.
 
 Key regression checks:
 - `tests/test_server.py` — all existing `list_jobs`, `list_candidates`, `get_job`, `get_candidate`, `search_entities`, `query_entities` tests pass.

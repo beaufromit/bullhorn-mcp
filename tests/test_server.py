@@ -1273,3 +1273,149 @@ class TestSprint11DocstringRegression:
             'list_contacts docstring contains "title:Manager" — '
             "title is the salutation field; use occupation:Manager to search by job title"
         )
+
+
+class TestSprint12TitleInjectionRegression:
+    """CR6: Regression guards ensuring title is never injected into update_record POST body.
+
+    These tests operate at the HTTP layer using respx to capture the raw request body
+    sent to Bullhorn. This is a deeper guard than Sprint 9's mock_client tests, which
+    only verify what server.py passes to client.update(). These tests verify that
+    BullhornClient.update() also sends exactly the caller-specified fields over the wire.
+
+    Root-cause finding: Investigation of the full execution path (server.py →
+    metadata.py → client.py → httpx) found NO code-level injection. The update_record
+    tool, resolve_fields(), client.update(), and _request() all pass fields through
+    without adding keys. DEFAULT_FIELDS["ClientContact"] (which contains "title") is
+    referenced only in read paths (search/query/get), never in write paths. The
+    injection described in CR6 originates from the calling agent, not from the MCP
+    server code. These tests serve as a permanent regression guard to ensure no future
+    change introduces code-level injection.
+    """
+
+    @pytest.fixture
+    def mock_auth(self, mock_session):
+        """Create a mock auth object with the shared session fixture."""
+        from unittest.mock import Mock, PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+        return auth
+
+    def test_update_record_post_body_exact_keys(self, mock_auth, mock_session):
+        """POST body for ClientContact update contains exactly {"firstName": "Test"} — no title injected.
+
+        Captures the raw HTTP request body sent by BullhornClient.update() via respx.
+        This is the primary regression guard for CR6: verifies that no extra keys
+        (in particular 'title') are injected into the Bullhorn API POST request.
+        """
+        import httpx
+        import respx
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        from bullhorn_mcp.client import BullhornClient
+
+        captured = {}
+
+        def capture_post(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"changedEntityId": 1, "changeType": "UPDATE"})
+
+        contact_record = {"id": 1, "firstName": "Test"}
+
+        with respx.mock:
+            respx.post(f"{mock_session.rest_url}/entity/ClientContact/1").mock(
+                side_effect=capture_post
+            )
+            respx.get(f"{mock_session.rest_url}/entity/ClientContact/1").mock(
+                return_value=httpx.Response(200, json={"data": contact_record})
+            )
+
+            client = BullhornClient(mock_auth)
+            client.update("ClientContact", 1, {"firstName": "Test"})
+
+        assert "body" in captured, "POST was not called — route did not match"
+        assert captured["body"] == {"firstName": "Test"}, (
+            f"POST body contained unexpected keys: {captured['body']}"
+        )
+
+    def test_update_record_post_body_exact_keys_occupation(self, mock_auth, mock_session):
+        """POST body for ClientContact update with occupation contains exactly {"occupation": "CTO"}.
+
+        Verifies that the 'occupation' field is passed through cleanly and that no
+        other keys (including 'title') are injected alongside it.
+        """
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+
+        captured = {}
+
+        def capture_post(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"changedEntityId": 1, "changeType": "UPDATE"})
+
+        contact_record = {"id": 1, "occupation": "CTO"}
+
+        with respx.mock:
+            respx.post(f"{mock_session.rest_url}/entity/ClientContact/1").mock(
+                side_effect=capture_post
+            )
+            respx.get(f"{mock_session.rest_url}/entity/ClientContact/1").mock(
+                return_value=httpx.Response(200, json={"data": contact_record})
+            )
+
+            client = BullhornClient(mock_auth)
+            client.update("ClientContact", 1, {"occupation": "CTO"})
+
+        assert "body" in captured, "POST was not called — route did not match"
+        assert captured["body"] == {"occupation": "CTO"}, (
+            f"POST body contained unexpected keys: {captured['body']}"
+        )
+
+    def test_sprint12_e2e_update_no_title_injection(self, mock_auth, mock_session):
+        """E2E: update_record("ClientContact", 1, {"firstName": "Aleksandr"}) sends only that field.
+
+        Exercises the full stack: server.update_record() → metadata.resolve_fields()
+        → client.update() → HTTP POST. Captures the raw POST body and asserts it is
+        exactly {"firstName": "Aleksandr"} with no injected keys.
+        """
+        import httpx
+        import respx
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        from bullhorn_mcp.client import BullhornClient
+
+        captured = {}
+
+        def capture_post(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"changedEntityId": 1, "changeType": "UPDATE"})
+
+        contact_record = {"id": 1, "firstName": "Aleksandr"}
+
+        # Mock metadata: resolve_fields passes through unchanged (no label remapping needed)
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        real_client = BullhornClient(mock_auth)
+
+        with respx.mock:
+            respx.post(f"{mock_session.rest_url}/entity/ClientContact/1").mock(
+                side_effect=capture_post
+            )
+            respx.get(f"{mock_session.rest_url}/entity/ClientContact/1").mock(
+                return_value=httpx.Response(200, json={"data": contact_record})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta):
+                result = server.update_record("ClientContact", 1, {"firstName": "Aleksandr"})
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 1
+
+        assert "body" in captured, "POST was not called — route did not match"
+        assert captured["body"] == {"firstName": "Aleksandr"}, (
+            f"POST body contained unexpected keys: {captured['body']}"
+        )
