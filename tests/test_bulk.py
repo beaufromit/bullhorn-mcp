@@ -333,6 +333,65 @@ def test_process_contacts_fails_on_owner_not_found(importer):
 
 
 # ---------------------------------------------------------------------------
+# T10.2 — BullhornAPIError from resolve_owner handled gracefully (CR3)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_process_contact_owner_api_error_is_caught(importer):
+    """CR3: BullhornAPIError raised by resolve_owner must be caught and recorded as 'failed'.
+
+    Previously only ValueError was caught; a BullhornAPIError (e.g. from a bad
+    CorporateUser query field) would propagate up and abort the entire bulk import
+    rather than marking just that contact as failed.
+    """
+    respx.get(f"{BASE_URL}/query/CorporateUser").mock(
+        return_value=httpx.Response(400, json={"errorMessage": "Invalid field: department"})
+    )
+
+    company_id_map = {"Acme": 42}
+    detail, halted = importer._process_single_contact(
+        {
+            "firstName": "Jane",
+            "lastName": "Doe",
+            "company_name": "Acme",
+            "owner": "Beau Warren",
+        },
+        company_id_map,
+    )
+
+    assert halted is False
+    assert detail["status"] == "failed"
+    assert detail["company_id"] == 42
+
+
+@respx.mock
+def test_process_contact_owner_api_error_counts_toward_halt(importer):
+    """CR3: consecutive BullhornAPIErrors from resolve_owner accumulate toward the halt threshold.
+
+    Three consecutive owner-resolution failures (API errors) should trigger halt,
+    consistent with how other consecutive BullhornAPIErrors are handled in the importer.
+    """
+    respx.get(f"{BASE_URL}/query/CorporateUser").mock(
+        return_value=httpx.Response(400, json={"errorMessage": "Invalid field: department"})
+    )
+
+    company_id_map = {"Acme": 42}
+    contact = {"firstName": "Jane", "lastName": "Doe", "company_name": "Acme", "owner": "Beau Warren"}
+
+    detail1, halted1 = importer._process_single_contact(contact, company_id_map)
+    detail2, halted2 = importer._process_single_contact(contact, company_id_map)
+    detail3, halted3 = importer._process_single_contact(contact, company_id_map)
+
+    assert detail1["status"] == "failed"
+    assert halted1 is False
+    assert detail2["status"] == "failed"
+    assert halted2 is False
+    assert detail3["status"] == "failed"
+    assert halted3 is True
+
+
+# ---------------------------------------------------------------------------
 # T7.4 — Summary generation
 # ---------------------------------------------------------------------------
 

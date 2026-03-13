@@ -191,6 +191,17 @@ class BulkImporter:
                     },
                     False,
                 )
+            except BullhornAPIError as e:
+                self._consecutive_errors += 1
+                return (
+                    {
+                        "input_name": input_name,
+                        "status": "failed",
+                        "error": str(e),
+                        "company_id": company_id_value,
+                    },
+                    self._consecutive_errors >= 3,
+                )
 
             if isinstance(owner_result, list):
                 # Ambiguous owner — flag for review, do not create

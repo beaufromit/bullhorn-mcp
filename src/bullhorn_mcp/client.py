@@ -222,7 +222,7 @@ class BullhornClient:
         results = self.query(
             entity="CorporateUser",
             where=f"name='{owner}'",
-            fields="id,firstName,lastName,email,department",
+            fields="id,firstName,lastName,email",
         )
 
         if len(results) == 0:

@@ -522,6 +522,48 @@ class TestResolveOwner:
         with pytest.raises(ValueError, match="No CorporateUser found matching"):
             client.resolve_owner("Nobody Here")
 
+    @respx.mock
+    def test_resolve_owner_query_does_not_include_department(self, mock_auth, mock_session):
+        """CR3: resolve_owner must not include 'department' in the CorporateUser fields query.
+
+        'department' is not a valid queryable CorporateUser field in some Bullhorn instances.
+        Including it caused BullhornAPIError, preventing name resolution entirely.
+        """
+        route = respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": 42, "firstName": "Beau", "lastName": "Warren", "email": "beau@firm.com"}]},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        client.resolve_owner("Beau Warren")
+
+        request_url = str(route.calls[0].request.url)
+        assert "department" not in request_url
+
+    @respx.mock
+    def test_resolve_owner_single_match_returns_id_only(self, mock_auth, mock_session):
+        """CR3: resolve_owner returns only {"id": int} for a single match — no other CorporateUser fields.
+
+        Ensures that even if the API returns extra user fields (email, firstName, etc.),
+        none of them leak into the returned dict and subsequently into the ClientContact payload.
+        """
+        respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": 42, "firstName": "Beau", "lastName": "Warren", "email": "beau@firm.com"}]},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.resolve_owner("Beau Warren")
+
+        assert result == {"id": 42}
+        assert "firstName" not in result
+        assert "lastName" not in result
+        assert "email" not in result
+
 
 class TestEdgeCases:
     """Tests for edge cases and error scenarios."""

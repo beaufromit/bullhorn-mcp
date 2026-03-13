@@ -1180,3 +1180,63 @@ class TestSprint9E2E:
             "clientCorporation": {"id": 1},
             "owner": {"id": 99},
         }
+
+
+class TestSprint10E2E:
+    """End-to-end tests for Sprint 10 (CR3: owner name resolution + no CorporateUser data leak)."""
+
+    def test_sprint10_e2e_create_contact_owner_name_no_leak(self, mock_client):
+        """Owner name string resolves to {"id": int}; no CorporateUser fields leak into payload.
+
+        This is the primary regression guard for CR3. Verifies:
+        1. resolve_owner is called with the name string (not bypassed).
+        2. The ClientContact PUT payload contains owner: {"id": 42} — not a full CorporateUser record.
+        3. No CorporateUser-sourced fields (department, email, firstName from CorporateUser) appear in
+           the create payload.
+        """
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        # Simulate successful owner name resolution: "Beau Warren" → {"id": 42}
+        mock_client.resolve_owner.return_value = {"id": 42}
+        mock_client.create.return_value = {
+            "changedEntityId": 54321,
+            "changeType": "INSERT",
+            "data": {
+                "id": 54321,
+                "firstName": "Jane",
+                "lastName": "Doe",
+                "clientCorporation": {"id": 1},
+                "owner": {"id": 42},
+            },
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            result = server.create_contact({
+                "firstName": "Jane",
+                "lastName": "Doe",
+                "clientCorporation": {"id": 1},
+                "owner": "Beau Warren",
+            })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 54321
+
+        # resolve_owner must have been called with the name string
+        mock_client.resolve_owner.assert_called_once_with("Beau Warren")
+
+        # The ClientContact PUT payload must have owner resolved to {"id": 42}
+        create_fields = mock_client.create.call_args[0][1]
+        assert create_fields["owner"] == {"id": 42}
+
+        # No CorporateUser data must appear in the payload
+        assert "department" not in create_fields
+        assert "email" not in create_fields
+        # firstName/lastName here belong to the contact, not the CorporateUser —
+        # verify they match the contact's values, not a CorporateUser bleed-through
+        assert create_fields["firstName"] == "Jane"
+        assert create_fields["lastName"] == "Doe"

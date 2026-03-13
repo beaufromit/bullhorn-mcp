@@ -21,6 +21,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 7 | **COMPLETE** | Bulk Import — 177 tests passing, tagged v0.0.7 |
 | Sprint 8 | **COMPLETE** | CR1: Fix title/occupation field mapping bug — 182 tests passing, tagged v0.0.8 |
 | Sprint 9 | **COMPLETE** | CR2: Audit and fix auto-injected fields — 190 tests passing, tagged v0.0.9 |
+| Sprint 10 | **COMPLETE** | CR3: Fix broken owner name resolution and department field leak — 195 tests passing, tagged v0.0.10 |
 
 ---
 
@@ -40,19 +41,15 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 ### Existing modules extended
 - `src/bullhorn_mcp/server.py` — Add `bulk_import` MCP tool (Sprint 7)
 
-### Existing test files
-- `tests/test_auth.py` — 12 tests (auth flow, regional servers)
+### Test files
+- `tests/test_auth.py` — 13 tests (auth flow, regional servers)
 - `tests/test_config.py` — 6 tests
-- `tests/test_client.py` — 35 tests (search, query, get, pagination, create, resolve_owner, edge cases)
-- `tests/test_metadata.py` — 18 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, e2e)
+- `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
+- `tests/test_metadata.py` — 21 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 74 tests (all 16 tools + server setup + E2E tests including Sprint 8)
-- `tests/test_bulk.py` — 12 tests (company processing, contact processing, summary, E2E)
-- **Total: 190 tests, all passing**
-
-### Existing test files to be extended
-- `tests/test_client.py` — `update()`, `add_note()` methods (Sprint 6)
-- `tests/test_server.py` — New server tools (Sprints 5, 6, 7)
+- `tests/test_server.py` — 71 tests (all 16 tools + server setup + E2E tests Sprints 1–9)
+- `tests/test_bulk.py` — 14 tests (company processing, contact processing, summary, E2E)
+- **Total: 195 tests, all passing**
 
 ---
 
@@ -521,6 +518,84 @@ The CR2 root cause may be that `metadata.resolve_fields()` is resolving a caller
 
 ---
 
+## Sprint 10: CR3 — Fix Broken Owner Name Resolution and Department Field Leak
+
+**Tag:** v0.0.10
+**Change request:** CR3.md
+**User stories affected:** US-2, US-3, US-4, US-5, US-9, US-10, US-11
+
+**Goal:** Fix `resolve_owner()` so that providing a consultant name (e.g. "Beau Warren") reliably resolves to a CorporateUser ID. Ensure no CorporateUser data leaks into the ClientContact creation payload. Fix `bulk.py` to handle `BullhornAPIError` from owner resolution gracefully (per NFR-3).
+
+**Dependency:** All previous sprints complete.
+
+**What was delivered:** Removed `department` from the CorporateUser query fields in `resolve_owner()` (`client.py`) — changed `fields="id,firstName,lastName,email,department"` to `fields="id,firstName,lastName,email"`. This prevents `BullhornAPIError` on Bullhorn instances where `department` is not a valid queryable CorporateUser field, restoring owner name resolution. Extended `_process_single_contact()` in `bulk.py` to catch `BullhornAPIError` from `resolve_owner` (previously only `ValueError` was caught), marking the contact as `"failed"` and counting toward the consecutive-error halt threshold rather than aborting the entire batch. Added 5 new tests: `test_resolve_owner_query_does_not_include_department`, `test_resolve_owner_single_match_returns_id_only` (in `test_client.py`); `test_process_contact_owner_api_error_is_caught`, `test_process_contact_owner_api_error_counts_toward_halt` (in `test_bulk.py`); `test_sprint10_e2e_create_contact_owner_name_no_leak` (in `test_server.py`). 195 tests passing.
+
+---
+
+### Root Cause Analysis
+
+**Issue 1 — Owner name not resolved:**
+`resolve_owner()` in `client.py` queries CorporateUser with `fields="id,firstName,lastName,email,department"`. In some Bullhorn instances, `department` is not a valid queryable field on CorporateUser. When this is the case, the Bullhorn API returns a non-200 response, `_request()` raises `BullhornAPIError`, and `resolve_owner()` propagates it upward without catching it. In `create_contact` the error is caught and returned as `"ERROR: ..."` — the contact is never created. In `bulk.py`, `_process_single_contact` only catches `ValueError` from `resolve_owner`, so a `BullhornAPIError` propagates all the way to `bulk_import()` and aborts the entire batch rather than marking just that contact as failed.
+
+**Issue 2 — `department` field in ClientContact payload:**
+`resolve_owner()` correctly returns `{"id": results[0]["id"]}` for a single match and only the `owner` key is updated in `contact_fields`. The current code does not merge the full CorporateUser record into the payload. However, if `department` is a valid CorporateUser field in this Bullhorn instance and is present in query results, the risk of data leakage is inherent in including it in the query at all. Removing `department` from the query eliminates the possibility of it appearing anywhere in the resolution path. For the disambiguation (multiple-match) case, `email` alone is sufficient for disambiguation — `department` is not needed.
+
+---
+
+### Tasks
+
+#### T10.1 — Remove `department` from `resolve_owner` CorporateUser query fields
+**File:** `src/bullhorn_mcp/client.py`
+
+Change the `fields` argument in the `resolve_owner` CorporateUser query from `"id,firstName,lastName,email,department"` to `"id,firstName,lastName,email"`.
+
+**Rationale:** `department` is not reliably present as a queryable CorporateUser field across all Bullhorn instances. Removing it prevents query failures and eliminates any possibility of `department` data entering the resolution path. `email` is sufficient for disambiguation when multiple users match the same name.
+
+- **Unit test:** `tests/test_client.py::test_resolve_owner_query_does_not_include_department` — mock the CorporateUser query endpoint; after calling `resolve_owner("Beau Warren")`, assert the `fields` query parameter sent to Bullhorn does not include `"department"`.
+- **Unit test:** `tests/test_client.py::test_resolve_owner_single_match_returns_id_only` — mock CorporateUser query returning one user with multiple fields (id, firstName, lastName, email); assert `resolve_owner` returns exactly `{"id": <user_id>}` and nothing else.
+
+#### T10.2 — Handle `BullhornAPIError` from `resolve_owner` in `bulk.py`
+**File:** `src/bullhorn_mcp/bulk.py`
+
+In `_process_single_contact`, extend the try/except around `client.resolve_owner()` to also catch `BullhornAPIError`. On `BullhornAPIError`, increment `_consecutive_errors`, return status `"failed"` with the error message, and check if `_consecutive_errors >= 3` to determine `halted`. This is consistent with how other `BullhornAPIError` cases are handled in the bulk importer, and satisfies NFR-3 (resilience to individual record failures).
+
+Current code:
+```python
+try:
+    owner_result = self.client.resolve_owner(owner_raw)
+except ValueError as e:
+    return (
+        {"input_name": input_name, "status": "failed", "error": str(e), "company_id": company_id_value},
+        False,
+    )
+```
+
+Required change: also catch `BullhornAPIError` from `resolve_owner`, increment `_consecutive_errors`, and return `({"status": "failed", ...}, self._consecutive_errors >= 3)`.
+
+- **Unit test:** `tests/test_bulk.py::test_process_contact_owner_api_error_is_caught` — mock `resolve_owner` to raise `BullhornAPIError`; assert `_process_single_contact` returns `status="failed"` and does not raise.
+- **Unit test:** `tests/test_bulk.py::test_process_contact_owner_api_error_counts_toward_halt` — mock `resolve_owner` to raise `BullhornAPIError` three consecutive times; assert third call returns `halted=True`.
+
+#### T10.3 — Add create_contact E2E test confirming no CorporateUser data in payload
+**File:** `tests/test_server.py`
+
+Add a test that calls `create_contact({"firstName": "Jane", "lastName": "Doe", "clientCorporation": {"id": 1}, "owner": "Beau Warren"})` with:
+- A mocked CorporateUser query returning one user: `{"id": 42, "firstName": "Beau", "lastName": "Warren", "email": "beau@example.com"}` (no `department` field).
+- A mocked ClientContact PUT endpoint capturing the JSON body.
+- A mocked ClientContact GET for the created record.
+
+Assert:
+1. The ClientContact PUT body contains `"owner": {"id": 42}` — not the full CorporateUser record.
+2. The PUT body does not contain `"department"`, `"firstName"` (from CorporateUser), `"lastName"` (from CorporateUser), or `"email"` (from CorporateUser).
+3. The response contains `changedEntityId`.
+
+- **Unit test:** `tests/test_server.py::test_sprint10_e2e_create_contact_owner_name_no_leak` — as described above.
+
+### Sprint 10 End-to-End Tests
+
+- `tests/test_server.py::test_sprint10_e2e_create_contact_owner_name_no_leak` — described in T10.3 above. Verifies the complete resolution path: name string → CorporateUser query (without `department`) → `{"id": int}` → ClientContact create payload with no CorporateUser data leakage.
+
+---
+
 ## Full Regression Test Suite (All Sprints Complete)
 
 After all sprints are implemented, run the complete test suite:
@@ -529,7 +604,7 @@ After all sprints are implemented, run the complete test suite:
 .venv/bin/pytest
 ```
 
-Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-9.
+Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-10.
 
 Key regression checks:
 - `tests/test_server.py` — all existing `list_jobs`, `list_candidates`, `get_job`, `get_candidate`, `search_entities`, `query_entities` tests pass.
