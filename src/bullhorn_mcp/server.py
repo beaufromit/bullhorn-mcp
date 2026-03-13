@@ -395,7 +395,7 @@ def create_company(fields: dict) -> str:
 
 
 @mcp.tool()
-def create_contact(fields: dict) -> str:
+def create_contact(fields: dict, force: bool = False) -> str:
     """Create a new ClientContact record in Bullhorn CRM, linked to a company.
 
     Args:
@@ -410,16 +410,21 @@ def create_contact(fields: dict) -> str:
                     "clientCorporation": {"id": 98765},
                     "owner": "Maryrose Lyons"
                 }
+        force: If True, skip duplicate detection and create regardless. Default False.
 
     Returns:
         JSON object with changedEntityId, changeType, and full data of the created record.
         If owner resolves to multiple users, returns disambiguation JSON instead of creating.
+        If a duplicate contact is found, returns duplicate_found JSON instead of creating
+        (unless force=True).
 
     Examples:
         - create_contact({"firstName": "Jane", "lastName": "Doe", "name": "Jane Doe",
                           "clientCorporation": {"id": 98765}, "owner": {"id": 12345}})
         - create_contact({"firstName": "John", "lastName": "Smith",
                           "clientCorporation": {"id": 1}, "owner": "Maryrose Lyons"})
+        - create_contact({"firstName": "John", "lastName": "Smith",
+                          "clientCorporation": {"id": 1}, "owner": {"id": 99}}, force=True)
     """
     try:
         client = get_client()
@@ -444,6 +449,47 @@ def create_contact(fields: dict) -> str:
 
         resolved = get_metadata().resolve_fields("ClientContact", contact_fields)
         resolved, warnings = _strip_contact_title(resolved, "ClientContact")
+
+        if not force:
+            corp_id = resolved.get("clientCorporation", {}).get("id")
+            first_name = resolved.get("firstName", "")
+            last_name = resolved.get("lastName", "")
+
+            if corp_id and (first_name or last_name):
+                try:
+                    existing = client.search(
+                        "ClientContact",
+                        query=f"clientCorporation.id:{corp_id}",
+                        fields="id,firstName,lastName,email,phone,clientCorporation",
+                        count=100,
+                    )
+                    candidates = existing
+                except (AuthenticationError, BullhornAPIError):
+                    candidates = []  # dedup search failure is non-fatal; proceed with create
+
+                best_score = 0.0
+                best_match = None
+                for candidate in candidates:
+                    score = score_contact_match(first_name, last_name, candidate)
+                    if score > best_score:
+                        best_score = score
+                        best_match = candidate
+
+                if best_score >= 0.50 and best_match is not None:
+                    category = categorize_score(best_score)
+                    return format_response({
+                        "duplicate_found": True,
+                        "match": {
+                            "confidence": round(best_score, 4),
+                            "category": category,
+                            "record": best_match,
+                        },
+                        "message": (
+                            "A contact matching this name already exists at this company. "
+                            "Use update_record to modify the existing record, or set force=True to create regardless."
+                        ),
+                    })
+
         result = client.create("ClientContact", resolved)
         response = format_response(result)
         if warnings:

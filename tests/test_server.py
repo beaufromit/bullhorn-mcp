@@ -1589,6 +1589,10 @@ class TestSprint13TitleStripping:
             respx.get(f"{mock_session.rest_url}/entity/ClientContact/9999").mock(
                 return_value=httpx.Response(200, json={"data": contact_record})
             )
+            # Duplicate check search — return empty so creation proceeds
+            respx.get(f"{mock_session.rest_url}/search/ClientContact").mock(
+                return_value=httpx.Response(200, json={"data": []})
+            )
             # resolve_owner: owner is {"id": 42} — BullhornClient.resolve_owner passes it through
             with patch.object(server, "get_client", return_value=real_client), \
                  patch.object(server, "get_metadata", return_value=meta):
@@ -1606,3 +1610,239 @@ class TestSprint13TitleStripping:
         )
         assert "warnings" in data
         assert any("title" in w for w in data["warnings"])
+
+
+class TestSprint14DuplicateCheck:
+    """Tests for Sprint 14: duplicate detection in create_contact."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_create_contact_blocks_on_exact_duplicate(self, mock_client, mock_metadata):
+        """create_contact returns duplicate_found when an exact name match exists at the same company."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        # search returns a contact with the same name
+        mock_client.search.return_value = [
+            {"id": 500, "firstName": "John", "lastName": "Smith",
+             "email": "john@acme.com", "phone": None, "clientCorporation": {"id": 1}},
+        ]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "John", "lastName": "Smith",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert data["duplicate_found"] is True
+        assert data["match"]["category"] == "exact"
+        assert data["match"]["record"]["id"] == 500
+        assert "force=True" in data["message"]
+        mock_client.create.assert_not_called()
+
+    def test_create_contact_blocks_on_near_duplicate(self, mock_client, mock_metadata):
+        """create_contact returns duplicate_found for a near-match name at the same company."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        # "Jon" vs "John" — should score above 0.50
+        mock_client.search.return_value = [
+            {"id": 501, "firstName": "Jon", "lastName": "Smith",
+             "email": None, "phone": None, "clientCorporation": {"id": 1}},
+        ]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "John", "lastName": "Smith",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert data["duplicate_found"] is True
+        assert data["match"]["record"]["id"] == 501
+        assert data["match"]["confidence"] >= 0.50
+        mock_client.create.assert_not_called()
+
+    def test_create_contact_proceeds_when_no_duplicate(self, mock_client, mock_metadata):
+        """create_contact calls create when no duplicate is found."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        # search returns an unrelated contact — low score, should not block
+        mock_client.search.return_value = [
+            {"id": 502, "firstName": "Alice", "lastName": "Brown",
+             "email": None, "phone": None, "clientCorporation": {"id": 1}},
+        ]
+        mock_client.create.return_value = {
+            "changedEntityId": 999, "changeType": "INSERT",
+            "data": {"id": 999, "firstName": "John", "lastName": "Smith"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "John", "lastName": "Smith",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 999
+        mock_client.create.assert_called_once()
+
+    def test_create_contact_force_bypasses_duplicate_check(self, mock_client, mock_metadata):
+        """create_contact with force=True skips the duplicate search entirely."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.return_value = {
+            "changedEntityId": 888, "changeType": "INSERT",
+            "data": {"id": 888, "firstName": "John", "lastName": "Smith"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact(
+                {"firstName": "John", "lastName": "Smith",
+                 "clientCorporation": {"id": 1}, "owner": {"id": 99}},
+                force=True,
+            )
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 888
+        # search must NOT have been called — force bypasses the dedup check
+        mock_client.search.assert_not_called()
+        mock_client.create.assert_called_once()
+
+    def test_create_contact_dedup_search_failure_is_nonfatal(self, mock_client, mock_metadata):
+        """A search failure during duplicate check is non-fatal; creation proceeds."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.search.side_effect = BullhornAPIError("search unavailable")
+        mock_client.create.return_value = {
+            "changedEntityId": 777, "changeType": "INSERT",
+            "data": {"id": 777, "firstName": "John", "lastName": "Smith"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "John", "lastName": "Smith",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 777
+        mock_client.create.assert_called_once()
+
+    def test_sprint14_e2e_create_contact_duplicate_blocked(self, mock_session):
+        """E2E: create_contact blocks creation when a duplicate contact exists at the company.
+
+        Mocks: CorporateUser query (owner by name) + ClientContact search returning existing
+        contact with same name. Asserts duplicate_found is returned, no PUT call made.
+        """
+        import httpx
+        import respx
+        from unittest.mock import Mock, PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        from bullhorn_mcp.metadata import BullhornMetadata
+        from bullhorn_mcp.client import BullhornClient
+
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        real_client = BullhornClient(auth)
+
+        existing_contact = {
+            "id": 170841, "firstName": "Conor", "lastName": "Warren",
+            "email": "kid@warrenhouse.com", "phone": None,
+            "clientCorporation": {"id": 10666},
+        }
+
+        with respx.mock:
+            # Owner resolution: CorporateUser query for "Beau Warren"
+            respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+                return_value=httpx.Response(200, json={
+                    "data": [{"id": 42, "firstName": "Beau", "lastName": "Warren",
+                              "email": "beau@firm.com"}]
+                })
+            )
+            # Duplicate check: ClientContact search at company 10666
+            respx.get(f"{mock_session.rest_url}/search/ClientContact").mock(
+                return_value=httpx.Response(200, json={"data": [existing_contact]})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta):
+                result = server.create_contact({
+                    "firstName": "Conor", "lastName": "Warren",
+                    "clientCorporation": {"id": 10666},
+                    "owner": "Beau Warren",
+                })
+
+        data = json.loads(result)
+        assert data["duplicate_found"] is True
+        assert data["match"]["record"]["id"] == 170841
+        assert "force=True" in data["message"]
+
+    def test_sprint14_e2e_create_contact_force_creates_despite_duplicate(self, mock_session):
+        """E2E: create_contact with force=True creates the record even when a duplicate exists.
+
+        Mocks: CorporateUser query (owner), ClientContact search (returns existing),
+        ClientContact PUT + GET. Asserts PUT is called and changedEntityId in response.
+        """
+        import httpx
+        import respx
+        from unittest.mock import Mock, PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        from bullhorn_mcp.metadata import BullhornMetadata
+        from bullhorn_mcp.client import BullhornClient
+
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        real_client = BullhornClient(auth)
+
+        existing_contact = {
+            "id": 170841, "firstName": "Conor", "lastName": "Warren",
+            "email": "kid@warrenhouse.com", "phone": None,
+            "clientCorporation": {"id": 10666},
+        }
+        new_contact = {
+            "id": 170844, "firstName": "Conor", "lastName": "Warren",
+            "clientCorporation": {"id": 10666}, "owner": {"id": 42},
+        }
+
+        with respx.mock:
+            # Owner resolution
+            respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+                return_value=httpx.Response(200, json={
+                    "data": [{"id": 42, "firstName": "Beau", "lastName": "Warren",
+                              "email": "beau@firm.com"}]
+                })
+            )
+            # PUT creates new contact
+            respx.put(f"{mock_session.rest_url}/entity/ClientContact").mock(
+                return_value=httpx.Response(201, json={"changedEntityId": 170844, "changeType": "INSERT"})
+            )
+            # GET fetches newly created record
+            respx.get(f"{mock_session.rest_url}/entity/ClientContact/170844").mock(
+                return_value=httpx.Response(200, json={"data": new_contact})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta):
+                result = server.create_contact(
+                    {"firstName": "Conor", "lastName": "Warren",
+                     "clientCorporation": {"id": 10666},
+                     "owner": "Beau Warren"},
+                    force=True,
+                )
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 170844

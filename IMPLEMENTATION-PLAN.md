@@ -25,7 +25,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 11 | **COMPLETE** | CR4: Fix incorrect title field in docstrings — 198 tests passing, tagged v0.0.11 |
 | Sprint 12 | **COMPLETE** | CR6: Investigate and fix title field injection in update_record — 201 tests passing, tagged v0.0.12 |
 | Sprint 13 | **COMPLETE** | CR7: Strip title from ClientContact write payloads with warning — 207 tests passing, tagged v0.0.13 |
-| Sprint 14 | **PLANNED** | CR5: Add duplicate check to create_contact before creation |
+| Sprint 14 | **COMPLETE** | CR5: Add duplicate check to create_contact before creation — 214 tests passing, tagged v0.0.14 |
 
 ---
 
@@ -51,9 +51,9 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
 - `tests/test_metadata.py` — 21 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 80 tests (all 16 tools + server setup + E2E tests Sprints 1–13)
+- `tests/test_server.py` — 90 tests (all 16 tools + server setup + E2E tests Sprints 1–14)
 - `tests/test_bulk.py` — 14 tests (company processing, contact processing, summary, E2E)
-- **Total: 207 tests, all passing**
+- **Total: 214 tests, all passing**
 
 ---
 
@@ -823,6 +823,16 @@ If `clientCorporation` is absent from `fields` (already validated earlier in `cr
 - `tests/test_server.py::test_sprint14_e2e_create_contact_duplicate_blocked` — mock: CorporateUser query (owner by name), ClientContact search (returns existing contact with same name/company), no PUT mock; call `create_contact({"firstName": "Conor", "lastName": "Warren", "clientCorporation": {"id": 10666}, "owner": "Beau Warren"})`; assert response has `duplicate_found: true`, `match.record.id` is the existing contact ID, no creation occurred.
 
 - `tests/test_server.py::test_sprint14_e2e_create_contact_force_creates_despite_duplicate` — mock: CorporateUser query, ClientContact search (returns existing), ClientContact PUT, ClientContact GET; call `create_contact({..., "force": True})`; assert PUT is called and `changedEntityId` is in response.
+
+### What was delivered
+
+- `create_contact` in `src/bullhorn_mcp/server.py` gains a `force: bool = False` parameter.
+- Before calling `client.create()`, the tool searches for existing ClientContact records at the same company and scores each with `score_contact_match`. If the best score is >= 0.50, it returns a `duplicate_found` response (with confidence, category, and the matching record) instead of creating. `force=True` bypasses this entirely.
+- A search failure during the duplicate check is non-fatal — creation proceeds as normal.
+- `bulk_import` is unaffected (it calls `client.create()` directly with its own dedup logic).
+- Sprint 13 E2E test updated to mock the new search call (returning empty results) so it continues to pass.
+- 7 new tests added in `TestSprint14DuplicateCheck`: exact duplicate blocked, near-duplicate blocked, no duplicate proceeds, force bypasses check, search failure is non-fatal, E2E duplicate blocked, E2E force creates despite duplicate.
+- Total: 214 tests passing, tagged v0.0.14.
 
 ---
 
