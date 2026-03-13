@@ -1,6 +1,7 @@
 """Bullhorn CRM MCP Server - Query and manage CRM data via AI assistants."""
 
 import json
+import logging
 from mcp.server.fastmcp import FastMCP
 
 from .config import BullhornConfig
@@ -9,6 +10,21 @@ from .client import BullhornClient, BullhornAPIError
 from .metadata import BullhornMetadata
 from .fuzzy import score_company_match, categorize_score, score_contact_match
 from .bulk import BulkImporter
+
+_logger = logging.getLogger(__name__)
+
+
+def _strip_contact_title(fields: dict, entity: str) -> tuple[dict, list[str]]:
+    """Strip the 'title' key from ClientContact write payloads and return a warnings list."""
+    warnings = []
+    if entity == "ClientContact" and "title" in fields:
+        fields = dict(fields)  # don't mutate input
+        del fields["title"]
+        msg = "Field 'title' was stripped from the ClientContact payload. Use 'occupation' for job title or 'namePrefix' for salutation."
+        _logger.warning(msg)
+        warnings.append(msg)
+    return fields, warnings
+
 
 # Initialize MCP server
 mcp = FastMCP(
@@ -427,8 +443,14 @@ def create_contact(fields: dict) -> str:
         contact_fields["owner"] = owner_result
 
         resolved = get_metadata().resolve_fields("ClientContact", contact_fields)
+        resolved, warnings = _strip_contact_title(resolved, "ClientContact")
         result = client.create("ClientContact", resolved)
-        return format_response(result)
+        response = format_response(result)
+        if warnings:
+            data = json.loads(response)
+            data["warnings"] = warnings
+            return json.dumps(data, indent=2)
+        return response
 
     except ValueError as e:
         return format_response({"error": "owner_not_found", "message": str(e)})
@@ -466,8 +488,14 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
                 "message": "Company reassignment is not supported. Changing a ClientContact's associated ClientCorporation is not allowed.",
             })
 
+        resolved, warnings = _strip_contact_title(resolved, entity)
         result = client.update(entity, entity_id, resolved)
-        return format_response(result)
+        response = format_response(result)
+        if warnings:
+            data = json.loads(response)
+            data["warnings"] = warnings
+            return json.dumps(data, indent=2)
+        return response
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"

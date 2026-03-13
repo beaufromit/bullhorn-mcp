@@ -24,7 +24,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 10 | **COMPLETE** | CR3: Fix broken owner name resolution and department field leak — 195 tests passing, tagged v0.0.10 |
 | Sprint 11 | **COMPLETE** | CR4: Fix incorrect title field in docstrings — 198 tests passing, tagged v0.0.11 |
 | Sprint 12 | **COMPLETE** | CR6: Investigate and fix title field injection in update_record — 201 tests passing, tagged v0.0.12 |
-| Sprint 13 | **PLANNED** | CR7: Strip title from ClientContact write payloads with warning |
+| Sprint 13 | **COMPLETE** | CR7: Strip title from ClientContact write payloads with warning — 207 tests passing, tagged v0.0.13 |
 | Sprint 14 | **PLANNED** | CR5: Add duplicate check to create_contact before creation |
 
 ---
@@ -51,9 +51,9 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
 - `tests/test_metadata.py` — 21 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 74 tests (all 16 tools + server setup + E2E tests Sprints 1–12)
+- `tests/test_server.py` — 80 tests (all 16 tools + server setup + E2E tests Sprints 1–13)
 - `tests/test_bulk.py` — 14 tests (company processing, contact processing, summary, E2E)
-- **Total: 201 tests, all passing**
+- **Total: 207 tests, all passing**
 
 ---
 
@@ -699,6 +699,8 @@ After completing T12.1–T12.2, fill in the "What was delivered" section for Spr
 **Goal:** After Sprint 12 removes the active injection, add defense-in-depth: if `title` ever reaches a ClientContact write payload (from a calling agent that misunderstands the field), strip it silently with a logged warning and a `warnings` array in the response. This prevents Bullhorn from rejecting the operation while communicating the issue to the caller.
 
 **Dependency:** Sprint 12 must be complete (removes the active injection; this sprint adds the guard).
+
+**What was delivered:** Added `_logger = logging.getLogger(__name__)` and `_strip_contact_title(fields, entity)` helper to `server.py`. The helper strips `"title"` from ClientContact write payloads, logs a `WARNING`, and returns a `(cleaned_fields, warnings_list)` tuple. Applied the helper in `create_contact` (after `resolve_fields`, before `client.create()`) and in `update_record` (after the company-reassignment guard, before `client.update()`). When warnings are present, the JSON response includes a `"warnings"` array. Non-ClientContact entities and read paths are unaffected. Confirmed `DEFAULT_FIELDS["ClientContact"]` still includes `"title"` for read operations (no change needed). Added `TestSprint13TitleStripping` in `test_server.py` with 6 tests (create with title, create without title, update with title, update for non-ClientContact, update with occupation, E2E). 207 tests passing.
 
 ---
 

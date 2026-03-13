@@ -1419,3 +1419,190 @@ class TestSprint12TitleInjectionRegression:
         assert captured["body"] == {"firstName": "Aleksandr"}, (
             f"POST body contained unexpected keys: {captured['body']}"
         )
+
+
+class TestSprint13TitleStripping:
+    """CR7: Defensive stripping of 'title' from ClientContact write payloads.
+
+    When a calling agent mistakenly includes 'title' in a ClientContact write
+    payload, server.py strips the field silently, logs a warning, and returns
+    a 'warnings' array in the response so the caller is informed.
+    """
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_create_contact_title_stripped_with_warning(self, mock_client, mock_metadata):
+        """create_contact strips 'title' from payload and returns warnings array."""
+        captured = {}
+
+        def capture_create(entity, fields):
+            captured["fields"] = dict(fields)
+            return {
+                "changedEntityId": 54321,
+                "changeType": "INSERT",
+                "data": {"id": 54321, "firstName": "Jane", "lastName": "Doe",
+                         "clientCorporation": {"id": 1}, "owner": {"id": 99}},
+            }
+
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.side_effect = capture_create
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+                "title": "CTO",
+            })
+
+        data = json.loads(result)
+        assert "title" not in captured["fields"], "title should have been stripped before create()"
+        assert "warnings" in data
+        assert len(data["warnings"]) == 1
+        assert "title" in data["warnings"][0]
+        assert "occupation" in data["warnings"][0]
+
+    def test_create_contact_no_warning_without_title(self, mock_client, mock_metadata):
+        """create_contact with no 'title' field returns no warnings key."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.return_value = {
+            "changedEntityId": 54321,
+            "changeType": "INSERT",
+            "data": {"id": 54321, "firstName": "Jane", "lastName": "Doe",
+                     "clientCorporation": {"id": 1}, "owner": {"id": 99}},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert "warnings" not in data
+
+    def test_update_record_title_stripped_with_warning(self, mock_client, mock_metadata):
+        """update_record strips 'title' from ClientContact payload and returns warnings."""
+        captured = {}
+
+        def capture_update(entity, entity_id, fields):
+            captured["fields"] = dict(fields)
+            return {
+                "changedEntityId": 1,
+                "changeType": "UPDATE",
+                "data": {"id": 1},
+            }
+
+        mock_client.update.side_effect = capture_update
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_record("ClientContact", 1, {"title": "VP"})
+
+        data = json.loads(result)
+        assert "title" not in captured["fields"], "title should have been stripped before update()"
+        assert "warnings" in data
+        assert len(data["warnings"]) == 1
+        assert "title" in data["warnings"][0]
+
+    def test_update_record_joborder_title_not_stripped(self, mock_client, mock_metadata):
+        """update_record does NOT strip 'title' from non-ClientContact entities."""
+        captured = {}
+
+        def capture_update(entity, entity_id, fields):
+            captured["fields"] = dict(fields)
+            return {
+                "changedEntityId": 1,
+                "changeType": "UPDATE",
+                "data": {"id": 1, "title": "Senior Engineer"},
+            }
+
+        mock_client.update.side_effect = capture_update
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_record("JobOrder", 1, {"title": "Senior Engineer"})
+
+        data = json.loads(result)
+        assert captured["fields"].get("title") == "Senior Engineer", "title must not be stripped for JobOrder"
+        assert "warnings" not in data
+
+    def test_update_record_occupation_no_warning(self, mock_client, mock_metadata):
+        """update_record with 'occupation' on ClientContact does not trigger warnings."""
+        mock_client.update.return_value = {
+            "changedEntityId": 1,
+            "changeType": "UPDATE",
+            "data": {"id": 1, "occupation": "VP"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_record("ClientContact", 1, {"occupation": "VP"})
+
+        data = json.loads(result)
+        assert "warnings" not in data
+
+    def test_sprint13_e2e_create_contact_title_stripped(self, mock_session):
+        """E2E: create_contact strips 'title' from payload sent to Bullhorn and warns caller.
+
+        Exercises the full stack: server.create_contact() → metadata.resolve_fields()
+        → client.create() → HTTP PUT. Captures the raw PUT body and asserts it lacks
+        'title', while the response contains changedEntityId and a warnings array.
+        """
+        import httpx
+        import respx
+        from unittest.mock import Mock, PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        from bullhorn_mcp.metadata import BullhornMetadata
+        from bullhorn_mcp.client import BullhornClient
+
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+
+        captured = {}
+
+        def capture_put(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(201, json={"changedEntityId": 9999, "changeType": "INSERT"})
+
+        contact_record = {
+            "id": 9999, "firstName": "Conor", "lastName": "Warren",
+            "clientCorporation": {"id": 1}, "owner": {"id": 42},
+        }
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        real_client = BullhornClient(auth)
+
+        with respx.mock:
+            respx.put(f"{mock_session.rest_url}/entity/ClientContact").mock(
+                side_effect=capture_put
+            )
+            respx.get(f"{mock_session.rest_url}/entity/ClientContact/9999").mock(
+                return_value=httpx.Response(200, json={"data": contact_record})
+            )
+            # resolve_owner: owner is {"id": 42} — BullhornClient.resolve_owner passes it through
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta):
+                result = server.create_contact({
+                    "firstName": "Conor", "lastName": "Warren",
+                    "clientCorporation": {"id": 1}, "owner": {"id": 42},
+                    "title": "CEO",
+                })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 9999
+        assert "body" in captured, "PUT was not called — route did not match"
+        assert "title" not in captured["body"], (
+            f"title was not stripped from PUT body: {captured['body']}"
+        )
+        assert "warnings" in data
+        assert any("title" in w for w in data["warnings"])
