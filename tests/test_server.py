@@ -1045,3 +1045,138 @@ class TestSprint8E2E:
         create_fields = mock_client.create.call_args[0][1]
         assert "occupation" in create_fields
         assert "title" not in create_fields
+
+
+class TestSprint9PayloadAudit:
+    """CR2: Verify create/update tools only send caller-specified fields to Bullhorn.
+
+    These tests capture the exact payload passed to client.create() / client.update()
+    and assert no extra keys were injected. They exist to prevent the class of bug
+    described in CR2, where fields the caller never supplied (e.g. 'department') were
+    being added to the API request body, causing Bullhorn validation failures.
+    """
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_create_contact_payload_only_contains_caller_fields(self, mock_client, mock_metadata):
+        """PUT body for create_contact contains exactly the keys the caller provided.
+
+        Only 'owner' is transformed (string → {"id": int}); no other fields are
+        added. This guards against auto-injection of defaults, parameter bleed-through,
+        or template population beyond the caller's input dict.
+        """
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.return_value = {
+            "changedEntityId": 1, "changeType": "INSERT",
+            "data": {"id": 1},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        create_fields = mock_client.create.call_args[0][1]
+        assert set(create_fields.keys()) == {"firstName", "lastName", "clientCorporation", "owner"}
+
+    def test_create_contact_owner_normalised_not_injected(self, mock_client, mock_metadata):
+        """When owner is a name string, only that key is transformed — nothing else added."""
+        mock_client.resolve_owner.return_value = {"id": 55}
+        mock_client.create.return_value = {
+            "changedEntityId": 1, "changeType": "INSERT",
+            "data": {"id": 1},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": "Maryrose Lyons",
+            })
+
+        create_fields = mock_client.create.call_args[0][1]
+        assert set(create_fields.keys()) == {"firstName", "lastName", "clientCorporation", "owner"}
+        assert create_fields["owner"] == {"id": 55}
+
+    def test_create_company_payload_only_contains_caller_fields(self, mock_client, mock_metadata):
+        """PUT body for create_company contains exactly the keys the caller provided."""
+        mock_client.create.return_value = {
+            "changedEntityId": 1, "changeType": "INSERT",
+            "data": {"id": 1, "name": "Acme", "status": "Prospect"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.create_company({"name": "Acme", "status": "Prospect"})
+
+        create_fields = mock_client.create.call_args[0][1]
+        assert set(create_fields.keys()) == {"name", "status"}
+
+    def test_update_record_payload_only_contains_caller_fields(self, mock_client, mock_metadata):
+        """POST body for update_record contains exactly the fields the caller specified."""
+        mock_client.update.return_value = {
+            "changedEntityId": 1, "changeType": "UPDATE",
+            "data": {"id": 1, "occupation": "CTO"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.update_record("ClientContact", 1, {"occupation": "CTO"})
+
+        # update(entity, entity_id, data) — data is the third positional arg
+        update_fields = mock_client.update.call_args[0][2]
+        assert set(update_fields.keys()) == {"occupation"}
+
+
+class TestSprint9E2E:
+    """End-to-end tests for Sprint 9 (CR2: no auto-injected fields audit)."""
+
+    def test_sprint9_e2e_minimal_create_contact_payload(self, mock_client):
+        """Minimal create_contact call produces an exact, injection-free PUT payload.
+
+        Verifies the full path: server tool → metadata (pass-through) → client.create().
+        The payload Bullhorn receives must contain exactly the four caller-supplied keys
+        and nothing else. This is the primary regression guard for CR2.
+        """
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.return_value = {
+            "changedEntityId": 54321,
+            "changeType": "INSERT",
+            "data": {
+                "id": 54321, "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            },
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 54321
+
+        # The PUT body must be exactly the four caller-supplied fields
+        create_fields = mock_client.create.call_args[0][1]
+        assert create_fields == {
+            "firstName": "Jane",
+            "lastName": "Doe",
+            "clientCorporation": {"id": 1},
+            "owner": {"id": 99},
+        }

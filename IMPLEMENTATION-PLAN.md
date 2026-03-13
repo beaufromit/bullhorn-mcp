@@ -20,6 +20,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 6 | **COMPLETE** | Update Records and Add Notes — 163 tests passing, tagged v0.0.6 |
 | Sprint 7 | **COMPLETE** | Bulk Import — 177 tests passing, tagged v0.0.7 |
 | Sprint 8 | **COMPLETE** | CR1: Fix title/occupation field mapping bug — 182 tests passing, tagged v0.0.8 |
+| Sprint 9 | **COMPLETE** | CR2: Audit and fix auto-injected fields — 190 tests passing, tagged v0.0.9 |
 
 ---
 
@@ -47,7 +48,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
 - `tests/test_server.py` — 74 tests (all 16 tools + server setup + E2E tests including Sprint 8)
 - `tests/test_bulk.py` — 12 tests (company processing, contact processing, summary, E2E)
-- **Total: 182 tests, all passing**
+- **Total: 190 tests, all passing**
 
 ### Existing test files to be extended
 - `tests/test_client.py` — `update()`, `add_note()` methods (Sprint 6)
@@ -424,6 +425,102 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 ---
 
+## Sprint 9: CR2 — Audit and Fix Auto-Injected Fields
+
+**Tag:** v0.0.9
+**Change request:** CR2.md
+**User stories affected:** US-1, US-2, US-9, US-12
+
+**Goal:** Audit `create_contact`, `create_company`, and `update_record` to confirm only caller-supplied fields reach the Bullhorn API. Remove any auto-injection found. Add payload-assertion tests that will catch this class of bug in future.
+
+**Dependency:** All previous sprints complete.
+
+**What was delivered:** Audit confirmed the current `fields: dict` pass-through pattern in `server.py`, `metadata.resolve_fields()`, and `client.create()`/`update()` is clean — no auto-injection exists in the code path. `DEFAULT_FIELDS` in `client.py` is used only by read operations (`search`, `query`, `get`) and does not affect write payloads. The only transformation in `create_contact` is normalising the `owner` string to `{"id": int}` (intentional). Added 8 new tests: `TestSprint9PayloadAudit` (4 tests asserting exact PUT/POST key sets for `create_contact`, `create_company`, `update_record`) and `TestSprint9E2E` (1 E2E test) in `test_server.py`; `TestSprint9FieldAudit` (3 tests covering `department` pass-through and no-key-injection guarantees for both entity types) in `test_metadata.py`. 190 tests passing.
+
+**Audit findings:**
+- `create_contact`: Only `owner` is transformed (string → `{"id": int}`). No other fields are added. Confirmed by `test_create_contact_payload_only_contains_caller_fields` and `test_create_contact_owner_normalised_not_injected`.
+- `create_company`: Pure pass-through after label resolution. Confirmed by `test_create_company_payload_only_contains_caller_fields`.
+- `update_record`: Pure pass-through after label resolution. Confirmed by `test_update_record_payload_only_contains_caller_fields`.
+- `DEFAULT_FIELDS["ClientContact"]` contains `title` (salutation) for read responses only; never applied to write payloads.
+- `department` field: No alias exists; passes through unchanged to Bullhorn which rejects it with a clear field error. This is correct behaviour — callers who mean `division` should use `division`. A `FIELD_ALIASES` entry was not added (no confirmed real-world evidence of systematic mislabelling).
+
+### Background
+
+CR2 reports that `create_contact` is sending fields the caller did not supply (e.g. `department`, which is not a valid ClientContact field — the correct field is `division`). CR1 resolved the `title`/`occupation` case; CR2 addresses the broader pattern.
+
+Preliminary code review (Sprint 9 planning) shows the current `fields: dict` pass-through pattern in `server.py` and `metadata.resolve_fields()` appear clean. However, `DEFAULT_FIELDS["ClientContact"]` in `client.py` includes `title` (correct for reads), and subtle injection could occur if labels in `resolve_fields()` map a caller-supplied key to an unexpected API field. The tasks below verify this with tests and fix any issues found.
+
+### Tasks
+
+#### T9.1 — Audit `create_contact` payload construction
+**Files:** `src/bullhorn_mcp/server.py`, `src/bullhorn_mcp/client.py`, `src/bullhorn_mcp/metadata.py`
+
+Trace the complete path from `create_contact(fields)` to the Bullhorn PUT body:
+1. `server.py`: validates `owner`/`clientCorporation` presence, normalises `owner` string → `{"id": int}`, calls `resolve_fields("ClientContact", contact_fields)`.
+2. `metadata.py`: `resolve_fields()` iterates caller keys only — no new keys added.
+3. `client.py`: `create()` sends `data` dict as JSON body unchanged.
+
+Document every field in the PUT body relative to what the caller provided. Expected: only `owner` is transformed (string → `{"id": int}`); no other fields are added or removed.
+
+If any injection is found (e.g. fields added from `DEFAULT_FIELDS`, from metadata iteration, or from tool parameter defaults), remove it so the PUT body equals exactly the caller-supplied fields after label resolution and `owner` normalisation.
+
+**Note on `name` field:** Bullhorn recommends sending `name` alongside `firstName`/`lastName` for ClientContact. The tool does not auto-populate `name = f"{firstName} {lastName}"` — callers must supply it if desired. This is intentional (CR2 requires no auto-injection); document this explicitly.
+
+- **Unit test:** `tests/test_server.py::test_create_contact_payload_only_contains_caller_fields` — call `create_contact({"firstName": "Jane", "lastName": "Doe", "clientCorporation": {"id": 1}, "owner": {"id": 99}})` with a mock that captures the PUT JSON body; assert body keys are exactly `{"firstName", "lastName", "clientCorporation", "owner"}` and nothing else.
+- **Unit test:** `tests/test_server.py::test_create_contact_owner_normalised_not_injected` — provide `owner: "Maryrose Lyons"` (name string); mock CorporateUser query returning single user; assert PUT body contains `owner: {"id": <resolved_id>}` and no extra keys.
+
+#### T9.2 — Audit `create_company` payload construction
+**Files:** `src/bullhorn_mcp/server.py`
+
+Trace `create_company(fields)` → `resolve_fields("ClientCorporation", fields)` → `client.create("ClientCorporation", resolved)`.
+
+Expected: resolved dict equals caller's input with label keys replaced by API names. No fields added.
+
+- **Unit test:** `tests/test_server.py::test_create_company_payload_only_contains_caller_fields` — call `create_company({"name": "Acme", "status": "Prospect"})` with a mock capturing the PUT body; assert body keys are exactly `{"name", "status"}`.
+
+#### T9.3 — Audit `update_record` payload construction
+**Files:** `src/bullhorn_mcp/server.py`
+
+Trace `update_record(entity, entity_id, fields)` → `resolve_fields(entity, fields)` → `client.update(entity, entity_id, resolved)`.
+
+Expected: resolved dict equals caller's input after label resolution. No fields added.
+
+- **Unit test:** `tests/test_server.py::test_update_record_payload_only_contains_caller_fields` — call `update_record("ClientContact", 1, {"occupation": "CTO"})` with a mock capturing the POST body; assert body is exactly `{"occupation": "CTO"}`.
+
+#### T9.4 — Verify `DEFAULT_FIELDS` does not affect write payloads
+**File:** `src/bullhorn_mcp/client.py`
+
+Confirm `DEFAULT_FIELDS` is referenced only in `search()`, `query()`, and `get()` (read path) — not in `create()` or `update()`. These latter two methods receive a `data: dict` argument and pass it directly to `_request()` as the JSON body without consulting `DEFAULT_FIELDS`.
+
+This is a documentation/verification task — no code change expected. If any read of `DEFAULT_FIELDS` is found in write paths, remove it.
+
+**Note:** `DEFAULT_FIELDS["ClientContact"]` includes `title` (salutation). This is correct for GET responses but must not appear in CREATE/UPDATE payloads unless the caller explicitly provides it. Tests T9.1–T9.3 will catch this if it occurs.
+
+#### T9.5 — Fix any auto-injected fields found
+**Files:** As applicable from T9.1–T9.4
+
+If any audit step reveals fields being added to the payload beyond what the caller provided:
+- Remove the injection.
+- Document what was found and how it was resolved in the sprint's "What was delivered" section (to be filled in after completion, following the pattern of Sprint 8).
+
+If no injection is found, document that conclusion explicitly.
+
+#### T9.6 — Validate field names sent to Bullhorn against entity schema
+**File:** `src/bullhorn_mcp/metadata.py`
+
+The CR2 root cause may be that `metadata.resolve_fields()` is resolving a caller-supplied label (e.g. "Department") to an invalid ClientContact API field. Verify:
+1. If a caller supplies `{"department": "Engineering"}`, `resolve_fields("ClientContact", ...)` checks if "department" is a known display label. If Bullhorn's metadata returns a field whose label is "Department" but whose API name is also not a valid ClientContact field (or maps to the wrong field), the label resolution could silently send a bad field name.
+2. The fix is: `resolve_fields()` already passes through unknown keys unchanged. If "department" does not match any label in ClientContact metadata, it passes through as `"department"` — and Bullhorn will reject it with a field validation error. This is the correct behaviour; the tool should not silently drop unknown fields.
+3. Add a `FIELD_ALIASES` entry for `ClientContact` mapping `"department"` → `"division"` if this is a known problematic alias (similar to `"job title"` → `"occupation"` in Sprint 8). Only add this alias if there is clear evidence from real usage that the mapping is needed — do not add it speculatively.
+
+- **Unit test:** `tests/test_metadata.py::test_resolve_fields_unknown_key_passes_through` — call `resolve_fields("ClientContact", {"department": "Engineering"})` with a mock metadata response that has no "department" label; assert key passes through as `"department"` unchanged.
+
+### Sprint 9 End-to-End Tests
+
+- `tests/test_server.py::test_sprint9_e2e_minimal_create_contact_payload` — mock owner resolution (by ID, no CorporateUser query), mock ClientContact PUT (capture body), mock GET retrieve; call `create_contact({"firstName": "Jane", "lastName": "Doe", "clientCorporation": {"id": 1}, "owner": {"id": 99}})`; assert PUT body contains exactly `{"firstName": "Jane", "lastName": "Doe", "clientCorporation": {"id": 1}, "owner": {"id": 99}}` and response has `changedEntityId`.
+
+---
+
 ## Full Regression Test Suite (All Sprints Complete)
 
 After all sprints are implemented, run the complete test suite:
@@ -432,7 +529,7 @@ After all sprints are implemented, run the complete test suite:
 .venv/bin/pytest
 ```
 
-Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-8.
+Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-9.
 
 Key regression checks:
 - `tests/test_server.py` — all existing `list_jobs`, `list_candidates`, `get_job`, `get_candidate`, `search_entities`, `query_entities` tests pass.

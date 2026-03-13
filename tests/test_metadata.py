@@ -174,6 +174,47 @@ class TestSprint8FieldAliases:
         assert result == {"job title": "some value"}
 
 
+class TestSprint9FieldAudit:
+    """CR2: Verify resolve_fields never injects keys beyond what the caller provides."""
+
+    def test_resolve_fields_department_passes_through_unchanged(self, metadata):
+        """'department' is not a valid ClientContact field — passes through as-is.
+
+        CR2 identified 'department' being sent to Bullhorn during contact creation,
+        causing API rejections. The correct ClientContact field for organisational
+        grouping is 'division'. This test confirms resolve_fields does not silently
+        map 'department' to anything — it passes through unchanged so Bullhorn
+        returns a clear error to the caller rather than silently doing the wrong thing.
+        If 'department' → 'division' becomes a confirmed real-world alias need, a
+        FIELD_ALIASES entry should be added at that point (not speculatively).
+        """
+        # SAMPLE_META_RESPONSE has no label "department", so it passes through as-is
+        result = metadata.resolve_fields("ClientContact", {"department": "Engineering"})
+        assert result == {"department": "Engineering"}
+
+    def test_resolve_fields_does_not_add_keys(self, metadata):
+        """resolve_fields output has exactly the same number of keys as input.
+
+        The function must never add keys that were not in the caller's input dict —
+        regardless of what Bullhorn's metadata contains.
+        """
+        input_fields = {"firstName": "Jane", "lastName": "Doe"}
+        result = metadata.resolve_fields("ClientContact", input_fields)
+        assert set(result.keys()) == {"firstName", "lastName"}
+
+    def test_resolve_fields_does_not_add_keys_for_corporation(self, mock_client):
+        """Same key-count guarantee holds for ClientCorporation."""
+        mock_client.get_meta.return_value = {"fields": [
+            {"name": "name", "label": "Name", "type": "STRING", "required": True},
+            {"name": "status", "label": "Status", "type": "STRING", "required": False},
+            {"name": "phone", "label": "Phone", "type": "STRING", "required": False},
+        ]}
+        meta = BullhornMetadata(mock_client)
+        input_fields = {"name": "Acme"}
+        result = meta.resolve_fields("ClientCorporation", input_fields)
+        assert set(result.keys()) == {"name"}
+
+
 class TestSprint2E2E:
     def test_sprint2_e2e_full_resolution_cycle(self, metadata):
         """Full round-trip: get fields, resolve label->api, resolve api->label."""
