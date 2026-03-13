@@ -994,3 +994,54 @@ class TestBulkImport:
         data = json.loads(result)
         assert data["halted"] is True
         assert data["summary"]["companies"]["failed"] == 3
+
+
+class TestSprint8E2E:
+    """End-to-end tests for Sprint 8 (CR1: title/occupation fix)."""
+
+    def test_sprint8_e2e_create_contact_occupation(self, mock_client):
+        """occupation field passes through correctly; 'title' is NOT injected.
+
+        This test guards against the CR1 regression where callers sending
+        'occupation' would have it silently passed through while 'title'
+        (salutation) could be injected. Verifies the PUT payload to Bullhorn
+        contains 'occupation' and does not contain a spurious 'title' key.
+        """
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        # Metadata mock: no label named "title" exists, so raw 'occupation'
+        # passes through; resolve_fields uses real FIELD_ALIASES logic via
+        # side_effect that delegates to real BullhornMetadata behaviour.
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.return_value = {
+            "changedEntityId": 54321,
+            "changeType": "INSERT",
+            "data": {
+                "id": 54321, "firstName": "Jane", "lastName": "Doe",
+                "occupation": "VP of Engineering",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            },
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "occupation": "VP of Engineering",
+                "clientCorporation": {"id": 1},
+                "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 54321
+        assert data["data"]["occupation"] == "VP of Engineering"
+
+        # Confirm the fields sent to Bullhorn's create() contain 'occupation'
+        # and do NOT contain a spurious 'title' key
+        create_fields = mock_client.create.call_args[0][1]
+        assert "occupation" in create_fields
+        assert "title" not in create_fields

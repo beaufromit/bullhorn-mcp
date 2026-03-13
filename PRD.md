@@ -50,7 +50,7 @@ The MCP shall provide a tool to create a new ClientCorporation entity in Bullhor
 
 ### FR-2: Create ClientContact Records
 
-The MCP shall provide a tool to create a new ClientContact entity in Bullhorn, linked to an existing ClientCorporation. The tool accepts standard Bullhorn fields (firstName, lastName, name, email, phone, title, etc.) and any custom fields. The caller must provide:
+The MCP shall provide a tool to create a new ClientContact entity in Bullhorn, linked to an existing ClientCorporation. The tool accepts standard Bullhorn fields (firstName, lastName, name, email, phone, occupation, etc.) and any custom fields. The caller must provide:
 
 - A valid ClientCorporation ID to associate the contact with.
 - An owner (consultant) — this is **required**. The caller may provide either a Bullhorn user ID or a consultant name. If a name is provided, the MCP resolves it to a Bullhorn CorporateUser ID internally by searching the CorporateUser entity. If the name resolves to multiple users, the MCP returns all matches with disambiguation information (email, department) and does not create the record until the caller specifies which user.
@@ -329,7 +329,7 @@ The following schemas are illustrative of the expected data shapes. Field sets m
   "name": "Jane Doe",
   "email": "jane.doe@acme.com",
   "phone": "+353 1 234 5679",
-  "title": "VP of Engineering",
+  "occupation": "VP of Engineering",
   "clientCorporation": {"id": 98765},
   "owner": "Maryrose Lyons",
   "status": "New Lead"
@@ -350,7 +350,7 @@ Note: `owner` accepts either a name string (resolved internally to a CorporateUs
     "lastName": "Doe",
     "email": "jane.doe@acme.com",
     "phone": "+353 1 234 5679",
-    "title": "VP of Engineering",
+    "occupation": "VP of Engineering",
     "clientCorporation": {"id": 98765, "name": "Acme Holdings Ltd"},
     "owner": {"id": 12345, "firstName": "Maryrose", "lastName": "Lyons"}
   }
@@ -436,7 +436,7 @@ Note: `owner` accepts either a name string (resolved internally to a CorporateUs
       "lastName": "Doe",
       "name": "Jane Doe",
       "email": "jane.doe@acme.com",
-      "title": "VP of Engineering",
+      "occupation": "VP of Engineering",
       "company_name": "Acme Holdings Ltd",
       "owner": "Maryrose Lyons"
     },
@@ -445,7 +445,7 @@ Note: `owner` accepts either a name string (resolved internally to a CorporateUs
       "lastName": "Scorpio",
       "name": "Hank Scorpio",
       "email": "hank@globex.com",
-      "title": "CEO",
+      "occupation": "CEO",
       "company_name": "Globex Corporation",
       "owner": "Maryrose Lyons"
     }
@@ -511,7 +511,7 @@ Note: `owner` accepts either a name string (resolved internally to a CorporateUs
   "entity": "ClientContact",
   "entity_id": 54321,
   "fields": {
-    "title": "CTO",
+    "occupation": "CTO",
     "customText1": "Hi Jane, congratulations on the recent funding Acme Holdings secured."
   }
 }
@@ -528,7 +528,7 @@ Note: `owner` accepts either a name string (resolved internally to a CorporateUs
     "firstName": "Jane",
     "lastName": "Doe",
     "email": "jane.doe@acme.com",
-    "title": "CTO",
+    "occupation": "CTO",
     "customText1": "Hi Jane, congratulations on the recent funding Acme Holdings secured.",
     "clientCorporation": {"id": 98765, "name": "Acme Holdings Ltd"},
     "owner": {"id": 12345, "firstName": "Maryrose", "lastName": "Lyons"}

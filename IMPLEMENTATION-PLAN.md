@@ -18,7 +18,8 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 4 | **COMPLETE** | Create ClientContact with Owner Resolution — 109 tests passing, tagged v0.0.4 |
 | Sprint 5 | **COMPLETE** | Duplicate Detection — 149 tests passing, tagged v0.0.5 |
 | Sprint 6 | **COMPLETE** | Update Records and Add Notes — 163 tests passing, tagged v0.0.6 |
-| Sprint 7 | **NEXT** | Bulk Import |
+| Sprint 7 | **COMPLETE** | Bulk Import — 177 tests passing, tagged v0.0.7 |
+| Sprint 8 | **COMPLETE** | CR1: Fix title/occupation field mapping bug — 182 tests passing, tagged v0.0.8 |
 
 ---
 
@@ -28,27 +29,25 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 - `src/bullhorn_mcp/config.py` — `BullhornConfig` dataclass with env loading
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note()`
-- `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching
-- `src/bullhorn_mcp/server.py` — MCP server with 15 tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`. Includes `get_client()` and `get_metadata()` helpers.
+- `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant for known metadata gaps (e.g. "job title" → `occupation` for ClientContact)
+- `src/bullhorn_mcp/server.py` — MCP server with 16 tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`. Includes `get_client()` and `get_metadata()` helpers.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
-### New modules to be created
-- `src/bullhorn_mcp/bulk.py` — Bulk import orchestration logic (Sprint 7)
+### New modules (implemented)
+- `src/bullhorn_mcp/bulk.py` — BulkImporter with process(), _process_single_company(), _process_single_contact(), _resolve_or_create_company(), _build_summary()
 
-### Existing modules to be extended
+### Existing modules extended
 - `src/bullhorn_mcp/server.py` — Add `bulk_import` MCP tool (Sprint 7)
 
 ### Existing test files
 - `tests/test_auth.py` — 12 tests (auth flow, regional servers)
 - `tests/test_config.py` — 6 tests
 - `tests/test_client.py` — 35 tests (search, query, get, pagination, create, resolve_owner, edge cases)
-- `tests/test_metadata.py` — 14 tests (get_fields, label resolution, resolve_fields, e2e)
+- `tests/test_metadata.py` — 18 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 71 tests (all 15 tools + server setup + E2E tests)
-- **Total: 163 tests, all passing**
-
-### New test files to be created
-- `tests/test_bulk.py` (Sprint 7)
+- `tests/test_server.py` — 74 tests (all 16 tools + server setup + E2E tests including Sprint 8)
+- `tests/test_bulk.py` — 12 tests (company processing, contact processing, summary, E2E)
+- **Total: 182 tests, all passing**
 
 ### Existing test files to be extended
 - `tests/test_client.py` — `update()`, `add_note()` methods (Sprint 6)
@@ -386,6 +385,45 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 ---
 
+## Sprint 8: CR1 — Fix title/occupation Field Mapping Bug — COMPLETE
+
+**Tag:** v0.0.8
+**Change request:** CR1.md
+**User stories affected:** US-2, US-4, US-9, US-15
+
+**What was delivered:** Fixed misleading `create_contact` docstring example (`"title"` → `"occupation"`). Added `FIELD_ALIASES` module-level constant to `metadata.py` with initial entry `{"ClientContact": {"job title": "occupation"}}`. Applied alias lookup in `resolve_fields()` before the dynamic metadata lookup, so "job title" resolves to `occupation` without a metadata round-trip and without touching `resolve_label_to_api()`. Added 4 new metadata tests (alias resolution, case-insensitivity, title salutation passthrough, entity isolation) and 1 server E2E test confirming the PUT payload contains `occupation` and not `title`. 182 tests passing.
+
+**Root cause:** The `create_contact` docstring example uses `"title": "VP Engineering"` as the key for job title. Calling agents (e.g. Claude) follow this example and send `title` as the field key. `resolve_fields` attempts to resolve "title" as a display label, but Bullhorn's metadata does not map any label named "title" to `occupation`. The key therefore passes through unchanged as the raw API field `title`, which in Bullhorn is the salutation/name prefix (Mr, Ms, Dr, etc.) — not the job title. This causes contact creation to fail or silently set the wrong field.
+
+**Fix scope (minimal):**
+1. Fix the misleading docstring example in `create_contact`.
+2. Add a hardcoded alias in `metadata.py` so "job title" resolves to `occupation` for ClientContact (covers NFR-4 / US-15 label resolution for this known problematic case).
+3. `"title"` as a raw key continues to pass through unchanged (correct for callers who genuinely want to set the salutation field).
+
+**CR1 item 4 — field mapping review:** All field passing in `create_company`, `create_contact`, `update_record` is dynamic (caller-supplied dict → label resolver → Bullhorn API). No fields are hardcoded in server.py except the docstring example. `add_note` constructs a fixed payload (action, comments, personReference/clientCorporation) which is correct per the Bullhorn Note entity schema. No further field mapping issues were found.
+
+### Tasks
+
+#### T8.1 — Fix `create_contact` docstring example
+**File:** `src/bullhorn_mcp/server.py`
+- Change the docstring example field from `"title": "VP Engineering"` to `"occupation": "VP Engineering"`.
+- No logic changes.
+- **Unit test:** No new test needed — this is a documentation fix. Existing `test_create_contact_success` already exercises the creation path.
+
+#### T8.2 — Add hardcoded alias "job title" → "occupation" for ClientContact in `BullhornMetadata`
+**File:** `src/bullhorn_mcp/metadata.py`
+- Add a module-level constant `FIELD_ALIASES: dict[str, dict[str, str]]` — a map of `{entity: {alias_lower: api_name}}` for known problematic label aliases that Bullhorn's metadata does not reliably resolve at runtime.
+- Initial entry: `{"ClientContact": {"job title": "occupation"}}`.
+- In `resolve_fields()`, before the dynamic label lookup, check `FIELD_ALIASES` for the entity and key (lowercased). If a match is found, use the hardcoded API name.
+- The `resolve_label_to_api()` method is **not** changed — it remains a pure metadata lookup. The alias override only applies in `resolve_fields()`.
+- **Unit test:** `tests/test_metadata.py::test_resolve_fields_job_title_alias` — call `resolve_fields("ClientContact", {"job title": "VP Engineering"})` with no mock needed (alias lookup is pre-metadata); assert result key is `"occupation"`.
+- **Unit test:** `tests/test_metadata.py::test_resolve_fields_title_passes_through` — call `resolve_fields("ClientContact", {"title": "Mr"})` with a mock metadata response that has no label "title"; assert key remains `"title"` (salutation passthrough is preserved).
+
+### Sprint 8 End-to-End Tests
+- `tests/test_server.py::test_sprint8_e2e_create_contact_occupation` — mock owner resolution, metadata (no "title" label), and ClientContact PUT/GET; call `create_contact({"firstName": "Jane", "lastName": "Doe", "clientCorporation": {"id": 1}, "owner": {"id": 99}, "occupation": "VP of Engineering"})`; assert Bullhorn PUT payload contains `"occupation"` and does not contain `"title"`.
+
+---
+
 ## Full Regression Test Suite (All Sprints Complete)
 
 After all sprints are implemented, run the complete test suite:
@@ -394,7 +432,7 @@ After all sprints are implemented, run the complete test suite:
 .venv/bin/pytest
 ```
 
-Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-7.
+Expected: all pre-existing tests pass unchanged (US-21 / FR-10) plus all new tests introduced in Sprints 1-8.
 
 Key regression checks:
 - `tests/test_server.py` — all existing `list_jobs`, `list_candidates`, `get_job`, `get_candidate`, `search_entities`, `query_entities` tests pass.
@@ -413,3 +451,4 @@ Key regression checks:
 - Sprint 5 has no direct dependency on Sprints 3-4 (fuzzy module is standalone), but the MCP tools use `client.search()` which already exists. Can be developed in parallel with Sprint 4.
 - Sprint 6 depends on Sprint 3 (`_request()` JSON body support for `update()` and `add_note()`).
 - Sprint 7 depends on all previous sprints (orchestrates create, duplicate detection, owner resolution, metadata, and field label resolution).
+- Sprint 8 is a standalone bug fix; it depends on Sprint 2 (metadata module) and Sprint 4 (create_contact tool) but does not block or depend on Sprint 7.

@@ -2,6 +2,24 @@
 
 from .client import BullhornClient
 
+# Hardcoded aliases for known cases where Bullhorn's metadata labels do not
+# reliably map to the correct API field name. These supplement (and take
+# precedence over) the dynamic metadata lookup in resolve_fields().
+#
+# Format: {entity: {alias_lower: api_field_name}}
+#
+# "job title" → "occupation" for ClientContact:
+#   Bullhorn ClientContact has two easily-confused fields:
+#     - `title`      — salutation/name prefix (Mr, Ms, Dr, etc.)
+#     - `occupation` — the person's job title (e.g. "VP of Engineering")
+#   Callers commonly say "job title" meaning the role; without this alias the
+#   key would pass through as `title`, silently setting the salutation field.
+FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "ClientContact": {
+        "job title": "occupation",
+    },
+}
+
 
 class BullhornMetadata:
     """Cache and resolve Bullhorn entity field metadata.
@@ -84,8 +102,14 @@ class BullhornMetadata:
         Returns:
             New dict with all keys resolved to API field names where possible
         """
+        entity_aliases = FIELD_ALIASES.get(entity, {})
         resolved = {}
         for key, value in fields.items():
-            api_name = self.resolve_label_to_api(entity, key)
-            resolved[api_name if api_name is not None else key] = value
+            # Check hardcoded aliases first (handles known metadata gaps).
+            alias = entity_aliases.get(key.lower())
+            if alias is not None:
+                resolved[alias] = value
+            else:
+                api_name = self.resolve_label_to_api(entity, key)
+                resolved[api_name if api_name is not None else key] = value
         return resolved

@@ -390,7 +390,7 @@ def create_contact(fields: dict) -> str:
                 clientCorporation must be {"id": <company_id>}.
                 Example: {
                     "firstName": "Jane", "lastName": "Doe", "name": "Jane Doe",
-                    "email": "jane@acme.com", "title": "VP Engineering",
+                    "email": "jane@acme.com", "occupation": "VP Engineering",
                     "clientCorporation": {"id": 98765},
                     "owner": "Maryrose Lyons"
                 }

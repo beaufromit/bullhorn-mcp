@@ -131,6 +131,49 @@ class TestResolveFields:
         assert result["unknownField"] == "value"
 
 
+class TestSprint8FieldAliases:
+    def test_resolve_fields_job_title_alias(self, metadata, mock_client):
+        """'job title' resolves to 'occupation' via FIELD_ALIASES before metadata lookup.
+
+        This alias exists because Bullhorn ClientContact has two fields that callers
+        confuse: `title` (salutation: Mr/Ms/Dr) and `occupation` (job title). The alias
+        ensures "job title" maps to the correct API field without requiring a metadata
+        round-trip, since Bullhorn's meta API does not reliably label `occupation` as
+        "Job Title".
+        """
+        result = metadata.resolve_fields("ClientContact", {"job title": "VP of Engineering"})
+        assert result == {"occupation": "VP of Engineering"}
+        # Alias is resolved before metadata, so no meta call is needed
+        mock_client.get_meta.assert_not_called()
+
+    def test_resolve_fields_job_title_alias_case_insensitive(self, metadata, mock_client):
+        """Alias lookup is case-insensitive."""
+        result = metadata.resolve_fields("ClientContact", {"Job Title": "Director"})
+        assert result == {"occupation": "Director"}
+        mock_client.get_meta.assert_not_called()
+
+    def test_resolve_fields_title_passes_through(self, metadata):
+        """'title' (salutation) passes through unchanged when no label matches it.
+
+        Callers who genuinely want to set the salutation (Mr, Ms, Dr) should use
+        the raw API name 'title'. This test confirms the alias does NOT intercept
+        the raw key 'title' — only the natural-language phrase 'job title'.
+        """
+        # SAMPLE_META_RESPONSE has no label named "title", so it passes through as-is
+        result = metadata.resolve_fields("ClientContact", {"title": "Mr"})
+        assert result == {"title": "Mr"}
+
+    def test_resolve_fields_alias_does_not_affect_other_entities(self, mock_client):
+        """FIELD_ALIASES for ClientContact do not bleed into other entity types."""
+        mock_client.get_meta.return_value = {"fields": [
+            {"name": "id", "label": "ID", "type": "ID", "required": False},
+        ]}
+        meta = BullhornMetadata(mock_client)
+        result = meta.resolve_fields("ClientCorporation", {"job title": "some value"})
+        # No alias for ClientCorporation — falls through to metadata lookup which finds nothing
+        assert result == {"job title": "some value"}
+
+
 class TestSprint2E2E:
     def test_sprint2_e2e_full_resolution_cycle(self, metadata):
         """Full round-trip: get fields, resolve label->api, resolve api->label."""
