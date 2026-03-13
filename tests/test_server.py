@@ -1240,3 +1240,36 @@ class TestSprint10E2E:
         # verify they match the contact's values, not a CorporateUser bleed-through
         assert create_fields["firstName"] == "Jane"
         assert create_fields["lastName"] == "Doe"
+
+
+class TestSprint11DocstringRegression:
+    """CR4: Regression guards for incorrect field names in tool docstrings."""
+
+    def test_update_record_docstring_does_not_use_title_for_job_title(self):
+        """update_record docstring must not show {"title": "CTO"} — title is salutation, not job title."""
+        import bullhorn_mcp.server as srv
+
+        docstring = srv.update_record.__doc__ or ""
+        assert '"title": "CTO"' not in docstring, (
+            'update_record docstring contains {"title": "CTO"} — '
+            "title is the salutation field (Mr/Ms/Dr); use occupation for job title"
+        )
+
+    def test_update_record_docstring_uses_occupation_for_job_title(self):
+        """update_record docstring example should use occupation for job title."""
+        import bullhorn_mcp.server as srv
+
+        docstring = srv.update_record.__doc__ or ""
+        assert '"occupation": "CTO"' in docstring, (
+            'update_record docstring should contain {"occupation": "CTO"} as the job title example'
+        )
+
+    def test_list_contacts_docstring_uses_occupation_not_title_in_query(self):
+        """list_contacts docstring should not suggest title:Manager as a job-title query — use occupation."""
+        import bullhorn_mcp.server as srv
+
+        docstring = srv.list_contacts.__doc__ or ""
+        assert "title:Manager" not in docstring, (
+            'list_contacts docstring contains "title:Manager" — '
+            "title is the salutation field; use occupation:Manager to search by job title"
+        )

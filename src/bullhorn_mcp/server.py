@@ -150,7 +150,7 @@ def list_contacts(
     """List and filter client contacts from Bullhorn CRM.
 
     Args:
-        query: Lucene search query (e.g., "lastName:Smith" or "title:Manager")
+        query: Lucene search query (e.g., "lastName:Smith" or "occupation:Manager")
         status: Filter by contact status (e.g., "Active")
         limit: Maximum number of results (1-500, default 20)
         fields: Comma-separated fields to return
@@ -161,7 +161,7 @@ def list_contacts(
     Examples:
         - list_contacts() - Get recent contacts
         - list_contacts(query="lastName:Smith") - Find contacts named Smith
-        - list_contacts(query="title:Manager AND clientCorporation.name:Acme")
+        - list_contacts(query="occupation:Manager AND clientCorporation.name:Acme")
         - list_contacts(status="Active", limit=50)
     """
     try:
@@ -451,7 +451,7 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
         JSON object with changedEntityId, changeType, and full updated record.
 
     Examples:
-        - update_record("ClientContact", 54321, {"title": "CTO"})
+        - update_record("ClientContact", 54321, {"occupation": "CTO"})
         - update_record("ClientCorporation", 98765, {"status": "Active Account"})
         - update_record("ClientContact", 54321, {"Consultant": {"id": 99}})
     """
