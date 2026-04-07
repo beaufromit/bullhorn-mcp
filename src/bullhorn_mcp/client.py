@@ -12,7 +12,7 @@ DEFAULT_FIELDS = {
     "Candidate": "id,firstName,lastName,email,phone,status,dateAdded,occupation,skillSet,owner",
     "Placement": "id,candidate,jobOrder,status,dateBegin,dateEnd,salary,payRate",
     "ClientCorporation": "id,name,status,phone,address,dateAdded",
-    "ClientContact": "id,firstName,lastName,email,phone,status,title,dateAdded,clientCorporation,owner",
+    "ClientContact": "id,firstName,lastName,email,phone,status,dateAdded,clientCorporation,owner",
 }
 
 
