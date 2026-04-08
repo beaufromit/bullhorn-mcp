@@ -30,10 +30,11 @@ def _strip_contact_title(fields: dict, entity: str) -> tuple[dict, list[str]]:
 # Read transport configuration at module load so FastMCP receives the right host/port.
 # MCP_TRANSPORT: "stdio" (default, backward-compatible) or "http" (hosted deployment).
 # PORT: HTTP listen port (default 8000). Ignored in stdio mode.
-# HOST: HTTP bind address. Defaults to 0.0.0.0 for http mode, 127.0.0.1 for stdio.
+# HOST: HTTP bind address override. Defaults to 0.0.0.0 for http mode, 127.0.0.1 for stdio.
 _transport_mode = os.environ.get("MCP_TRANSPORT", "stdio")
 _port = int(os.environ.get("PORT", 8000))
-_host = "0.0.0.0" if _transport_mode == "http" else "127.0.0.1"
+_default_host = "0.0.0.0" if _transport_mode == "http" else "127.0.0.1"
+_host = os.environ.get("HOST", _default_host)
 
 # Initialize MCP server
 mcp = FastMCP(
@@ -796,19 +797,19 @@ def main():
     - "http": streamable-http transport for hosted deployments accessible to web clients.
 
     HTTP port is controlled by PORT (default 8000).
-    HTTP host defaults to 0.0.0.0 (set via HOST env var at import time via _host).
+    HTTP host is controlled by HOST (default 0.0.0.0 in http mode, 127.0.0.1 in stdio mode).
+    All env vars are read at module import time — transport, host, and port are consistent.
     """
-    transport = os.environ.get("MCP_TRANSPORT", "stdio")
-    if transport == "http":
+    if _transport_mode == "http":
         _logger.info(
             "Starting Bullhorn MCP server in HTTP mode on %s:%s", _host, _port
         )
         mcp.run(transport="streamable-http")
-    elif transport == "stdio":
+    elif _transport_mode == "stdio":
         mcp.run()
     else:
         raise ValueError(
-            f"Unknown MCP_TRANSPORT '{transport}'. Valid values: stdio, http"
+            f"Unknown MCP_TRANSPORT '{_transport_mode}'. Valid values: stdio, http"
         )
 
 

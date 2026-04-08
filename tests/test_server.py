@@ -1866,22 +1866,26 @@ class TestSprint15HttpTransport:
         mock_run.assert_called_once_with()
 
     def test_main_http_transport(self):
-        """main() with MCP_TRANSPORT=http calls mcp.run(transport='streamable-http')."""
-        with patch.dict(os.environ, {"MCP_TRANSPORT": "http"}):
+        """main() with _transport_mode=http calls mcp.run(transport='streamable-http').
+
+        main() uses the module-level _transport_mode variable (set at import time),
+        not os.environ directly. Patch the module-level var to test dispatch logic.
+        """
+        with patch.object(server, "_transport_mode", "http"):
             with patch.object(server.mcp, "run") as mock_run:
                 server.main()
         mock_run.assert_called_once_with(transport="streamable-http")
 
     def test_main_stdio_explicit(self):
-        """main() with MCP_TRANSPORT=stdio calls mcp.run() with no transport kwarg."""
-        with patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}):
+        """main() with _transport_mode=stdio calls mcp.run() with no transport kwarg."""
+        with patch.object(server, "_transport_mode", "stdio"):
             with patch.object(server.mcp, "run") as mock_run:
                 server.main()
         mock_run.assert_called_once_with()
 
     def test_main_invalid_transport_raises(self):
-        """main() with an unrecognised MCP_TRANSPORT raises ValueError."""
-        with patch.dict(os.environ, {"MCP_TRANSPORT": "grpc"}):
+        """main() with an unrecognised _transport_mode raises ValueError."""
+        with patch.object(server, "_transport_mode", "grpc"):
             with pytest.raises(ValueError, match="grpc"):
                 server.main()
 
