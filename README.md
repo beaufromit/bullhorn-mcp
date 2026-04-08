@@ -428,6 +428,49 @@ When `fields` is not specified, the following fields are returned:
 **Candidate:**
 `id, firstName, lastName, email, phone, status, dateAdded, occupation, skillSet, owner`
 
+## Hosted Deployment
+
+The server supports an HTTP transport mode for hosting on remote infrastructure (Proxmox, Azure, a VPS, etc.) and exposing via a reverse proxy or Cloudflare Tunnel so that web-based AI clients (Claude.ai, ChatGPT) can connect to it.
+
+### 1. Set environment variables
+
+```env
+MCP_TRANSPORT=http
+PORT=8000
+```
+
+Add your Bullhorn credentials to `.env` as normal.
+
+### 2. Start the server
+
+```bash
+.venv/bin/python -m bullhorn_mcp.server
+```
+
+You should see a log line confirming HTTP mode and the bound port:
+
+```
+INFO  Starting Bullhorn MCP server in HTTP mode on 0.0.0.0:8000
+```
+
+The server binds on `0.0.0.0` by default in HTTP mode so it is reachable from outside the host.
+
+### 3. Expose via reverse proxy or tunnel
+
+Point a Cloudflare Tunnel (or nginx/caddy) at `http://localhost:8000` and expose it over HTTPS at a public domain, e.g. `https://bullhorn-mcp.example.com`.
+
+### 4. Connect your AI client
+
+In Claude.ai or ChatGPT, add a new MCP connector and set the server URL to:
+
+```
+https://bullhorn-mcp.example.com/mcp
+```
+
+> **Note:** Local clients (Claude Desktop, Claude Code, Cursor, etc.) continue to work without any changes — the default transport remains `stdio`.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -438,6 +481,8 @@ When `fields` is not specified, the following fields are returned:
 | `BULLHORN_PASSWORD` | Yes | API Password |
 | `BULLHORN_AUTH_URL` | No | Auth URL (default: https://auth.bullhornstaffing.com) |
 | `BULLHORN_LOGIN_URL` | No | Login URL (default: https://rest.bullhornstaffing.com) |
+| `MCP_TRANSPORT` | No | Transport mode: `stdio` (default) or `http` |
+| `PORT` | No | HTTP listen port when `MCP_TRANSPORT=http` (default: 8000) |
 
 ## Project Structure
 

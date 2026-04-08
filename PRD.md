@@ -127,6 +127,18 @@ The MCP shall provide convenience tools (`list_contacts` and `list_companies`) t
 
 All existing read-only tools (`list_jobs`, `list_candidates`, `get_job`, `get_candidate`, `search_entities`, `query_entities`) must continue to work without modification.
 
+### FR-11: HTTP Transport Mode for Remote Hosting
+
+The MCP server shall support an HTTP transport mode (`streamable-http`) in addition to the existing stdio transport, so that it can be deployed on remote infrastructure and accessed by web-based AI clients (Claude.ai, ChatGPT, etc.) via a public HTTPS endpoint.
+
+- The active transport shall be selectable via a `MCP_TRANSPORT` environment variable (`stdio` or `http`). The default shall remain `stdio` to preserve backward compatibility for all existing local deployments.
+- The HTTP listening port shall be configurable via a `PORT` environment variable (default: `8000`).
+- The HTTP bind host shall default to `0.0.0.0` in HTTP mode to allow external connections.
+- The server shall log the active transport and port on startup.
+- `uvicorn` (required by the MCP SDK's HTTP transport) shall be listed as a project dependency.
+- `.env.example` shall document the new variables.
+- `README.md` shall include a Hosted Deployment section.
+
 ## 7. Non-Functional Requirements
 
 ### NFR-1: No Destructive Operations
@@ -276,6 +288,12 @@ As a consultant, I want to list ClientCorporation records with optional search q
 **US-21: Existing read tools remain functional**
 As any user, I want all existing MCP tools (list_jobs, list_candidates, get_job, get_candidate, search_entities, query_entities) to continue working as before, so that the expansion does not break current workflows.
 - **Acceptance**: All existing tests pass without modification. Existing tool signatures and return formats are unchanged.
+
+### Hosted Deployment
+
+**US-22: Run the server in HTTP mode for remote clients**
+As a system administrator, I want to start the MCP server in HTTP mode by setting `MCP_TRANSPORT=http`, so that web-based AI clients (Claude.ai, ChatGPT) can connect to it over HTTPS without requiring a local process spawn.
+- **Acceptance**: Setting `MCP_TRANSPORT=http` and running the server causes it to bind on the configured `PORT` (default 8000) and respond to HTTP requests from an MCP client. Setting `MCP_TRANSPORT=stdio` (or leaving it unset) behaves identically to the current behaviour. The server logs the active transport and port on startup.
 
 ## 10. Input/Output Schemas
 

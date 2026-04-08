@@ -8,6 +8,8 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 
 **Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete. All FR-1 through FR-10, US-1 through US-21, and NFR-1 through NFR-7 are fully covered. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
 
+**CR8 — new requirement:** CR8.md introduces HTTP transport for remote hosting, which has no equivalent in the original PRD. FR-11 (HTTP Transport Mode) and US-22 have been added to PRD.md to cover this requirement. Sprint 15 implements them.
+
 ---
 
 ## Current Status
@@ -28,6 +30,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 12 | **COMPLETE** | CR6: Investigate and fix title field injection in update_record — 201 tests passing, tagged v0.0.12 |
 | Sprint 13 | **COMPLETE** | CR7: Strip title from ClientContact write payloads with warning — 207 tests passing, tagged v0.0.13 |
 | Sprint 14 | **COMPLETE** | CR5: Add duplicate check to create_contact before creation — 214 tests passing, tagged v0.0.14 |
+| Sprint 15 | **COMPLETE** | CR8: Add HTTP transport mode for remote hosting — 220 tests passing, tagged v0.0.15 |
 
 ---
 
@@ -771,6 +774,110 @@ If `clientCorporation` is absent from `fields` (already validated earlier in `cr
 
 ---
 
+## Sprint 15: CR8 — Add HTTP Transport Mode for Remote Hosting — COMPLETE
+
+**Tag:** v0.0.15
+**Change request:** CR8.md
+**User stories:** US-22 (new — see PRD.md FR-11)
+
+**What was delivered:** Added `os` import to `server.py`. Three module-level variables (`_transport_mode`, `_port`, `_host`) are read from env at import time and passed to `FastMCP(host=_host, port=_port, ...)`. `main()` reads `MCP_TRANSPORT` and calls `mcp.run(transport="streamable-http")` for HTTP or `mcp.run()` for stdio; any other value raises `ValueError`. Added `uvicorn>=0.30.0` to `pyproject.toml` dependencies. Updated `.env.example` with commented-out `MCP_TRANSPORT`, `PORT`, `HOST`. Added `## Hosted Deployment` section and extended the Environment Variables table in `README.md`. Added 6 tests in `TestSprint15HttpTransport` (stdio default, http mode, stdio explicit, invalid transport raises, port from env via reload, E2E http startup). 220 tests passing.
+
+**Dependency:** All previous sprints complete.
+
+---
+
+### Background
+
+The server currently uses stdio transport exclusively. Claude.ai (web), ChatGPT, and any remotely-hosted AI client require an HTTP endpoint. Without this change the server cannot be deployed on infrastructure (Proxmox, Azure, etc.) and exposed via a Cloudflare tunnel for multi-user access.
+
+`FastMCP` already supports `streamable-http` transport natively via `mcp.run(transport="streamable-http")`. Port and host are configured at `FastMCP` construction time via `port=` and `host=` kwargs. The implementation therefore requires reading env vars during server initialisation and passing them to `FastMCP(...)`.
+
+`uvicorn` is required by the SDK's HTTP transport but is absent from `pyproject.toml`.
+
+---
+
+### Tasks
+
+#### T15.1 — Add `uvicorn` to `pyproject.toml` (DONE)
+**File:** `pyproject.toml`
+
+Add `"uvicorn>=0.30.0"` to the main `dependencies` list alongside `mcp`, `httpx`, and `python-dotenv`.
+
+No new tests — uvicorn availability is implicitly validated when the HTTP-mode server tests exercise `mcp.run(transport="streamable-http")`.
+
+#### T15.2 — Read transport env vars and pass to `FastMCP` constructor in `server.py` (DONE)
+**File:** `src/bullhorn_mcp/server.py`
+
+Read the following environment variables at module load time, before the `mcp = FastMCP(...)` call:
+
+- `MCP_TRANSPORT` — `"stdio"` (default) or `"http"`. Any other value should raise a `ValueError` at startup with a clear message listing valid options.
+- `PORT` — integer, default `8000`. Cast with `int(os.environ.get("PORT", 8000))`.
+- `HOST` — default `"0.0.0.0"` when `MCP_TRANSPORT=http`, `"127.0.0.1"` when stdio (stdio host is irrelevant but should match current FastMCP default to avoid side-effects). Since the FastMCP default is `"127.0.0.1"`, only override host to `"0.0.0.0"` in HTTP mode.
+
+Pass `port=port` and `host=host` to `FastMCP(...)` so that `run_streamable_http_async` picks them up from `mcp.settings`.
+
+Update `main()`:
+
+```python
+def main():
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "http":
+        _logger.info("Starting Bullhorn MCP server in HTTP mode on %s:%s", _host, _port)
+        mcp.run(transport="streamable-http")
+    elif transport == "stdio":
+        mcp.run()
+    else:
+        raise ValueError(f"Unknown MCP_TRANSPORT '{transport}'. Valid values: stdio, http")
+```
+
+Add `import os` to the server module imports.
+
+Log the active transport and port on startup (INFO level) so it is immediately clear which mode is running.
+
+Unit tests:
+- `tests/test_server.py::test_main_stdio_default` — patch `os.environ` with no `MCP_TRANSPORT`; mock `mcp.run`; call `main()`; assert `mcp.run` called with no `transport` kwarg (or `transport="stdio"` — verify which path is taken).
+- `tests/test_server.py::test_main_http_transport` — patch `os.environ` with `MCP_TRANSPORT=http`; mock `mcp.run`; call `main()`; assert `mcp.run` called with `transport="streamable-http"`.
+- `tests/test_server.py::test_main_invalid_transport` — patch `os.environ` with `MCP_TRANSPORT=grpc`; call `main()`; assert `ValueError` raised with message including `"grpc"`.
+- `tests/test_server.py::test_fastmcp_port_configured_from_env` — patch `os.environ` with `PORT=9999`; re-import (or use importlib.reload) so module-level env reading runs; assert `mcp.settings.port == 9999`.
+
+**Note on module-level env reading:** The `mcp = FastMCP(...)` call at module level means `PORT`/`HOST` are read once at import time. Tests that need to vary these values should either mock at module level before import or use `importlib.reload`. The test for `PORT` configuration should use the latter pattern — document this in the test comment.
+
+#### T15.3 — Update `.env.example` (DONE)
+**File:** `.env.example`
+
+Append the following block after the existing optional URL overrides:
+
+```
+# Transport mode (stdio for local Claude Desktop/Code, http for hosted deployment)
+# MCP_TRANSPORT=stdio
+
+# HTTP mode settings (only used when MCP_TRANSPORT=http)
+# PORT=8000
+# HOST=0.0.0.0
+```
+
+No tests — this is a documentation file.
+
+#### T15.4 — Update `README.md` with Hosted Deployment section (DONE)
+**File:** `README.md`
+
+Add a new top-level section `## Hosted Deployment` after the existing local client configuration sections. The section should cover:
+
+1. **Prerequisites:** `MCP_TRANSPORT=http` and `PORT` env vars; ensure `uvicorn` is installed (it is if installed from `pyproject.toml`).
+2. **Running the server:** command to start in HTTP mode, confirming it binds on the configured port.
+3. **Reverse proxy / tunnel:** note that a reverse proxy or Cloudflare Tunnel should expose the port over HTTPS.
+4. **Connecting clients:** Claude.ai and ChatGPT connect via the public HTTPS URL (e.g. `https://bullhorn-mcp.example.com/mcp`) in their connector/tool settings.
+
+No tests — this is documentation.
+
+---
+
+### Sprint 15 End-to-End Tests
+
+- `tests/test_server.py::test_sprint15_e2e_http_mode_startup` — patch `MCP_TRANSPORT=http` and `PORT=8001` in env; mock `mcp.run`; call `main()`; assert `mcp.run` was called with `transport="streamable-http"` and that `mcp.settings.port` equals `8001` (verifying the port env var propagated to FastMCP at construction time).
+
+---
+
 ## Full Regression Test Suite (All Sprints Complete)
 
 After all sprints are implemented, run the complete test suite:
@@ -791,7 +898,7 @@ Key regression checks:
 
 ## Dependency Notes
 
-- **No new third-party packages required** — fuzzy matching uses Python's built-in `difflib.SequenceMatcher`. All HTTP mocking continues with `respx`.
+- **Sprint 15 introduces one new third-party dependency:** `uvicorn>=0.30.0`, required by the MCP SDK's `streamable-http` transport. All other sprints (1-14) have no new third-party packages — fuzzy matching uses Python's built-in `difflib.SequenceMatcher` and HTTP mocking uses `respx`.
 - Sprints 1 and 2 are independent and complete.
 - Sprint 3 is the foundation for all write operations (extends `_request()`, adds `create()`).
 - Sprint 4 depends on Sprint 3 (`create()` method, `_request()` JSON body support).

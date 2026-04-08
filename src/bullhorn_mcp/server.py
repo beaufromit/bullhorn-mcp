@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from mcp.server.fastmcp import FastMCP
 
 from .config import BullhornConfig
@@ -26,9 +27,19 @@ def _strip_contact_title(fields: dict, entity: str) -> tuple[dict, list[str]]:
     return fields, warnings
 
 
+# Read transport configuration at module load so FastMCP receives the right host/port.
+# MCP_TRANSPORT: "stdio" (default, backward-compatible) or "http" (hosted deployment).
+# PORT: HTTP listen port (default 8000). Ignored in stdio mode.
+# HOST: HTTP bind address. Defaults to 0.0.0.0 for http mode, 127.0.0.1 for stdio.
+_transport_mode = os.environ.get("MCP_TRANSPORT", "stdio")
+_port = int(os.environ.get("PORT", 8000))
+_host = "0.0.0.0" if _transport_mode == "http" else "127.0.0.1"
+
 # Initialize MCP server
 mcp = FastMCP(
     "Bullhorn CRM",
+    host=_host,
+    port=_port,
     instructions=(
         "Query and manage Bullhorn CRM data — jobs, candidates, contacts, companies, "
         "and placements. Supports field metadata resolution between API names and "
@@ -778,8 +789,27 @@ def bulk_import(companies: list, contacts: list) -> str:
 
 
 def main():
-    """Run the MCP server."""
-    mcp.run()
+    """Run the MCP server.
+
+    Transport is controlled by the MCP_TRANSPORT environment variable:
+    - "stdio" (default): stdio transport for local clients (Claude Desktop, Claude Code, etc.)
+    - "http": streamable-http transport for hosted deployments accessible to web clients.
+
+    HTTP port is controlled by PORT (default 8000).
+    HTTP host defaults to 0.0.0.0 (set via HOST env var at import time via _host).
+    """
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "http":
+        _logger.info(
+            "Starting Bullhorn MCP server in HTTP mode on %s:%s", _host, _port
+        )
+        mcp.run(transport="streamable-http")
+    elif transport == "stdio":
+        mcp.run()
+    else:
+        raise ValueError(
+            f"Unknown MCP_TRANSPORT '{transport}'. Valid values: stdio, http"
+        )
 
 
 if __name__ == "__main__":

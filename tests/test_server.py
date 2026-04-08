@@ -1,8 +1,10 @@
 """Tests for MCP server tools."""
 
+import importlib
 import json
+import os
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, patch as mock_patch
 from bullhorn_mcp import server
 from bullhorn_mcp.auth import AuthenticationError
 from bullhorn_mcp.client import BullhornAPIError
@@ -1846,3 +1848,75 @@ class TestSprint14DuplicateCheck:
 
         data = json.loads(result)
         assert data["changedEntityId"] == 170844
+
+
+# ---------------------------------------------------------------------------
+# Sprint 15: CR8 — HTTP Transport Mode
+# ---------------------------------------------------------------------------
+
+class TestSprint15HttpTransport:
+    """Tests for MCP_TRANSPORT / PORT environment variable handling in main()."""
+
+    def test_main_stdio_default(self):
+        """main() with no MCP_TRANSPORT calls mcp.run() with no transport kwarg."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MCP_TRANSPORT", None)
+            with patch.object(server.mcp, "run") as mock_run:
+                server.main()
+        mock_run.assert_called_once_with()
+
+    def test_main_http_transport(self):
+        """main() with MCP_TRANSPORT=http calls mcp.run(transport='streamable-http')."""
+        with patch.dict(os.environ, {"MCP_TRANSPORT": "http"}):
+            with patch.object(server.mcp, "run") as mock_run:
+                server.main()
+        mock_run.assert_called_once_with(transport="streamable-http")
+
+    def test_main_stdio_explicit(self):
+        """main() with MCP_TRANSPORT=stdio calls mcp.run() with no transport kwarg."""
+        with patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}):
+            with patch.object(server.mcp, "run") as mock_run:
+                server.main()
+        mock_run.assert_called_once_with()
+
+    def test_main_invalid_transport_raises(self):
+        """main() with an unrecognised MCP_TRANSPORT raises ValueError."""
+        with patch.dict(os.environ, {"MCP_TRANSPORT": "grpc"}):
+            with pytest.raises(ValueError, match="grpc"):
+                server.main()
+
+    def test_fastmcp_port_configured_from_env(self):
+        """FastMCP is constructed with the port from PORT env var.
+
+        Because mcp = FastMCP(...) runs at module import time, we must reload
+        the module after patching the env to observe the new port value.
+        After the assertion the module is reloaded again to restore clean state.
+        """
+        import bullhorn_mcp.server as server_module
+
+        with patch.dict(os.environ, {"PORT": "9999", "MCP_TRANSPORT": "stdio"}):
+            importlib.reload(server_module)
+            assert server_module.mcp.settings.port == 9999
+
+        # Restore original module state so subsequent tests are unaffected.
+        importlib.reload(server_module)
+
+    def test_sprint15_e2e_http_mode_startup(self):
+        """E2E: MCP_TRANSPORT=http and PORT=8001 → mcp.run called with streamable-http.
+
+        Also verifies the module-level _port variable reflects PORT at import time
+        by checking mcp.settings.port after a reload.
+        """
+        import bullhorn_mcp.server as server_module
+
+        with patch.dict(os.environ, {"MCP_TRANSPORT": "http", "PORT": "8001"}):
+            importlib.reload(server_module)
+            assert server_module.mcp.settings.port == 8001
+
+            with patch.object(server_module.mcp, "run") as mock_run:
+                server_module.main()
+
+            mock_run.assert_called_once_with(transport="streamable-http")
+
+        # Restore
+        importlib.reload(server_module)
