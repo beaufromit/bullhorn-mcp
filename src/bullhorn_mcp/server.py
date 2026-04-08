@@ -75,9 +75,10 @@ def _build_auth() -> OIDCProxy | None:
         client_id=client_id,
         client_secret=client_secret,
         base_url=base_url,
-        audience=f"api://{client_id}",
         required_scopes=["openid", "profile", "email"],
-        extra_authorize_params={"scope": "openid profile email"},
+        extra_authorize_params={
+            "scope": f"openid profile email api://{client_id}/mcp.access"
+        },
     )
 
 
