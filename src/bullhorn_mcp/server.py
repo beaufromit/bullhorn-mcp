@@ -11,6 +11,8 @@ from .client import BullhornClient, BullhornAPIError
 from .metadata import BullhornMetadata
 from .fuzzy import score_company_match, categorize_score, score_contact_match
 from .bulk import BulkImporter
+from dotenv import load_dotenv
+load_dotenv()
 
 _logger = logging.getLogger(__name__)
 
