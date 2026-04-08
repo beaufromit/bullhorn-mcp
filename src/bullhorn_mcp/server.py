@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 
 from .config import BullhornConfig
@@ -83,8 +83,6 @@ def _build_auth() -> OIDCProxy | None:
 mcp = FastMCP(
     "Bullhorn CRM",
     auth=_build_auth(),
-    host=_host,
-    port=_port,
     instructions=(
         "Query and manage Bullhorn CRM data — jobs, candidates, contacts, companies, "
         "and placements. Supports field metadata resolution between API names and "
@@ -850,7 +848,7 @@ def main():
         _logger.info(
             "Starting Bullhorn MCP server in HTTP mode on %s:%s", _host, _port
         )
-        mcp.run(transport="streamable-http")
+        mcp.run(transport="streamable-http", host=_host, port=_port)
     elif _transport_mode == "stdio":
         mcp.run()
     else:
