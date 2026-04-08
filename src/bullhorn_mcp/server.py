@@ -76,6 +76,7 @@ def _build_auth() -> OIDCProxy | None:
         client_secret=client_secret,
         base_url=base_url,
         audience=f"api://{client_id}",
+        scopes=["openid", "profile", "email"],
     )
 
 
