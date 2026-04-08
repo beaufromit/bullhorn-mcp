@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from mcp.server.fastmcp import FastMCP
+from fastmcp.server.auth.oidc_proxy import OIDCProxy
 
 from .config import BullhornConfig
 from .auth import BullhornAuth, AuthenticationError
@@ -38,9 +39,50 @@ _port = int(os.environ.get("PORT", 8000))
 _default_host = "0.0.0.0" if _transport_mode == "http" else "127.0.0.1"
 _host = os.environ.get("HOST", _default_host)
 
+
+def _build_auth() -> OIDCProxy | None:
+    """Configure Entra OAuth when running in HTTP mode.
+
+    In stdio mode, returns None — no auth required.
+    In HTTP mode, all four Entra env vars must be present or the server
+    refuses to start. This makes it impossible to accidentally run an
+    unprotected HTTP endpoint.
+    """
+    if _transport_mode != "http":
+        return None
+
+    tenant_id = os.environ.get("ENTRA_TENANT_ID")
+    client_id = os.environ.get("ENTRA_CLIENT_ID")
+    client_secret = os.environ.get("ENTRA_CLIENT_SECRET")
+    base_url = os.environ.get("MCP_BASE_URL")
+
+    missing = [
+        name for name, val in {
+            "ENTRA_TENANT_ID": tenant_id,
+            "ENTRA_CLIENT_ID": client_id,
+            "ENTRA_CLIENT_SECRET": client_secret,
+            "MCP_BASE_URL": base_url,
+        }.items() if not val
+    ]
+
+    if missing:
+        raise ValueError(
+            f"HTTP transport requires Entra OAuth. Missing env vars: {', '.join(missing)}"
+        )
+
+    return OIDCProxy(
+        config_url=f"https://login.microsoftonline.com/{tenant_id}/v2.0/.well-known/openid-configuration",
+        client_id=client_id,
+        client_secret=client_secret,
+        base_url=base_url,
+        audience=f"api://{client_id}",
+    )
+
+
 # Initialize MCP server
 mcp = FastMCP(
     "Bullhorn CRM",
+    auth=_build_auth(),
     host=_host,
     port=_port,
     instructions=(
@@ -797,6 +839,8 @@ def main():
     Transport is controlled by the MCP_TRANSPORT environment variable:
     - "stdio" (default): stdio transport for local clients (Claude Desktop, Claude Code, etc.)
     - "http": streamable-http transport for hosted deployments accessible to web clients.
+      Requires ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, and MCP_BASE_URL
+      to be set — the server will refuse to start in HTTP mode without them.
 
     HTTP port is controlled by PORT (default 8000).
     HTTP host is controlled by HOST (default 0.0.0.0 in http mode, 127.0.0.1 in stdio mode).

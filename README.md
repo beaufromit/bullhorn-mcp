@@ -104,6 +104,86 @@ print(f'Successfully connected! Found {len(jobs)} jobs.')
 "
 ```
 
+## Hosted Deployment
+
+The server supports an HTTP transport mode for hosting on remote infrastructure (Proxmox, Azure, a VPS, etc.) and exposing via a reverse proxy or Cloudflare Tunnel so that web-based AI clients (Claude.ai, ChatGPT) can connect to it.
+
+HTTP mode **requires** Microsoft Entra (Azure AD) OAuth to be configured. The server will refuse to start in HTTP mode if the Entra environment variables are missing. This ensures it is impossible to accidentally expose an unauthenticated endpoint.
+
+When a user connects, they are redirected to your Microsoft Entra tenant to sign in with their company account. Only users within your organisation's tenant can authenticate.
+
+### 1. Register an Entra application
+
+1. In the [Azure Portal](https://portal.azure.com), go to **Microsoft Entra ID > App registrations > New registration**
+2. Name it (e.g. `Bullhorn MCP Server`)
+3. Under **Supported account types**, select **Accounts in this organisational directory only**
+4. Under **Redirect URI**, select **Web** and enter: `https://your-domain.com/auth/callback`
+5. Click **Register** and note the **Application (client) ID** and **Directory (tenant) ID**
+6. Go to **Certificates & secrets > New client secret**, create a secret, and copy the value immediately
+7. Go to **Expose an API**, set the Application ID URI (accept the default `api://<client-id>`), and add a scope (e.g. `mcp.access`) with **Admins only** consent
+
+### 2. Set environment variables
+
+```env
+MCP_TRANSPORT=http
+PORT=8000
+MCP_BASE_URL=https://your-domain.com
+
+ENTRA_TENANT_ID=your-tenant-id
+ENTRA_CLIENT_ID=your-client-id
+ENTRA_CLIENT_SECRET=your-client-secret
+```
+
+Add your Bullhorn credentials to `.env` as normal.
+
+### 3. Start the server
+
+```bash
+.venv/bin/python -m bullhorn_mcp.server
+```
+
+You should see a log line confirming HTTP mode and the bound port:
+
+```
+INFO  Starting Bullhorn MCP server in HTTP mode on 0.0.0.0:8000
+```
+
+### 4. Expose via reverse proxy or tunnel
+
+Point a Cloudflare Tunnel (or nginx/caddy) at `http://localhost:8000` and expose it over HTTPS at a public domain, e.g. `https://bullhorn-mcp.example.com`.
+
+### 5. Connect your AI client
+
+In Claude.ai or ChatGPT, add a new MCP connector and set the server URL to:
+
+```
+https://bullhorn-mcp.example.com/mcp
+```
+
+The client will redirect you to your company Microsoft login on first connection. Once authenticated, the connection persists.
+
+> **Note:** Local clients (Claude Desktop, Claude Code, Cursor, etc.) continue to use `stdio` transport and are unaffected by the Entra configuration.
+
+---
+
+## Environment Variables
+
+| Variable                 | Required  | Description                                                               |
+| ------------------------ | --------- | ------------------------------------------------------------------------- |
+| `BULLHORN_CLIENT_ID`     | Yes       | Bullhorn OAuth 2.0 Client ID                                              |
+| `BULLHORN_CLIENT_SECRET` | Yes       | Bullhorn OAuth 2.0 Client Secret                                          |
+| `BULLHORN_USERNAME`      | Yes       | Bullhorn API Username                                                     |
+| `BULLHORN_PASSWORD`      | Yes       | Bullhorn API Password                                                     |
+| `BULLHORN_AUTH_URL`      | No        | Auth URL (default: https://auth.bullhornstaffing.com)                     |
+| `BULLHORN_LOGIN_URL`     | No        | Login URL (default: https://rest.bullhornstaffing.com)                    |
+| `MCP_TRANSPORT`          | No        | Transport mode: `stdio` (default) or `http`                               |
+| `PORT`                   | No        | HTTP listen port when `MCP_TRANSPORT=http` (default: 8000)                |
+| `HOST`                   | No        | HTTP bind address (default: `0.0.0.0` in http mode, `127.0.0.1` in stdio) |
+| `MCP_BASE_URL`           | HTTP only | Public URL of the server (e.g. `https://bullhorn-mcp.example.com`)        |
+| `ENTRA_TENANT_ID`        | HTTP only | Azure AD tenant ID                                                        |
+| `ENTRA_CLIENT_ID`        | HTTP only | Entra app registration client ID                                          |
+| `ENTRA_CLIENT_SECRET`    | HTTP only | Entra app registration client secret                                      |
+
 ## Client Configuration
 
 This MCP server works with any MCP-compatible client. Below are setup instructions for popular clients.
@@ -299,6 +379,7 @@ List and filter job orders from Bullhorn CRM.
 | `fields` | string | No | Comma-separated fields to return |
 
 **Examples:**
+
 ```
 list_jobs()                                    # Recent jobs
 list_jobs(query="isOpen:1")                   # Open jobs only
@@ -319,6 +400,7 @@ List and filter candidates from Bullhorn CRM.
 | `fields` | string | No | Comma-separated fields to return |
 
 **Examples:**
+
 ```
 list_candidates()                              # Recent candidates
 list_candidates(query="skillSet:Python")      # Python developers
@@ -358,6 +440,7 @@ Search any Bullhorn entity type using Lucene query syntax.
 | `fields` | string | No | Comma-separated fields to return |
 
 **Supported Entities:**
+
 - `JobOrder` - Job postings
 - `Candidate` - Candidates/applicants
 - `Placement` - Job placements
@@ -382,6 +465,7 @@ Query Bullhorn entities using SQL-like WHERE syntax.
 | `order_by` | string | No | Sort order (e.g., "-dateAdded") |
 
 **Examples:**
+
 ```
 query_entities(entity="JobOrder", where="salary > 100000")
 query_entities(entity="Candidate", where="status='Active'", order_by="-dateAdded")
@@ -473,16 +557,16 @@ https://bullhorn-mcp.example.com/mcp
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `BULLHORN_CLIENT_ID` | Yes | OAuth 2.0 Client ID |
-| `BULLHORN_CLIENT_SECRET` | Yes | OAuth 2.0 Client Secret |
-| `BULLHORN_USERNAME` | Yes | API Username |
-| `BULLHORN_PASSWORD` | Yes | API Password |
-| `BULLHORN_AUTH_URL` | No | Auth URL (default: https://auth.bullhornstaffing.com) |
-| `BULLHORN_LOGIN_URL` | No | Login URL (default: https://rest.bullhornstaffing.com) |
-| `MCP_TRANSPORT` | No | Transport mode: `stdio` (default) or `http` |
-| `PORT` | No | HTTP listen port when `MCP_TRANSPORT=http` (default: 8000) |
+| Variable                 | Required | Description                                                |
+| ------------------------ | -------- | ---------------------------------------------------------- |
+| `BULLHORN_CLIENT_ID`     | Yes      | OAuth 2.0 Client ID                                        |
+| `BULLHORN_CLIENT_SECRET` | Yes      | OAuth 2.0 Client Secret                                    |
+| `BULLHORN_USERNAME`      | Yes      | API Username                                               |
+| `BULLHORN_PASSWORD`      | Yes      | API Password                                               |
+| `BULLHORN_AUTH_URL`      | No       | Auth URL (default: https://auth.bullhornstaffing.com)      |
+| `BULLHORN_LOGIN_URL`     | No       | Login URL (default: https://rest.bullhornstaffing.com)     |
+| `MCP_TRANSPORT`          | No       | Transport mode: `stdio` (default) or `http`                |
+| `PORT`                   | No       | HTTP listen port when `MCP_TRANSPORT=http` (default: 8000) |
 
 ## Project Structure
 
