@@ -69,7 +69,6 @@ def _build_auth() -> OIDCProxy | None:
         raise ValueError(
             f"HTTP transport requires Entra OAuth. Missing env vars: {', '.join(missing)}"
         )
-
     return OIDCProxy(
         config_url=f"https://login.microsoftonline.com/{tenant_id}/v2.0/.well-known/openid-configuration",
         client_id=client_id,
@@ -77,6 +76,7 @@ def _build_auth() -> OIDCProxy | None:
         base_url=base_url,
         required_scopes=["openid", "profile", "email"],
         forward_resource=False,
+        audience=client_id,
         extra_authorize_params={
             "scope": "openid profile email",
         },
