@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 
 from .config import BullhornConfig
