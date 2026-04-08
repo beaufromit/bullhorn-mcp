@@ -780,7 +780,11 @@ If `clientCorporation` is absent from `fields` (already validated earlier in `cr
 **Change request:** CR8.md
 **User stories:** US-22 (new — see PRD.md FR-11)
 
-**What was delivered:** Added `os` import to `server.py`. Three module-level variables (`_transport_mode`, `_port`, `_host`) are read from env at import time and passed to `FastMCP(host=_host, port=_port, ...)`. `main()` reads `MCP_TRANSPORT` and calls `mcp.run(transport="streamable-http")` for HTTP or `mcp.run()` for stdio; any other value raises `ValueError`. Added `uvicorn>=0.30.0` to `pyproject.toml` dependencies. Updated `.env.example` with commented-out `MCP_TRANSPORT`, `PORT`, `HOST`. Added `## Hosted Deployment` section and extended the Environment Variables table in `README.md`. Added 6 tests in `TestSprint15HttpTransport` (stdio default, http mode, stdio explicit, invalid transport raises, port from env via reload, E2E http startup). 220 tests passing.
+**What was delivered:** Added `os` import to `server.py`. Four module-level variables (`_transport_mode`, `_port`, `_default_host`, `_host`) are read from env at import time and passed to `FastMCP(host=_host, port=_port, ...)`. `HOST` env var is read with `_default_host` as fallback (0.0.0.0 in http mode, 127.0.0.1 in stdio). `main()` uses `_transport_mode` (not re-reading env) to call `mcp.run(transport="streamable-http")` for HTTP or `mcp.run()` for stdio; any other value raises `ValueError`. Added `uvicorn>=0.30.0` to `pyproject.toml` dependencies. Updated `.env.example` with commented-out `MCP_TRANSPORT`, `PORT`, `HOST`. Added `## Hosted Deployment` section and extended the Environment Variables table in `README.md`. Added 6 tests in `TestSprint15HttpTransport` — dispatch tests use `patch.object(server, "_transport_mode", ...)` (not env patching) because `main()` reads the module-level var. Port/host tests use `importlib.reload`. 220 tests passing.
+
+**Review cycle learnings:**
+- `main()` must use module-level `_transport_mode` (not re-read `os.environ`) to stay consistent with the host/port already baked into `FastMCP()` at import time. Mixing import-time and runtime env reads creates silent misconfiguration.
+- Tests for `main()` dispatch must patch `server._transport_mode` directly (via `patch.object`), not `os.environ`, since transport is resolved at import. Tests that need to verify import-time env reading (port, host) require `importlib.reload`.
 
 **Dependency:** All previous sprints complete.
 
