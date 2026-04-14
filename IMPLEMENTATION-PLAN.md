@@ -1147,3 +1147,10 @@ All 15 new tests added plus updates to 5 existing tests that previously assumed 
 - `bulk_import` and `update_record` explicitly commented as unaffected by CR10
 - `test_create_contact_missing_owner` updated: now tests `IdentityResolutionError` path (identity_resolution_failed error code)
 - Existing `TestCreateCompany` tests patched to provide `resolve_caller` mock since owner is now auto-stamped
+
+**Sprint 17 review cycle note:** During the review/iterate cycle, three test issues were identified and fixed:
+1. `test_create_company_label_resolution` had both assertions dropped instead of updated to include the auto-injected `owner` key — restored with correct expected values
+2. `test_create_company_success` was missing `mock_client.create.assert_called_once_with(...)` — restored with `owner: {"id": 1}` included
+3. `test_create_contact_auto_owner_payload_no_leak` contained a vacuous `or True` assertion — removed
+
+Pattern: when adding auto-injection before `resolve_fields`, the `resolve_fields.assert_called_once_with` arguments must include the injected key.
