@@ -915,8 +915,12 @@ class TestMCPServerSetup:
     """Tests for MCP server configuration."""
 
     def test_server_has_tools(self):
-        """Test that all expected tools are registered."""
-        tools = list(server.mcp._tool_manager._tools.keys())
+        """Test that all expected tools are registered.
+
+        FastMCP 3.x removed _tool_manager; use the public async list_tools() API instead.
+        """
+        import asyncio
+        tools = [t.name for t in asyncio.run(server.mcp.list_tools())]
 
         assert "list_jobs" in tools
         assert "list_candidates" in tools
@@ -1870,11 +1874,13 @@ class TestSprint15HttpTransport:
 
         main() uses the module-level _transport_mode variable (set at import time),
         not os.environ directly. Patch the module-level var to test dispatch logic.
+        The call also includes host= and port= from the module-level _host/_port vars.
         """
+        from unittest.mock import ANY
         with patch.object(server, "_transport_mode", "http"):
             with patch.object(server.mcp, "run") as mock_run:
                 server.main()
-        mock_run.assert_called_once_with(transport="streamable-http")
+        mock_run.assert_called_once_with(transport="streamable-http", host=ANY, port=ANY)
 
     def test_main_stdio_explicit(self):
         """main() with _transport_mode=stdio calls mcp.run() with no transport kwarg."""
@@ -1890,17 +1896,17 @@ class TestSprint15HttpTransport:
                 server.main()
 
     def test_fastmcp_port_configured_from_env(self):
-        """FastMCP is constructed with the port from PORT env var.
+        """PORT env var is read into the module-level _port variable at import time.
 
-        Because mcp = FastMCP(...) runs at module import time, we must reload
-        the module after patching the env to observe the new port value.
-        After the assertion the module is reloaded again to restore clean state.
+        FastMCP 3.x removed mcp.settings.port (port/host are now passed to run(), not
+        the constructor). We assert the module-level _port variable directly — that is
+        what main() uses when calling mcp.run(port=_port).
         """
         import bullhorn_mcp.server as server_module
 
         with patch.dict(os.environ, {"PORT": "9999", "MCP_TRANSPORT": "stdio"}):
             importlib.reload(server_module)
-            assert server_module.mcp.settings.port == 9999
+            assert server_module._port == 9999
 
         # Restore original module state so subsequent tests are unaffected.
         importlib.reload(server_module)
@@ -1908,19 +1914,33 @@ class TestSprint15HttpTransport:
     def test_sprint15_e2e_http_mode_startup(self):
         """E2E: MCP_TRANSPORT=http and PORT=8001 → mcp.run called with streamable-http.
 
-        Also verifies the module-level _port variable reflects PORT at import time
-        by checking mcp.settings.port after a reload.
+        Port is verified via server_module._port (FastMCP 3.x no longer exposes settings.port).
+        OIDCProxy is mocked to prevent real HTTP calls to OIDC discovery endpoint during reload.
         """
+        from unittest.mock import ANY, MagicMock
         import bullhorn_mcp.server as server_module
 
-        with patch.dict(os.environ, {"MCP_TRANSPORT": "http", "PORT": "8001"}):
-            importlib.reload(server_module)
-            assert server_module.mcp.settings.port == 8001
+        entra_vars = {
+            "MCP_TRANSPORT": "http",
+            "PORT": "8001",
+            "ENTRA_TENANT_ID": "test-tenant",
+            "ENTRA_CLIENT_ID": "test-client",
+            "ENTRA_CLIENT_SECRET": "test-secret",
+            "MCP_BASE_URL": "https://test.example.com",
+        }
+        # OIDCProxy.__init__ fetches OIDC discovery doc over HTTP at construction time.
+        # Mock the class so reload doesn't make real network calls.
+        with patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", MagicMock()):
+            with patch.dict(os.environ, entra_vars):
+                importlib.reload(server_module)
+                assert server_module._port == 8001
 
-            with patch.object(server_module.mcp, "run") as mock_run:
-                server_module.main()
+                with patch.object(server_module.mcp, "run") as mock_run:
+                    server_module.main()
 
-            mock_run.assert_called_once_with(transport="streamable-http")
+                mock_run.assert_called_once_with(
+                    transport="streamable-http", host=ANY, port=ANY
+                )
 
-        # Restore
+        # Restore to stdio mode
         importlib.reload(server_module)

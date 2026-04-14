@@ -30,7 +30,22 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 12 | **COMPLETE** | CR6: Investigate and fix title field injection in update_record — 201 tests passing, tagged v0.0.12 |
 | Sprint 13 | **COMPLETE** | CR7: Strip title from ClientContact write payloads with warning — 207 tests passing, tagged v0.0.13 |
 | Sprint 14 | **COMPLETE** | CR5: Add duplicate check to create_contact before creation — 214 tests passing, tagged v0.0.14 |
-| Sprint 15 | **COMPLETE** | CR8: Add HTTP transport mode for remote hosting — 220 tests passing, tagged v0.0.15 |
+| Sprint 15 | **COMPLETE** (4 tests regressed post-tag) | CR8: Add HTTP transport mode for remote hosting — tagged v0.0.15; 216/220 pass after post-sprint Entra OIDC commits |
+| Sprint 16 | **COMPLETE** | Fix Sprint 15 test regressions + CR9: Identity resolution — 229 tests passing |
+| Sprint 17 | **PLANNED** | CR10: Owner stamping — auto-populate owner from authenticated user in create_contact / create_company |
+
+### Sprint 15 post-tag regression note
+
+After v0.0.15 was tagged, a series of "fixing OIDC scopes" commits changed how `_build_auth()` works: HTTP mode now validates Entra env vars at module import time and raises `ValueError` if they are absent. This broke 4 Sprint 15 tests:
+
+| Failing test | Root cause |
+|---|---|
+| `test_server_has_tools` | FastMCP removed `_tool_manager._tools` — internal API changed |
+| `test_main_http_transport` | `mcp.run()` now called with `host=` and `port=` kwargs; test expected only `transport=` |
+| `test_fastmcp_port_configured_from_env` | FastMCP no longer exposes `mcp.settings.port` |
+| `test_sprint15_e2e_http_mode_startup` | `importlib.reload` triggers `_build_auth()` which raises `ValueError` (Entra vars missing in test env) |
+
+These are fixed as the first tasks in Sprint 16.
 
 ---
 
@@ -910,3 +925,210 @@ Key regression checks:
 - Sprint 6 depends on Sprint 3 (`_request()` JSON body support for `update()` and `add_note()`).
 - Sprint 7 depends on all previous sprints (orchestrates create, duplicate detection, owner resolution, metadata, and field label resolution).
 - Sprint 8 is a standalone bug fix; it depends on Sprint 2 (metadata module) and Sprint 4 (create_contact tool) but does not block or depend on Sprint 7.
+- Sprint 16 depends on Sprint 15 (fixes its regressions) and introduces CR9 infrastructure used by Sprint 17.
+- Sprint 17 depends on Sprint 16 (CR9's `identity.py` and `IdentityResolutionError`).
+
+---
+
+## Sprint 16: Fix Sprint 15 Test Regressions + CR9 Identity Resolution — COMPLETE
+
+**Tag:** v0.0.16
+**Change requests:** CR9.md (new); fixes Sprint 15 regressions
+**User stories:** None directly (CR9 is infrastructure; no user stories are modified in this sprint)
+**Dependency:** Sprint 15 complete
+
+**What was delivered:**
+- Fixed 4 Sprint 15 test regressions caused by FastMCP 3.x API changes + post-tag Entra OIDC commits:
+  - `test_server_has_tools` — switched from removed `_tool_manager._tools` to `asyncio.run(mcp.list_tools())`.
+  - `test_main_http_transport` — updated assertion to include `host=ANY, port=ANY` kwargs.
+  - `test_fastmcp_port_configured_from_env` — assert `_port` module-level var instead of removed `mcp.settings.port`.
+  - `test_sprint15_e2e_http_mode_startup` — mock `OIDCProxy` to prevent real HTTP calls during reload; assert `_port` var; include host/port in `mcp.run` assertion.
+- Created `src/bullhorn_mcp/identity.py` with `IdentityResolutionError` and `resolve_caller(client)`. Resolves authenticated user's email from Entra JWT claims → Bullhorn CorporateUser query. Module-level cache (single-user process assumption). `_reset_caller_cache()` helper for test isolation.
+- Created `tests/test_identity.py` with 9 tests covering all acceptance criteria from CR9.
+- 229 tests passing (220 pre-existing fixed + 9 new identity tests).
+
+### Background
+
+Two independent work items are bundled here because both are small and the regression fixes are prerequisites for a clean baseline before adding new capability.
+
+**Regression fixes** — Four Sprint 15 tests broke after post-tag Entra OIDC commits (see regression note in Current Status). The tests must be fixed so they accurately reflect the current server behaviour before new code is added.
+
+**CR9** — The server authenticates users via Microsoft Entra but does not use the authenticated identity anywhere. CR9 adds a new module (`identity.py`) with `resolve_caller()` which extracts the user's email from the Entra ID token and resolves it to a Bullhorn CorporateUser record. The resolved identity is cached per server process. This is infrastructure only — no existing tools are changed in this sprint.
+
+### Tasks
+
+#### T16.1 — Fix `test_server_has_tools` (Sprint 15 regression)
+**File:** `tests/test_server.py`
+
+FastMCP removed the `_tool_manager._tools` internal attribute. Update the test to use the current FastMCP public API for listing registered tools.
+
+First, inspect the FastMCP object at runtime (e.g. `dir(server.mcp)`) to find the correct public attribute or method. Likely candidates: `mcp.list_tools()` (async) or a tools dict accessible via a public attribute. Confirm by reading the installed FastMCP source.
+
+Update `test_server_has_tools` to assert the same set of 16 tool names using the correct API.
+
+- **Unit test:** `tests/test_server.py::TestMCPServerSetup::test_server_has_tools` — must pass after fix; still asserts all 16 registered tool names.
+
+#### T16.2 — Fix `test_main_http_transport` (Sprint 15 regression)
+**File:** `tests/test_server.py`
+
+The `main()` implementation was updated: `mcp.run()` is now called with `host=` and `port=` kwargs in addition to `transport=`. The test asserted `mock_run.assert_called_once_with(transport="streamable-http")` which no longer matches.
+
+Update the assertion to use `assert_called_once_with(transport="streamable-http", host=mock.ANY, port=mock.ANY)` (or pin the exact host/port values if they are deterministic in the test environment). The goal is to assert the transport argument without brittlely asserting the specific host/port, since those come from env vars already tested elsewhere.
+
+- **Unit test:** `tests/test_server.py::TestSprint15HttpTransport::test_main_http_transport` — must pass; asserts `transport="streamable-http"` is forwarded.
+
+#### T16.3 — Fix `test_fastmcp_port_configured_from_env` (Sprint 15 regression)
+**File:** `tests/test_server.py`
+
+FastMCP no longer exposes `mcp.settings.port`. Find the correct attribute by inspecting the installed FastMCP version. Options: `mcp._port`, `mcp.port`, or the attribute may be on a different object. If FastMCP offers no public attribute for the configured port, assert indirectly — e.g. that the `_port` module-level variable in `server.py` equals `9999` after reload with `PORT=9999`.
+
+Update the assertion accordingly.
+
+- **Unit test:** `tests/test_server.py::TestSprint15HttpTransport::test_fastmcp_port_configured_from_env` — must pass; asserts `PORT=9999` env var propagated correctly at module load.
+
+#### T16.4 — Fix `test_sprint15_e2e_http_mode_startup` (Sprint 15 regression)
+**File:** `tests/test_server.py`
+
+`importlib.reload(server_module)` now triggers `_build_auth()` which raises `ValueError` when Entra env vars are absent. The test must set the required Entra env vars in the patched environment before reloading, so `_build_auth()` can construct an `OIDCProxy` without error (or mock `_build_auth` to return `None`).
+
+The simpler approach: patch `_build_auth` to return `None` during the reload (using `patch` as a context manager before the reload call), then assert `mcp.run` was called with `transport="streamable-http"`.
+
+Alternatively, set dummy Entra env vars (`ENTRA_TENANT_ID=test`, `ENTRA_CLIENT_ID=test`, `ENTRA_CLIENT_SECRET=test`, `MCP_BASE_URL=https://test`) in the `monkeypatch` env before reload — this avoids needing to mock `OIDCProxy` construction. Confirm which approach is less fragile.
+
+- **Unit test:** `tests/test_server.py::TestSprint15HttpTransport::test_sprint15_e2e_http_mode_startup` — must pass; asserts HTTP mode env triggers HTTP transport at startup.
+
+#### T16.5 — Create `src/bullhorn_mcp/identity.py` with `resolve_caller()`
+**File:** `src/bullhorn_mcp/identity.py` (new)
+
+**`IdentityResolutionError`**
+- Custom exception extending `Exception`.
+- Defined in `identity.py` (no shared exceptions module needed at this stage).
+
+**`resolve_caller(client: BullhornClient) -> dict`**
+- Imports `get_access_token` from `fastmcp.server.dependencies`.
+- If `get_access_token()` returns `None`, raises `IdentityResolutionError("No authentication token available")`.
+- Extracts `email` from `token.claims`. Falls back to `preferred_username` if `email` is absent. If neither is present, raises `IdentityResolutionError("No email claim found in token")`.
+- Queries Bullhorn: `client.query(entity="CorporateUser", where=f"email='{email}'", fields="id,firstName,lastName,email")`.
+  - **Important:** Do NOT include `department` in the fields list (per CR9 AC-5 and the lesson from Sprint 10 / CR3).
+- Exactly one result → return `{"id": int, "firstName": str, "lastName": str, "email": str}`.
+- Zero results → raises `IdentityResolutionError(f"No Bullhorn CorporateUser found for email '{email}'")`
+- Multiple results → raises `IdentityResolutionError(f"Multiple Bullhorn CorporateUsers found for email '{email}' — expected exactly one")`
+
+**Caching**
+- Module-level cache: `_resolved_caller: dict | None = None`.
+- On first successful call, store result in `_resolved_caller`. Subsequent calls return the cached dict without querying Bullhorn.
+- The cache is per server process — acceptable because the server runs as a single-user systemd service behind Cloudflare Tunnel.
+- For test isolation, expose `_reset_caller_cache()` (or allow direct module-level reset via `identity._resolved_caller = None`) so tests can clear the cache between runs.
+
+**No changes to existing tools** — `resolve_caller()` is importable but not called by any tool in this sprint.
+
+#### T16.6 — Tests for `identity.py`
+**File:** `tests/test_identity.py` (new)
+
+All tests use `respx` for httpx mocking (consistent with existing test files) and `unittest.mock.patch` for `get_access_token`.
+
+- `test_resolve_caller_success` — mock `get_access_token()` returning a token with `email` claim; mock CorporateUser query returning one result; assert returned dict is `{"id": 1, "firstName": "Beau", "lastName": "Warren", "email": "beau@thepanel.com"}`.
+- `test_resolve_caller_no_token` — mock `get_access_token()` returning `None`; assert `IdentityResolutionError` raised with "No authentication token available".
+- `test_resolve_caller_no_email_claim` — mock token with no `email` and no `preferred_username`; assert `IdentityResolutionError` raised with "No email claim found".
+- `test_resolve_caller_fallback_to_preferred_username` — mock token with no `email` but `preferred_username` = "beau@thepanel.com"; mock CorporateUser query; assert query uses "beau@thepanel.com".
+- `test_resolve_caller_no_match` — mock CorporateUser query returning empty list; assert `IdentityResolutionError` raised with "No Bullhorn CorporateUser found".
+- `test_resolve_caller_multiple_matches` — mock CorporateUser query returning two results; assert `IdentityResolutionError` raised with "Multiple Bullhorn CorporateUsers found".
+- `test_resolve_caller_cached` — call `resolve_caller()` twice; assert CorporateUser query endpoint called exactly once (cache hit on second call).
+- `test_resolve_caller_query_fields_no_department` — mock CorporateUser query; call `resolve_caller()`; assert the `fields` query parameter sent to Bullhorn does not contain `"department"`.
+
+### Sprint 16 End-to-End Test
+
+- `tests/test_identity.py::test_resolve_caller_e2e_full_flow` — mock `get_access_token()` returning a token with `email = "beau@thepanel.com"`, mock CorporateUser query returning one result, reset cache before test; assert `resolve_caller()` returns the expected dict; call again and assert the HTTP endpoint was only called once (cache works).
+
+### Expected test count after Sprint 16
+
+Current passing: 216. Regression fixes change 4 failing tests to passing (no new tests). New `test_identity.py` adds 9 tests. **Expected: 229 tests passing, 0 failing.**
+
+---
+
+## Sprint 17: CR10 — Owner Stamping from Authenticated User
+
+**Change request:** CR10.md
+**User stories affected:** US-1 (create company), US-2 (create contact), US-4 (owner required → optional)
+**Dependency:** Sprint 16 complete (requires `resolve_caller` and `IdentityResolutionError` from `identity.py`)
+
+### Background
+
+Currently `create_contact` validates that `owner` is present and returns an error if absent. `create_company` does not require owner. CR10 changes both tools: if the caller does not provide `owner`, the server automatically sets it to the authenticated user's Bullhorn CorporateUser (resolved via `resolve_caller()` from Sprint 16). If the caller explicitly provides `owner`, that value is honoured without override.
+
+This removes friction for both consultants (who are already authenticated) and automated agents (who must otherwise be configured with owner IDs).
+
+`bulk_import` and `update_record` are **not affected** — bulk import has its own owner logic, and update is a deliberate field change.
+
+### Tasks
+
+#### T17.1 — Make `owner` optional in `create_contact`; auto-populate from authenticated user
+**File:** `src/bullhorn_mcp/server.py`
+
+Current behaviour: if `"owner"` not in `fields`, returns `{"error": "owner is required"}`.
+
+New behaviour:
+```python
+# Import at top of server.py:
+from .identity import resolve_caller, IdentityResolutionError
+
+# In create_contact, replace the "owner is required" guard:
+if "owner" not in fields:
+    try:
+        caller = resolve_caller(get_client())
+        fields = dict(fields)  # don't mutate input
+        fields["owner"] = {"id": caller["id"]}
+    except IdentityResolutionError as e:
+        return format_response({
+            "error": "identity_resolution_failed",
+            "message": str(e),
+            "hint": "Provide an explicit 'owner' field or check that your email matches a Bullhorn CorporateUser."
+        })
+```
+
+The auto-populated `owner` is set before the duplicate check and before `client.create()`, so it flows through the existing pipeline unchanged.
+
+If `owner` IS present, the existing `resolve_owner()` path handles it (string name, `{"id": int}`, ambiguous results) exactly as before.
+
+Update the `create_contact` docstring to document that `owner` is optional and describe the auto-population behaviour.
+
+- **Unit test:** `tests/test_server.py::test_create_contact_owner_auto_populated` — mock `resolve_caller()` returning `{"id": 42, ...}`; call `create_contact({..., no owner})` with mocked duplicate search (no results) and mocked PUT/GET; assert PUT payload contains `"owner": {"id": 42}`.
+- **Unit test:** `tests/test_server.py::test_create_contact_explicit_owner_dict_wins` — provide `owner: {"id": 99}` in fields; assert `resolve_caller()` is NOT called (patch and assert no calls); assert PUT payload contains `"owner": {"id": 99}`.
+- **Unit test:** `tests/test_server.py::test_create_contact_explicit_owner_name_wins` — provide `owner: "Maryrose Lyons"` in fields; assert `resolve_owner()` is called, `resolve_caller()` is NOT called; existing disambiguation behaviour preserved.
+- **Unit test:** `tests/test_server.py::test_create_contact_identity_resolution_fails` — mock `resolve_caller()` raising `IdentityResolutionError("No authentication token available")`; call without `owner`; assert response contains `"error": "identity_resolution_failed"` and the hint.
+- **Unit test:** `tests/test_server.py::test_create_contact_no_owner_required_error_gone` — call without `owner` with successful identity resolution; assert response does NOT contain `"owner is required"`.
+- **Payload audit test:** `tests/test_server.py::test_create_contact_auto_owner_payload_no_leak` — when owner is auto-populated, assert PUT body contains only `"owner": {"id": int}` from the resolved identity — no `firstName`, `lastName`, or `email` from the CorporateUser record.
+
+#### T17.2 — Make `owner` optional in `create_company`; auto-populate from authenticated user
+**File:** `src/bullhorn_mcp/server.py`
+
+Apply the same pattern as T17.1 to `create_company`. If `owner` is absent from `fields`, call `resolve_caller()` and inject `{"id": caller["id"]}`. If present, use it as-is (no name resolution — `create_company` does not currently use `resolve_owner()`; maintain this behaviour).
+
+Update the `create_company` docstring to document that `owner` is optional.
+
+- **Unit test:** `tests/test_server.py::test_create_company_owner_auto_populated` — mock `resolve_caller()` returning `{"id": 42, ...}`; call `create_company({..., no owner})` with mocked PUT/GET; assert PUT payload contains `"owner": {"id": 42}`.
+- **Unit test:** `tests/test_server.py::test_create_company_explicit_owner_wins` — provide `owner: {"id": 99}`; assert `resolve_caller()` is NOT called; PUT payload has `"owner": {"id": 99}`.
+- **Unit test:** `tests/test_server.py::test_create_company_identity_resolution_fails` — mock `resolve_caller()` raising `IdentityResolutionError`; assert `"error": "identity_resolution_failed"` response.
+
+#### T17.3 — Confirm `bulk_import` and `update_record` are unaffected
+**File:** `src/bullhorn_mcp/server.py`, `src/bullhorn_mcp/bulk.py`
+
+Code review only. Confirm:
+- `bulk_import` calls `BulkImporter` which calls `client.resolve_owner()` directly — `resolve_caller()` is never called in this path.
+- `update_record` does not auto-populate `owner` — updating owner is a deliberate caller action.
+
+Add a comment to `bulk_import` and `update_record` in `server.py` noting that CR10 owner stamping intentionally does not apply.
+
+No new logic changes. Add one regression test for each:
+- **Unit test:** `tests/test_server.py::test_bulk_import_does_not_call_resolve_caller` — call `bulk_import` with an `owner` in the contacts list; assert `resolve_caller()` is never invoked.
+- **Unit test:** `tests/test_server.py::test_update_record_does_not_auto_populate_owner` — call `update_record` without an `owner` field; assert `resolve_caller()` is never invoked, and the POST body does not contain `owner`.
+
+### Sprint 17 End-to-End Tests
+
+- `tests/test_server.py::test_e2e_create_contact_no_owner_auto_populated` — mock: `get_access_token()` returning token with `email = "beau@thepanel.com"`, CorporateUser query returning `{"id": 7}`, ClientContact search (no duplicates), ClientContact PUT (capture body), ClientContact GET; call `create_contact({"firstName": "Jane", "lastName": "Doe", "clientCorporation": {"id": 1}})` without owner; assert PUT body has `owner: {"id": 7}` and response has `changedEntityId`.
+- `tests/test_server.py::test_e2e_create_contact_explicit_owner_overrides` — same mocks except token/CorporateUser query not set up; call with `owner: {"id": 99}`; assert PUT body has `owner: {"id": 99}`, `resolve_caller()` never called.
+- `tests/test_server.py::test_e2e_create_company_no_owner_auto_populated` — same pattern for company creation; assert PUT body contains `owner: {"id": 7}`.
+
+### Expected test count after Sprint 17
+
+Previous: 229 tests. New tests in T17.1 (6), T17.2 (3), T17.3 (2), E2E (3) = 14 new tests. **Expected: 243 tests passing, 0 failing.**
