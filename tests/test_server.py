@@ -357,6 +357,9 @@ class TestCreateCompany:
         assert data["changedEntityId"] == 98765
         assert data["changeType"] == "INSERT"
         assert data["data"]["name"] == "Acme Holdings Ltd"
+        mock_client.create.assert_called_once_with(
+            "ClientCorporation", {"name": "Acme Holdings Ltd", "status": "Prospect", "owner": {"id": 1}}
+        )
 
     def test_create_company_api_error(self, mock_client, mock_metadata):
         """create_company returns ERROR prefix on API failure."""
@@ -387,6 +390,15 @@ class TestCreateCompany:
              patch.object(server, "get_metadata", return_value=meta), \
              patch.object(server, "resolve_caller", return_value={"id": 1}):
             server.create_company({"name": "Acme", "Industry": "Technology"})
+
+        # resolve_fields receives the caller fields plus the auto-injected owner
+        meta.resolve_fields.assert_called_once_with(
+            "ClientCorporation", {"name": "Acme", "Industry": "Technology", "owner": {"id": 1}}
+        )
+        # client.create receives the resolved fields (label "Industry" → "industryList")
+        mock_client.create.assert_called_once_with(
+            "ClientCorporation", {"name": "Acme", "industryList": "Technology", "owner": {"id": 1}}
+        )
 
 
 class TestCreateContact:
@@ -2098,9 +2110,7 @@ class TestSprint17CreateContact:
 
         create_fields = mock_client.create.call_args[0][1]
         assert create_fields["owner"] == {"id": 42}
-        # No caller dict fields should leak into the contact payload
-        assert "email" not in create_fields or create_fields.get("email") is None or True  # email may be from contact
-        # Specifically: the owner value must be only {id: 42}, not the full caller dict
+        # The owner value must be only {id: 42} — no other CorporateUser fields leaked
         assert list(create_fields["owner"].keys()) == ["id"]
 
 
