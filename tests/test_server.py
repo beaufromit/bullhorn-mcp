@@ -1942,5 +1942,7 @@ class TestSprint15HttpTransport:
                     transport="streamable-http", host=ANY, port=ANY
                 )
 
-        # Restore to stdio mode
-        importlib.reload(server_module)
+        # Restore to stdio mode. Explicitly pin MCP_TRANSPORT=stdio so the restore reload
+        # cannot be affected by any stale MCP_TRANSPORT=http left in the environment.
+        with patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}, clear=False):
+            importlib.reload(server_module)

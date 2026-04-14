@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from fastmcp.server.dependencies import get_access_token
+
 if TYPE_CHECKING:
     from .client import BullhornClient
 
@@ -49,9 +51,6 @@ def resolve_caller(client: "BullhornClient") -> dict:
 
     if _resolved_caller is not None:
         return _resolved_caller
-
-    # Import here to avoid circular imports and to allow easy mocking in tests.
-    from fastmcp.server.dependencies import get_access_token
 
     token = get_access_token()
     if token is None:

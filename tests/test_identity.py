@@ -65,21 +65,21 @@ class TestResolveCaller:
         )
         token = _make_token({"email": "beau@thepanel.com"})
 
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=token):
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             result = resolve_caller(client)
 
         assert result == SAMPLE_USER
 
     def test_resolve_caller_no_token(self, client):
         """Raises IdentityResolutionError when get_access_token returns None."""
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=None):
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=None):
             with pytest.raises(IdentityResolutionError, match="No authentication token available"):
                 resolve_caller(client)
 
     def test_resolve_caller_no_email_claim(self, client):
         """Raises IdentityResolutionError when token has neither email nor preferred_username."""
         token = _make_token({"name": "Beau Warren", "oid": "some-oid"})
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=token):
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             with pytest.raises(IdentityResolutionError, match="No email claim found"):
                 resolve_caller(client)
 
@@ -91,7 +91,7 @@ class TestResolveCaller:
         )
         token = _make_token({"preferred_username": "beau@thepanel.com"})
 
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=token):
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             result = resolve_caller(client)
 
         assert result["email"] == "beau@thepanel.com"
@@ -109,7 +109,7 @@ class TestResolveCaller:
         )
         token = _make_token({"email": "unknown@example.com"})
 
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=token):
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             with pytest.raises(IdentityResolutionError, match="No Bullhorn CorporateUser found"):
                 resolve_caller(client)
 
@@ -129,7 +129,7 @@ class TestResolveCaller:
         )
         token = _make_token({"email": "beau@thepanel.com"})
 
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=token):
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             with pytest.raises(IdentityResolutionError, match="Multiple Bullhorn CorporateUsers found"):
                 resolve_caller(client)
 
@@ -141,7 +141,7 @@ class TestResolveCaller:
         )
         token = _make_token({"email": "beau@thepanel.com"})
 
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=token):
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             first = resolve_caller(client)
             second = resolve_caller(client)
 
@@ -161,13 +161,17 @@ class TestResolveCaller:
         )
         token = _make_token({"email": "beau@thepanel.com"})
 
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=token):
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             resolve_caller(client)
 
-        # Inspect the actual query params sent
+        # Parse the query string and check the 'fields' parameter specifically.
+        # Checking the full URL string would be a false negative if the email
+        # address itself happened to contain the word "department".
+        from urllib.parse import urlparse, parse_qs
         request = route.calls.last.request
-        fields_param = str(request.url)
-        assert "department" not in fields_param
+        qs = parse_qs(urlparse(str(request.url)).query)
+        fields_value = qs.get("fields", [""])[0]
+        assert "department" not in fields_value
 
 
 class TestResolveCaller_E2E:
@@ -186,7 +190,7 @@ class TestResolveCaller_E2E:
         )
         token = _make_token({"email": "beau@thepanel.com", "name": "Beau Warren"})
 
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=token):
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             result1 = resolve_caller(client)
             result2 = resolve_caller(client)
 
