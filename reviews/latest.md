@@ -1,8 +1,8 @@
-# Review: Fix HOST env var not read and main() transport/host mismatch
+# Review: Fix M1 patch target, M2 restore reload safety, M3 fields param assertion
 
-**Commit:** ee7c4fa
-**Date:** 2026-04-08
-**Files changed:** 2
+**Commit:** a33b8a3
+**Date:** 2026-04-14
+**Files changed:** 3 (src/bullhorn_mcp/identity.py, tests/test_identity.py, tests/test_server.py)
 
 ## CRITICAL
 
@@ -14,9 +14,14 @@ None.
 
 ## MINOR
 
-- **m1: No test for HOST env var being read** — `_host = os.environ.get("HOST", _default_host)` is a new one-liner in server.py but no test verifies that setting `HOST=192.168.1.1` in the environment results in `mcp.settings.host == "192.168.1.1"`. The port has an analogous reload-based test (`test_fastmcp_port_configured_from_env`); HOST does not. The code is simple enough that this is low-risk, but it is a gap in the test pattern established by the sprint.
+- **m1: `mock_session` appears in test function signatures where it is only used indirectly** — `tests/test_identity.py`, multiple test methods
+  Carried forward from prior commit. `test_resolve_caller_no_match`, `test_resolve_caller_multiple_matches`, `test_resolve_caller_cached`, and `test_resolve_caller_query_fields_no_department` accept `mock_session` as a direct parameter but never reference it; it flows in indirectly through the `client` fixture chain.
 
-- **m2: Unused import `mock_patch` persists** — `from unittest.mock import Mock, patch, patch as mock_patch` on line 7 of `test_server.py`. The previous review flagged this. This diff does not introduce it and does not fix it (correctly, per constraints), but it remains.
+- **m2: `parse_qs` and `urlparse` imported inside the test body** — `tests/test_identity.py:164–165`
+  `from urllib.parse import urlparse, parse_qs` is declared inside `test_resolve_caller_query_fields_no_department` rather than at module level. Functional but inconsistent with the module-level import style throughout this file.
+
+- **m3: Unused import `mock_patch` persists** — `tests/test_server.py:7`
+  `from unittest.mock import Mock, patch, patch as mock_patch`. Not introduced by this diff; carried forward from earlier sprints.
 
 ## Verdict
 

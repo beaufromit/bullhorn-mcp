@@ -942,10 +942,11 @@ Key regression checks:
   - `test_server_has_tools` — switched from removed `_tool_manager._tools` to `asyncio.run(mcp.list_tools())`.
   - `test_main_http_transport` — updated assertion to include `host=ANY, port=ANY` kwargs.
   - `test_fastmcp_port_configured_from_env` — assert `_port` module-level var instead of removed `mcp.settings.port`.
-  - `test_sprint15_e2e_http_mode_startup` — mock `OIDCProxy` to prevent real HTTP calls during reload; assert `_port` var; include host/port in `mcp.run` assertion.
-- Created `src/bullhorn_mcp/identity.py` with `IdentityResolutionError` and `resolve_caller(client)`. Resolves authenticated user's email from Entra JWT claims → Bullhorn CorporateUser query. Module-level cache (single-user process assumption). `_reset_caller_cache()` helper for test isolation.
-- Created `tests/test_identity.py` with 9 tests covering all acceptance criteria from CR9.
+  - `test_sprint15_e2e_http_mode_startup` — mock `OIDCProxy` to prevent real HTTP calls during reload; assert `_port` var; include host/port in `mcp.run` assertion; wrap restore reload in `patch.dict(MCP_TRANSPORT=stdio)` to guard against stale env.
+- Created `src/bullhorn_mcp/identity.py` with `IdentityResolutionError` and `resolve_caller(client)`. `get_access_token` is a module-level import so tests patch `bullhorn_mcp.identity.get_access_token` (use site). Resolves authenticated user's email from Entra JWT claims → Bullhorn CorporateUser query. Module-level cache (single-user process assumption). `_reset_caller_cache()` helper for test isolation.
+- Created `tests/test_identity.py` with 9 tests covering all acceptance criteria from CR9. The `fields` query-param assertion uses `parse_qs` on the parsed URL, not a full-URL substring check.
 - 229 tests passing (220 pre-existing fixed + 9 new identity tests).
+- Review learnings: always patch at the use site (`bullhorn_mcp.identity.get_access_token`), not the definition site; restore reloads that touch HTTP mode must pin `MCP_TRANSPORT=stdio` explicitly.
 
 ### Background
 
