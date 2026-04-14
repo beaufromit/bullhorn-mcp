@@ -12,6 +12,7 @@ from .client import BullhornClient, BullhornAPIError
 from .metadata import BullhornMetadata
 from .fuzzy import score_company_match, categorize_score, score_contact_match
 from .bulk import BulkImporter
+from .identity import resolve_caller, IdentityResolutionError
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -434,6 +435,7 @@ def create_company(fields: dict) -> str:
     Args:
         fields: Dictionary of field names (or display labels) and values for the new company.
                 Field labels are resolved to API names automatically (e.g. "Industry" → "industryList").
+                Optional: owner (auto-populated from authenticated user if absent).
                 Example: {"name": "Acme Holdings Ltd", "status": "Prospect", "phone": "+1 555 0100"}
 
     Returns:
@@ -446,6 +448,17 @@ def create_company(fields: dict) -> str:
     """
     try:
         client = get_client()
+        if "owner" not in fields:
+            try:
+                caller = resolve_caller(client)
+                fields = dict(fields)  # don't mutate input
+                fields["owner"] = {"id": caller["id"]}
+            except IdentityResolutionError as e:
+                return format_response({
+                    "error": "identity_resolution_failed",
+                    "message": str(e),
+                    "hint": "Provide an explicit 'owner' field or check that your email matches a Bullhorn CorporateUser.",
+                })
         resolved = get_metadata().resolve_fields("ClientCorporation", fields)
         result = client.create("ClientCorporation", resolved)
         return format_response(result)
@@ -460,7 +473,7 @@ def create_contact(fields: dict, force: bool = False) -> str:
 
     Args:
         fields: Dictionary of field names (or display labels) and values.
-                Required keys: owner, clientCorporation (with an id).
+                Required keys: clientCorporation (with an id). Optional: owner (auto-populated from authenticated user if absent).
                 owner accepts either {"id": 12345} or a consultant name string
                 such as "Maryrose Lyons" (resolved to a Bullhorn CorporateUser ID).
                 clientCorporation must be {"id": <company_id>}.
@@ -490,7 +503,16 @@ def create_contact(fields: dict, force: bool = False) -> str:
         client = get_client()
 
         if "owner" not in fields:
-            return format_response({"error": "owner_required", "message": "owner is required to create a ClientContact."})
+            try:
+                caller = resolve_caller(client)
+                fields = dict(fields)  # don't mutate input
+                fields["owner"] = {"id": caller["id"]}
+            except IdentityResolutionError as e:
+                return format_response({
+                    "error": "identity_resolution_failed",
+                    "message": str(e),
+                    "hint": "Provide an explicit 'owner' field or check that your email matches a Bullhorn CorporateUser.",
+                })
 
         if "clientCorporation" not in fields:
             return format_response({"error": "clientCorporation_required", "message": "clientCorporation is required to create a ClientContact."})
@@ -584,6 +606,7 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
         - update_record("ClientContact", 54321, {"Consultant": {"id": 99}})
     """
     try:
+        # CR10 owner stamping intentionally does not apply here — update_record modifies existing records only.
         client = get_client()
         resolved = get_metadata().resolve_fields(entity, fields)
 
@@ -829,6 +852,7 @@ def bulk_import(companies: list, contacts: list) -> str:
           )
     """
     try:
+        # CR10 owner stamping intentionally does not apply here — bulk_import callers must supply owner explicitly per contact.
         importer = BulkImporter(get_client(), get_metadata())
         result = importer.process(companies, contacts)
         return format_response(result)

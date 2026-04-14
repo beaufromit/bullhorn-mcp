@@ -32,7 +32,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 14 | **COMPLETE** | CR5: Add duplicate check to create_contact before creation — 214 tests passing, tagged v0.0.14 |
 | Sprint 15 | **COMPLETE** (4 tests regressed post-tag) | CR8: Add HTTP transport mode for remote hosting — tagged v0.0.15; 216/220 pass after post-sprint Entra OIDC commits |
 | Sprint 16 | **COMPLETE** | Fix Sprint 15 test regressions + CR9: Identity resolution — 229 tests passing |
-| Sprint 17 | **PLANNED** | CR10: Owner stamping — auto-populate owner from authenticated user in create_contact / create_company |
+| Sprint 17 | **COMPLETE** | CR10: Owner stamping — auto-populate owner from authenticated user in create_contact / create_company — 244 tests passing |
 
 ### Sprint 15 post-tag regression note
 
@@ -71,9 +71,9 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
 - `tests/test_metadata.py` — 21 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 90 tests (all 16 tools + server setup + E2E tests Sprints 1–14)
+- `tests/test_server.py` — 105 tests (all 16 tools + server setup + E2E tests Sprints 1–14)
 - `tests/test_bulk.py` — 14 tests (company processing, contact processing, summary, E2E)
-- **Total: 214 tests, all passing**
+- **Total: 244 tests, all passing**
 
 ---
 
@@ -1087,9 +1087,9 @@ if "owner" not in fields:
         })
 ```
 
-The auto-populated `owner` is set before the duplicate check and before `client.create()`, so it flows through the existing pipeline unchanged.
+The auto-populated `owner` (`{"id": caller["id"]}`) is set before the `clientCorporation` validation and before `client.resolve_owner()`, so it flows through the existing `resolve_owner()` passthrough path (`{"id": int}` → returned unchanged) and then through duplicate detection and `client.create()` unchanged.
 
-If `owner` IS present, the existing `resolve_owner()` path handles it (string name, `{"id": int}`, ambiguous results) exactly as before.
+If `owner` IS present, the existing `resolve_owner()` path handles it (string name, `{"id": int}`, ambiguous results) exactly as before. The auto-populated path and the explicit-owner path both converge at `client.resolve_owner()` — no special-casing is needed.
 
 Update the `create_contact` docstring to document that `owner` is optional and describe the auto-population behaviour.
 
@@ -1103,11 +1103,14 @@ Update the `create_contact` docstring to document that `owner` is optional and d
 #### T17.2 — Make `owner` optional in `create_company`; auto-populate from authenticated user
 **File:** `src/bullhorn_mcp/server.py`
 
-Apply the same pattern as T17.1 to `create_company`. If `owner` is absent from `fields`, call `resolve_caller()` and inject `{"id": caller["id"]}`. If present, use it as-is (no name resolution — `create_company` does not currently use `resolve_owner()`; maintain this behaviour).
+Apply the same pattern as T17.1 to `create_company`. If `owner` is absent from `fields`, call `resolve_caller(get_client())` and inject `{"id": caller["id"]}` only — not the full caller dict. If present, use it as-is (no name resolution — `create_company` does not currently use `resolve_owner()`; maintain this behaviour).
+
+`create_company` currently does NOT validate `owner` — it passes all fields straight to `client.create()` after label resolution. The change is additive: prepend the auto-population block before `resolved = get_metadata().resolve_fields(...)`.
 
 Update the `create_company` docstring to document that `owner` is optional.
 
-- **Unit test:** `tests/test_server.py::test_create_company_owner_auto_populated` — mock `resolve_caller()` returning `{"id": 42, ...}`; call `create_company({..., no owner})` with mocked PUT/GET; assert PUT payload contains `"owner": {"id": 42}`.
+- **Unit test:** `tests/test_server.py::test_create_company_owner_auto_populated` — mock `resolve_caller()` returning `{"id": 42, "firstName": "Beau", "lastName": "Warren", "email": "beau@thepanel.com"}`; call `create_company({"name": "Acme"})` with mocked PUT/GET; assert PUT payload contains `"owner": {"id": 42}`.
+- **Payload audit test:** `tests/test_server.py::test_create_company_auto_owner_payload_no_leak` — same setup; assert PUT body key `"owner"` equals exactly `{"id": 42}` with no additional CorporateUser fields (`firstName`, `lastName`, `email`). This is the Sprint 9 pattern (known failure pattern #4) applied to create_company.
 - **Unit test:** `tests/test_server.py::test_create_company_explicit_owner_wins` — provide `owner: {"id": 99}`; assert `resolve_caller()` is NOT called; PUT payload has `"owner": {"id": 99}`.
 - **Unit test:** `tests/test_server.py::test_create_company_identity_resolution_fails` — mock `resolve_caller()` raising `IdentityResolutionError`; assert `"error": "identity_resolution_failed"` response.
 
@@ -1132,4 +1135,15 @@ No new logic changes. Add one regression test for each:
 
 ### Expected test count after Sprint 17
 
-Previous: 229 tests. New tests in T17.1 (6), T17.2 (3), T17.3 (2), E2E (3) = 14 new tests. **Expected: 243 tests passing, 0 failing.**
+Previous: 229 tests. New tests in T17.1 (6), T17.2 (4), T17.3 (2), E2E (3) = 15 new tests. **Expected: 244 tests passing, 0 failing.**
+
+(T17.2 count increased from 3 → 4 to add the missing `test_create_company_auto_owner_payload_no_leak` payload audit test, per the Sprint 9 pattern for owner data leakage.)
+
+### Sprint 17 completion note
+
+All 15 new tests added plus updates to 5 existing tests that previously assumed owner was absent would error. 244 tests passing. Key changes:
+- `create_contact` no longer requires `owner` — auto-populated from `resolve_caller()` if absent
+- `create_company` auto-populates `owner` from `resolve_caller()` if absent
+- `bulk_import` and `update_record` explicitly commented as unaffected by CR10
+- `test_create_contact_missing_owner` updated: now tests `IdentityResolutionError` path (identity_resolution_failed error code)
+- Existing `TestCreateCompany` tests patched to provide `resolve_caller` mock since owner is now auto-stamped

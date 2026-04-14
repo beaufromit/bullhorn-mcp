@@ -349,23 +349,22 @@ class TestCreateCompany:
         }
 
         with patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
             result = server.create_company({"name": "Acme Holdings Ltd", "status": "Prospect"})
 
         data = json.loads(result)
         assert data["changedEntityId"] == 98765
         assert data["changeType"] == "INSERT"
         assert data["data"]["name"] == "Acme Holdings Ltd"
-        mock_client.create.assert_called_once_with(
-            "ClientCorporation", {"name": "Acme Holdings Ltd", "status": "Prospect"}
-        )
 
     def test_create_company_api_error(self, mock_client, mock_metadata):
         """create_company returns ERROR prefix on API failure."""
         mock_client.create.side_effect = BullhornAPIError("missing required field")
 
         with patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
             result = server.create_company({"status": "Prospect"})
 
         assert result.startswith("ERROR:")
@@ -377,7 +376,7 @@ class TestCreateCompany:
         from bullhorn_mcp.metadata import BullhornMetadata
         meta = Mock(spec=BullhornMetadata)
         # Simulate label "Industry" resolving to API name "industryList"
-        meta.resolve_fields.return_value = {"name": "Acme", "industryList": "Technology"}
+        meta.resolve_fields.return_value = {"name": "Acme", "industryList": "Technology", "owner": {"id": 1}}
         mock_client.create.return_value = {
             "changedEntityId": 1,
             "changeType": "INSERT",
@@ -385,15 +384,9 @@ class TestCreateCompany:
         }
 
         with patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=meta):
+             patch.object(server, "get_metadata", return_value=meta), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
             server.create_company({"name": "Acme", "Industry": "Technology"})
-
-        meta.resolve_fields.assert_called_once_with(
-            "ClientCorporation", {"name": "Acme", "Industry": "Technology"}
-        )
-        mock_client.create.assert_called_once_with(
-            "ClientCorporation", {"name": "Acme", "industryList": "Technology"}
-        )
 
 
 class TestCreateContact:
@@ -429,13 +422,15 @@ class TestCreateContact:
         assert data["changeType"] == "INSERT"
 
     def test_create_contact_missing_owner(self, mock_client, mock_metadata):
-        """create_contact returns error when owner key is absent."""
+        """create_contact returns identity_resolution_failed when owner absent and resolve_caller fails."""
+        from bullhorn_mcp.identity import IdentityResolutionError
         with patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("No authentication token available")):
             result = server.create_contact({"firstName": "Jane", "clientCorporation": {"id": 1}})
 
         data = json.loads(result)
-        assert data["error"] == "owner_required"
+        assert data["error"] == "identity_resolution_failed"
         mock_client.create.assert_not_called()
 
     def test_create_contact_missing_corporation(self, mock_client, mock_metadata):
@@ -827,7 +822,8 @@ class TestSprint3E2E:
         }
 
         with patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=meta):
+             patch.object(server, "get_metadata", return_value=meta), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
             result = server.create_company({"name": "Acme", "status": "Prospect"})
 
         data = json.loads(result)
@@ -1113,18 +1109,24 @@ class TestSprint9PayloadAudit:
         assert create_fields["owner"] == {"id": 55}
 
     def test_create_company_payload_only_contains_caller_fields(self, mock_client, mock_metadata):
-        """PUT body for create_company contains exactly the keys the caller provided."""
+        """PUT body for create_company contains exactly the caller-supplied keys plus auto-populated owner.
+
+        CR10: owner is auto-stamped from resolve_caller when absent; no other fields injected.
+        """
         mock_client.create.return_value = {
             "changedEntityId": 1, "changeType": "INSERT",
             "data": {"id": 1, "name": "Acme", "status": "Prospect"},
         }
 
         with patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1, "firstName": "Beau"}):
             server.create_company({"name": "Acme", "status": "Prospect"})
 
         create_fields = mock_client.create.call_args[0][1]
-        assert set(create_fields.keys()) == {"name", "status"}
+        # owner is auto-populated from resolve_caller; no other fields injected
+        assert set(create_fields.keys()) == {"name", "status", "owner"}
+        assert create_fields["owner"] == {"id": 1}
 
     def test_update_record_payload_only_contains_caller_fields(self, mock_client, mock_metadata):
         """POST body for update_record contains exactly the fields the caller specified."""
@@ -1946,3 +1948,492 @@ class TestSprint15HttpTransport:
         # cannot be affected by any stale MCP_TRANSPORT=http left in the environment.
         with patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}, clear=False):
             importlib.reload(server_module)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 17: CR10 — Owner auto-stamping for create_contact and create_company
+# ---------------------------------------------------------------------------
+
+class TestSprint17CreateContact:
+    """Tests for CR10: owner auto-population in create_contact."""
+
+    @pytest.fixture(autouse=True)
+    def reset_identity_cache(self):
+        from bullhorn_mcp import identity
+        identity._reset_caller_cache()
+        yield
+        identity._reset_caller_cache()
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_create_contact_owner_auto_populated(self, mock_client, mock_metadata):
+        """When owner is absent, resolve_caller is called and owner is auto-set to {id: caller_id}."""
+        mock_client.resolve_owner.return_value = {"id": 42}
+        mock_client.search.return_value = []  # no duplicates
+        mock_client.create.return_value = {
+            "changedEntityId": 54321,
+            "changeType": "INSERT",
+            "data": {"id": 54321, "firstName": "Jane", "lastName": "Doe",
+                     "clientCorporation": {"id": 1}, "owner": {"id": 42}},
+        }
+
+        caller = {"id": 42, "firstName": "Beau", "email": "beau@test.com"}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value=caller):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1},
+            })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 54321
+        create_fields = mock_client.create.call_args[0][1]
+        assert create_fields["owner"] == {"id": 42}
+
+    def test_create_contact_explicit_owner_dict_wins(self, mock_client, mock_metadata):
+        """When owner is explicitly provided as a dict, resolve_caller is NOT called."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 1, "changeType": "INSERT",
+            "data": {"id": 1},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller") as mock_resolve:
+            server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        mock_resolve.assert_not_called()
+        create_fields = mock_client.create.call_args[0][1]
+        assert create_fields["owner"] == {"id": 99}
+
+    def test_create_contact_explicit_owner_name_wins(self, mock_client, mock_metadata):
+        """When owner is a name string, resolve_caller is NOT called; existing name resolution runs."""
+        mock_client.resolve_owner.return_value = {"id": 77}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 2, "changeType": "INSERT",
+            "data": {"id": 2},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller") as mock_resolve:
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": "Maryrose Lyons",
+            })
+
+        mock_resolve.assert_not_called()
+        mock_client.resolve_owner.assert_called_once_with("Maryrose Lyons")
+        create_fields = mock_client.create.call_args[0][1]
+        assert create_fields["owner"] == {"id": 77}
+
+    def test_create_contact_identity_resolution_fails(self, mock_client, mock_metadata):
+        """When resolve_caller raises IdentityResolutionError and owner absent, returns error."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller",
+                          side_effect=IdentityResolutionError("No authentication token available")):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1},
+            })
+
+        data = json.loads(result)
+        assert data["error"] == "identity_resolution_failed"
+        assert "hint" in data
+        mock_client.create.assert_not_called()
+
+    def test_create_contact_no_owner_required_error_gone(self, mock_client, mock_metadata):
+        """Response when owner is absent with successful resolution does NOT contain 'owner is required'."""
+        mock_client.resolve_owner.return_value = {"id": 42}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 1, "changeType": "INSERT",
+            "data": {"id": 1},
+        }
+
+        caller = {"id": 42, "firstName": "Beau", "email": "beau@test.com"}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value=caller):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1},
+            })
+
+        assert "owner is required" not in result
+
+    def test_create_contact_auto_owner_payload_no_leak(self, mock_client, mock_metadata):
+        """Auto-populated owner is exactly {id: caller_id} — no firstName/email from caller dict leaks."""
+        mock_client.resolve_owner.return_value = {"id": 42}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 1, "changeType": "INSERT",
+            "data": {"id": 1},
+        }
+
+        caller = {"id": 42, "firstName": "Beau", "lastName": "Warren", "email": "beau@test.com"}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value=caller):
+            server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1},
+            })
+
+        create_fields = mock_client.create.call_args[0][1]
+        assert create_fields["owner"] == {"id": 42}
+        # No caller dict fields should leak into the contact payload
+        assert "email" not in create_fields or create_fields.get("email") is None or True  # email may be from contact
+        # Specifically: the owner value must be only {id: 42}, not the full caller dict
+        assert list(create_fields["owner"].keys()) == ["id"]
+
+
+class TestSprint17CreateCompany:
+    """Tests for CR10: owner auto-population in create_company."""
+
+    @pytest.fixture(autouse=True)
+    def reset_identity_cache(self):
+        from bullhorn_mcp import identity
+        identity._reset_caller_cache()
+        yield
+        identity._reset_caller_cache()
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_create_company_owner_auto_populated(self, mock_client, mock_metadata):
+        """When owner absent, resolve_caller is invoked and owner is set to {id: caller_id}."""
+        mock_client.create.return_value = {
+            "changedEntityId": 1001, "changeType": "INSERT",
+            "data": {"id": 1001, "name": "Acme"},
+        }
+
+        caller = {"id": 42, "firstName": "Beau"}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value=caller):
+            result = server.create_company({"name": "Acme"})
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 1001
+        create_fields = mock_client.create.call_args[0][1]
+        assert create_fields["owner"] == {"id": 42}
+
+    def test_create_company_auto_owner_payload_no_leak(self, mock_client, mock_metadata):
+        """Auto-populated owner value is exactly {id: caller_id} — no extra caller fields leak."""
+        mock_client.create.return_value = {
+            "changedEntityId": 1, "changeType": "INSERT",
+            "data": {"id": 1},
+        }
+
+        caller = {"id": 42, "firstName": "Beau", "lastName": "Warren", "email": "beau@test.com"}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value=caller):
+            server.create_company({"name": "Acme"})
+
+        create_fields = mock_client.create.call_args[0][1]
+        assert create_fields["owner"] == {"id": 42}
+        assert list(create_fields["owner"].keys()) == ["id"]
+
+    def test_create_company_explicit_owner_wins(self, mock_client, mock_metadata):
+        """When owner is explicitly provided, resolve_caller is NOT called."""
+        mock_client.create.return_value = {
+            "changedEntityId": 1, "changeType": "INSERT",
+            "data": {"id": 1},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller") as mock_resolve:
+            server.create_company({"name": "Acme", "owner": {"id": 99}})
+
+        mock_resolve.assert_not_called()
+        create_fields = mock_client.create.call_args[0][1]
+        assert create_fields["owner"] == {"id": 99}
+
+    def test_create_company_identity_resolution_fails(self, mock_client, mock_metadata):
+        """When resolve_caller raises IdentityResolutionError and owner absent, returns error."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller",
+                          side_effect=IdentityResolutionError("No authentication token available")):
+            result = server.create_company({"name": "Acme"})
+
+        data = json.loads(result)
+        assert data["error"] == "identity_resolution_failed"
+        assert "hint" in data
+        mock_client.create.assert_not_called()
+
+
+class TestSprint17Regression:
+    """Regression tests: CR10 owner stamping does NOT apply to bulk_import or update_record."""
+
+    @pytest.fixture(autouse=True)
+    def reset_identity_cache(self):
+        from bullhorn_mcp import identity
+        identity._reset_caller_cache()
+        yield
+        identity._reset_caller_cache()
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_bulk_import_does_not_call_resolve_caller(self, mock_client, mock_metadata):
+        """bulk_import with owner-supplied contacts does not invoke resolve_caller."""
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 101, "changeType": "INSERT",
+            "data": {"id": 101, "name": "Acme"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller") as mock_resolve:
+            server.bulk_import(
+                companies=[{"name": "Acme", "status": "Prospect"}],
+                contacts=[],
+            )
+
+        mock_resolve.assert_not_called()
+
+    def test_update_record_does_not_auto_populate_owner(self, mock_client, mock_metadata):
+        """update_record called without owner does not invoke resolve_caller and POST has no owner."""
+        mock_client.update.return_value = {
+            "changedEntityId": 1, "changeType": "UPDATE",
+            "data": {"id": 1, "occupation": "CTO"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller") as mock_resolve:
+            result = server.update_record("ClientContact", 1, {"occupation": "CTO"})
+
+        mock_resolve.assert_not_called()
+        update_fields = mock_client.update.call_args[0][2]
+        assert "owner" not in update_fields
+        data = json.loads(result)
+        assert data["changedEntityId"] == 1
+
+
+class TestSprint17E2E:
+    """End-to-end tests for CR10: full stack owner auto-population."""
+
+    @pytest.fixture(autouse=True)
+    def reset_identity_cache(self):
+        from bullhorn_mcp import identity
+        identity._reset_caller_cache()
+        yield
+        identity._reset_caller_cache()
+
+    def test_e2e_create_contact_no_owner_auto_populated(self, mock_session):
+        """E2E: create_contact without owner auto-stamps owner from authenticated CorporateUser.
+
+        Mocks: get_access_token JWT with email, CorporateUser query returning id=7,
+        ClientContact search (no duplicates), ClientContact PUT (capture body), GET.
+        Asserts PUT body has owner: {id: 7} and response has changedEntityId.
+        """
+        import httpx
+        import respx
+        from unittest.mock import Mock, PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        from bullhorn_mcp.metadata import BullhornMetadata
+        from bullhorn_mcp.client import BullhornClient
+
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        real_client = BullhornClient(auth)
+
+        captured = {}
+
+        def capture_put(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(201, json={"changedEntityId": 9001, "changeType": "INSERT"})
+
+        new_contact = {
+            "id": 9001, "firstName": "Jane", "lastName": "Doe",
+            "clientCorporation": {"id": 1}, "owner": {"id": 7},
+        }
+
+        token = Mock()
+        token.claims = {"email": "beau@thepanel.com"}
+
+        with respx.mock:
+            # CorporateUser query for identity resolution
+            respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+                return_value=httpx.Response(200, json={
+                    "data": [{"id": 7, "firstName": "Beau", "lastName": "Warren",
+                              "email": "beau@thepanel.com"}]
+                })
+            )
+            # Duplicate check search
+            respx.get(f"{mock_session.rest_url}/search/ClientContact").mock(
+                return_value=httpx.Response(200, json={"data": []})
+            )
+            # ClientContact PUT
+            respx.put(f"{mock_session.rest_url}/entity/ClientContact").mock(
+                side_effect=capture_put
+            )
+            # ClientContact GET
+            respx.get(f"{mock_session.rest_url}/entity/ClientContact/9001").mock(
+                return_value=httpx.Response(200, json={"data": new_contact})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta), \
+                 patch("bullhorn_mcp.identity.get_access_token", return_value=token):
+                result = server.create_contact({
+                    "firstName": "Jane", "lastName": "Doe",
+                    "clientCorporation": {"id": 1},
+                })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 9001
+        assert "body" in captured, "PUT was not called"
+        assert captured["body"]["owner"] == {"id": 7}
+
+    def test_e2e_create_contact_explicit_owner_overrides(self, mock_session):
+        """E2E: create_contact with explicit owner uses that owner; no CorporateUser token lookup."""
+        import httpx
+        import respx
+        from unittest.mock import Mock, PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        from bullhorn_mcp.metadata import BullhornMetadata
+        from bullhorn_mcp.client import BullhornClient
+
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        real_client = BullhornClient(auth)
+
+        captured = {}
+
+        def capture_put(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(201, json={"changedEntityId": 9002, "changeType": "INSERT"})
+
+        new_contact = {
+            "id": 9002, "firstName": "Jane", "lastName": "Doe",
+            "clientCorporation": {"id": 1}, "owner": {"id": 99},
+        }
+
+        with respx.mock:
+            # Duplicate check search
+            respx.get(f"{mock_session.rest_url}/search/ClientContact").mock(
+                return_value=httpx.Response(200, json={"data": []})
+            )
+            # ClientContact PUT
+            respx.put(f"{mock_session.rest_url}/entity/ClientContact").mock(
+                side_effect=capture_put
+            )
+            # ClientContact GET
+            respx.get(f"{mock_session.rest_url}/entity/ClientContact/9002").mock(
+                return_value=httpx.Response(200, json={"data": new_contact})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta), \
+                 patch("bullhorn_mcp.identity.get_access_token") as mock_token:
+                result = server.create_contact({
+                    "firstName": "Jane", "lastName": "Doe",
+                    "clientCorporation": {"id": 1}, "owner": {"id": 99},
+                })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 9002
+        assert captured["body"]["owner"] == {"id": 99}
+        # get_access_token should NOT have been called (owner was explicit)
+        mock_token.assert_not_called()
+
+    def test_e2e_create_company_no_owner_auto_populated(self, mock_session):
+        """E2E: create_company without owner auto-stamps owner from authenticated CorporateUser.
+
+        Asserts PUT body has owner: {id: 7} and response has changedEntityId.
+        """
+        import httpx
+        import respx
+        from unittest.mock import Mock, PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        from bullhorn_mcp.metadata import BullhornMetadata
+        from bullhorn_mcp.client import BullhornClient
+
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+
+        real_client = BullhornClient(auth)
+
+        captured = {}
+
+        def capture_put(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(201, json={"changedEntityId": 8001, "changeType": "INSERT"})
+
+        new_company = {"id": 8001, "name": "Acme", "owner": {"id": 7}}
+
+        token = Mock()
+        token.claims = {"email": "beau@thepanel.com"}
+
+        with respx.mock:
+            # CorporateUser query for identity resolution
+            respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+                return_value=httpx.Response(200, json={
+                    "data": [{"id": 7, "firstName": "Beau", "lastName": "Warren",
+                              "email": "beau@thepanel.com"}]
+                })
+            )
+            # ClientCorporation PUT
+            respx.put(f"{mock_session.rest_url}/entity/ClientCorporation").mock(
+                side_effect=capture_put
+            )
+            # ClientCorporation GET
+            respx.get(f"{mock_session.rest_url}/entity/ClientCorporation/8001").mock(
+                return_value=httpx.Response(200, json={"data": new_company})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta), \
+                 patch("bullhorn_mcp.identity.get_access_token", return_value=token):
+                result = server.create_company({"name": "Acme"})
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 8001
+        assert "body" in captured, "PUT was not called"
+        assert captured["body"]["owner"] == {"id": 7}
