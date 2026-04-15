@@ -33,6 +33,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 15 | **COMPLETE** (4 tests regressed post-tag) | CR8: Add HTTP transport mode for remote hosting — tagged v0.0.15; 216/220 pass after post-sprint Entra OIDC commits |
 | Sprint 16 | **COMPLETE** | Fix Sprint 15 test regressions + CR9: Identity resolution — 229 tests passing |
 | Sprint 17 | **COMPLETE** | CR10: Owner stamping — auto-populate owner from authenticated user in create_contact / create_company — 244 tests passing |
+| Sprint 18 | **COMPLETE** | CR11: Per-user identity cache — fix first-writer-wins bug for multi-user HTTP deployments — 248 tests passing |
 
 ### Sprint 15 post-tag regression note
 
@@ -927,6 +928,7 @@ Key regression checks:
 - Sprint 8 is a standalone bug fix; it depends on Sprint 2 (metadata module) and Sprint 4 (create_contact tool) but does not block or depend on Sprint 7.
 - Sprint 16 depends on Sprint 15 (fixes its regressions) and introduces CR9 infrastructure used by Sprint 17.
 - Sprint 17 depends on Sprint 16 (CR9's `identity.py` and `IdentityResolutionError`).
+- Sprint 18 depends on Sprint 17 (replaces the single-slot cache introduced in Sprint 16; all Sprint 17 callers of `resolve_caller()` are unaffected — signature unchanged).
 
 ---
 
@@ -1154,3 +1156,127 @@ All 15 new tests added plus updates to 5 existing tests that previously assumed 
 3. `test_create_contact_auto_owner_payload_no_leak` contained a vacuous `or True` assertion — removed
 
 Pattern: when adding auto-injection before `resolve_fields`, the `resolve_fields.assert_called_once_with` arguments must include the injected key.
+
+---
+
+## Sprint 18: CR11 — Per-user Identity Cache (Fix First-Writer-Wins Bug)
+
+**Change request:** CR11.md
+**User stories affected:** None directly — correctness fix to infrastructure introduced in Sprint 16/CR9. Ensures FR-11 (HTTP multi-user deployment) and NFR-3 (resilience) are correctly satisfied.
+**Dependency:** Sprint 17 complete (Sprint 16 created `identity.py` with the single-slot cache that this sprint replaces)
+
+### Background
+
+`identity.py` stores the resolved Bullhorn CorporateUser in a single module-level slot (`_resolved_caller: dict | None = None`). This was intentional when CR9 was written under the assumption that the server runs as a single-user process. However, Sprint 15 added HTTP transport (`MCP_TRANSPORT=http`), which allows multiple consultants to share a single server process. Once any user resolves their identity, every subsequent caller — regardless of their own Entra token — receives the cached identity of the first user.
+
+**Concrete failure mode:** Paul McArdle resolves his identity first. Fergal Keys connects and calls `create_contact`. The cache hits on Paul's entry. Fergal's new contact is created with Paul as owner. No error or warning is surfaced.
+
+The fix keys the cache by the authenticated user's Entra `sub` claim (a stable, unique, per-user identifier already confirmed present in the token). `sub` is extracted before `email` — its absence is itself an error (a token without `sub` cannot be reliably cached).
+
+### File affected
+
+`src/bullhorn_mcp/identity.py` — targeted change; no other files require modification.
+
+### Tasks
+
+#### T18.1 — Replace single-slot cache with per-user dict keyed by `sub`
+**File:** `src/bullhorn_mcp/identity.py`
+
+**Before:**
+```python
+_resolved_caller: dict | None = None
+
+def resolve_caller(client):
+    global _resolved_caller
+    if _resolved_caller is not None:
+        return _resolved_caller
+    ...
+    _resolved_caller = results[0]
+    return _resolved_caller
+```
+
+**After:**
+```python
+_caller_cache: dict[str, dict] = {}  # keyed by token claims["sub"]
+
+def resolve_caller(client):
+    token = get_access_token()
+    if token is None:
+        raise IdentityResolutionError("No authentication token available")
+
+    claims = getattr(token, "claims", {}) or {}
+    sub = claims.get("sub")
+    if not sub:
+        raise IdentityResolutionError("No 'sub' claim found in token — cannot key identity cache")
+
+    if sub in _caller_cache:
+        return _caller_cache[sub]
+
+    email = claims.get("email") or claims.get("preferred_username")
+    if not email:
+        raise IdentityResolutionError("No email claim found in token")
+
+    results = client.query(
+        entity="CorporateUser",
+        where=f"email='{email}'",
+        fields="id,firstName,lastName,email",
+    )
+
+    if len(results) == 0:
+        raise IdentityResolutionError(f"No Bullhorn CorporateUser found for email '{email}'")
+    if len(results) > 1:
+        raise IdentityResolutionError(
+            f"Multiple Bullhorn CorporateUsers found for email '{email}' — expected exactly one"
+        )
+
+    _caller_cache[sub] = results[0]
+    return _caller_cache[sub]
+```
+
+Key changes from current code:
+- `sub` is extracted first (before `email`); its absence raises `IdentityResolutionError` immediately.
+- Cache lookup uses `sub in _caller_cache` (dict key presence) rather than `_resolved_caller is not None`.
+- `email` extraction and the Bullhorn query happen only on a cache miss.
+- The `_resolved_caller` global variable is removed; `_caller_cache` replaces it.
+
+Update the module-level comment to remove the "single-user service" caveat and document that the cache is safe for multi-user HTTP deployments.
+
+- **Unit test:** `tests/test_identity.py::test_resolve_caller_no_sub_claim` — mock token with no `sub` claim (but `email` present); assert `IdentityResolutionError` raised with message referencing `sub`.
+- **Unit test:** `tests/test_identity.py::test_resolve_caller_multi_user_isolation` — mock two tokens with distinct `sub` values and distinct emails; call `resolve_caller()` for each (reset cache between calls is NOT required — they should use different cache slots); assert each returns its own CorporateUser dict and Bullhorn is queried exactly twice.
+- **Unit test:** `tests/test_identity.py::test_resolve_caller_multi_user_cache_hit` — call `resolve_caller()` twice with the same `sub` value; assert Bullhorn CorporateUser query endpoint called exactly once.
+- **Unit test:** `tests/test_identity.py::test_reset_caller_cache_clears_all` — populate `_caller_cache` with two entries (two distinct `sub` values); call `_reset_caller_cache()`; assert both entries are gone (cache is empty).
+
+#### T18.2 — Update `_reset_caller_cache()` to clear the dict
+**File:** `src/bullhorn_mcp/identity.py`
+
+```python
+def _reset_caller_cache() -> None:
+    """Clear the per-user identity cache. Used in tests for isolation."""
+    global _caller_cache
+    _caller_cache.clear()
+```
+
+The signature is unchanged. Callers in `tests/test_identity.py` that currently call `_reset_caller_cache()` continue to work without modification — clearing a dict vs setting a var to `None` is transparent to callers.
+
+#### T18.3 — Verify existing tests pass unchanged
+**File:** `tests/test_identity.py`
+
+The 9 existing tests were written for single-user behaviour, which is a subset of the new multi-user behaviour. All should pass without modification because:
+- `test_resolve_caller_success` — provides `email` in claims; `sub` must now also be present. Update the mock token fixture to include `sub` if it doesn't already. (Inspect existing test setup to confirm.)
+- `test_resolve_caller_cached` — calls twice with the same token; the `sub`-keyed cache still hits on the second call. Passes unchanged if the mock token includes `sub`.
+- `test_resolve_caller_no_token` — `get_access_token()` returns `None`; first thing checked is still the token. Passes unchanged.
+- `test_resolve_caller_no_email_claim` — token is present but has no `email`/`preferred_username`. Now the code also checks `sub` first — this test must also include `sub` in the mock token or it will hit the new `sub` guard first. Update the mock to include `sub` so the test still exercises the no-email path.
+- All others — confirm no changes needed to the mock token structure.
+
+If any existing test's mock token lacks `sub`, add `"sub": "test-sub-value"` to that token's claims dict. This is a test-fixture update only, not a behaviour change.
+
+### Sprint 18 End-to-End Tests
+
+- `tests/test_identity.py::test_resolve_caller_multi_user_isolation` — described in T18.1. This doubles as the E2E test for the multi-user scenario: two distinct users, two distinct CorporateUser lookups, two correct cached results.
+
+### What was delivered
+
+- `src/bullhorn_mcp/identity.py`: replaced `_resolved_caller: dict | None = None` with `_caller_cache: dict[str, dict] = {}` keyed by Entra `sub` claim. `sub` is now extracted before `email` — its absence raises `IdentityResolutionError` immediately. `_reset_caller_cache()` now calls `.clear()`. Module comment updated to remove the "single-user service" assumption.
+- `tests/test_identity.py`: added `"sub"` claim to all existing mock token fixtures (required by the new `sub`-first extraction order). Added 4 new tests: `test_resolve_caller_no_sub_claim`, `test_resolve_caller_multi_user_isolation`, `test_resolve_caller_multi_user_cache_hit`, `test_reset_caller_cache_clears_all`.
+- `tests/test_server.py`: updated Sprint 17 E2E token fixtures for `test_e2e_create_contact_no_owner_auto_populated` and `test_e2e_create_company_no_owner_auto_populated` to include `"sub": "sub-beau"` — these tests mock `get_access_token` directly and call the real `identity.py`, so they also needed the `sub` claim.
+- **248 tests passing, 0 failing.**

@@ -2298,7 +2298,7 @@ class TestSprint17E2E:
         }
 
         token = Mock()
-        token.claims = {"email": "beau@thepanel.com"}
+        token.claims = {"sub": "sub-beau", "email": "beau@thepanel.com"}
 
         with respx.mock:
             # CorporateUser query for identity resolution
@@ -2419,7 +2419,7 @@ class TestSprint17E2E:
         new_company = {"id": 8001, "name": "Acme", "owner": {"id": 7}}
 
         token = Mock()
-        token.claims = {"email": "beau@thepanel.com"}
+        token.claims = {"sub": "sub-beau", "email": "beau@thepanel.com"}
 
         with respx.mock:
             # CorporateUser query for identity resolution

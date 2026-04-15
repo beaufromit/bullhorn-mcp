@@ -1,7 +1,11 @@
-"""Tests for identity resolution (CR9).
+"""Tests for identity resolution (CR9/CR11).
 
 All tests mock get_access_token() via unittest.mock.patch and use a real BullhornClient
 backed by respx-mocked httpx calls, consistent with other test files in this suite.
+
+CR11 note: the cache is now keyed by token claims["sub"].  All token fixtures include
+a "sub" claim so they exercise the full resolution path.  test_resolve_caller_no_sub_claim
+is the sole test whose token intentionally omits "sub".
 """
 
 import httpx
@@ -53,6 +57,13 @@ SAMPLE_USER = {
     "email": "beau@thepanel.com",
 }
 
+SAMPLE_USER_2 = {
+    "id": 99,
+    "firstName": "Fergal",
+    "lastName": "Keys",
+    "email": "fergal@thepanel.com",
+}
+
 
 class TestResolveCaller:
     """Unit tests for resolve_caller()."""
@@ -63,7 +74,7 @@ class TestResolveCaller:
         respx.get(QUERY_URL_PATTERN).mock(
             return_value=httpx.Response(200, json={"data": [SAMPLE_USER]})
         )
-        token = _make_token({"email": "beau@thepanel.com"})
+        token = _make_token({"sub": "sub-beau", "email": "beau@thepanel.com"})
 
         with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             result = resolve_caller(client)
@@ -76,9 +87,20 @@ class TestResolveCaller:
             with pytest.raises(IdentityResolutionError, match="No authentication token available"):
                 resolve_caller(client)
 
+    def test_resolve_caller_no_sub_claim(self, client):
+        """Raises IdentityResolutionError when token has no sub claim.
+
+        sub is required as the cache key.  A token without sub indicates a
+        misconfigured Entra app registration or a non-Entra token.
+        """
+        token = _make_token({"email": "beau@thepanel.com", "name": "Beau Warren"})
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
+            with pytest.raises(IdentityResolutionError, match="sub"):
+                resolve_caller(client)
+
     def test_resolve_caller_no_email_claim(self, client):
         """Raises IdentityResolutionError when token has neither email nor preferred_username."""
-        token = _make_token({"name": "Beau Warren", "oid": "some-oid"})
+        token = _make_token({"sub": "sub-beau", "name": "Beau Warren", "oid": "some-oid"})
         with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             with pytest.raises(IdentityResolutionError, match="No email claim found"):
                 resolve_caller(client)
@@ -89,7 +111,7 @@ class TestResolveCaller:
         respx.get(QUERY_URL_PATTERN).mock(
             return_value=httpx.Response(200, json={"data": [SAMPLE_USER]})
         )
-        token = _make_token({"preferred_username": "beau@thepanel.com"})
+        token = _make_token({"sub": "sub-beau", "preferred_username": "beau@thepanel.com"})
 
         with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             result = resolve_caller(client)
@@ -107,7 +129,7 @@ class TestResolveCaller:
         respx.get(QUERY_URL_PATTERN).mock(
             return_value=httpx.Response(200, json={"data": []})
         )
-        token = _make_token({"email": "unknown@example.com"})
+        token = _make_token({"sub": "sub-unknown", "email": "unknown@example.com"})
 
         with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             with pytest.raises(IdentityResolutionError, match="No Bullhorn CorporateUser found"):
@@ -127,7 +149,7 @@ class TestResolveCaller:
                 },
             )
         )
-        token = _make_token({"email": "beau@thepanel.com"})
+        token = _make_token({"sub": "sub-beau", "email": "beau@thepanel.com"})
 
         with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             with pytest.raises(IdentityResolutionError, match="Multiple Bullhorn CorporateUsers found"):
@@ -135,11 +157,11 @@ class TestResolveCaller:
 
     @respx.mock
     def test_resolve_caller_cached(self, client, mock_session):
-        """Second call returns cached result without querying Bullhorn again."""
+        """Second call for the same user returns cached result without querying Bullhorn again."""
         route = respx.get(QUERY_URL_PATTERN).mock(
             return_value=httpx.Response(200, json={"data": [SAMPLE_USER]})
         )
-        token = _make_token({"email": "beau@thepanel.com"})
+        token = _make_token({"sub": "sub-beau", "email": "beau@thepanel.com"})
 
         with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             first = resolve_caller(client)
@@ -159,7 +181,7 @@ class TestResolveCaller:
         route = respx.get(QUERY_URL_PATTERN).mock(
             return_value=httpx.Response(200, json={"data": [SAMPLE_USER]})
         )
-        token = _make_token({"email": "beau@thepanel.com"})
+        token = _make_token({"sub": "sub-beau", "email": "beau@thepanel.com"})
 
         with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             resolve_caller(client)
@@ -173,13 +195,70 @@ class TestResolveCaller:
         fields_value = qs.get("fields", [""])[0]
         assert "department" not in fields_value
 
+    @respx.mock
+    def test_resolve_caller_multi_user_isolation(self, client, mock_session):
+        """Two distinct users resolve to their own CorporateUser records.
+
+        Each user's token has a different sub claim and a different email.
+        Both should hit Bullhorn exactly once (no cross-user cache poisoning).
+        This is the core correctness test for the CR11 per-user cache fix.
+        """
+        route = respx.get(QUERY_URL_PATTERN).mock(
+            side_effect=[
+                httpx.Response(200, json={"data": [SAMPLE_USER]}),
+                httpx.Response(200, json={"data": [SAMPLE_USER_2]}),
+            ]
+        )
+        token_beau = _make_token({"sub": "sub-beau", "email": "beau@thepanel.com"})
+        token_fergal = _make_token({"sub": "sub-fergal", "email": "fergal@thepanel.com"})
+
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token_beau):
+            result_beau = resolve_caller(client)
+
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token_fergal):
+            result_fergal = resolve_caller(client)
+
+        assert result_beau == SAMPLE_USER
+        assert result_fergal == SAMPLE_USER_2
+        # Bullhorn was queried once per user — no cross-user cache hit
+        assert route.call_count == 2
+
+    @respx.mock
+    def test_resolve_caller_multi_user_cache_hit(self, client, mock_session):
+        """Two calls from the same user (same sub) only query Bullhorn once."""
+        route = respx.get(QUERY_URL_PATTERN).mock(
+            return_value=httpx.Response(200, json={"data": [SAMPLE_USER]})
+        )
+        token = _make_token({"sub": "sub-beau", "email": "beau@thepanel.com"})
+
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
+            first = resolve_caller(client)
+            second = resolve_caller(client)
+
+        assert first == second == SAMPLE_USER
+        assert route.call_count == 1
+
+    def test_reset_caller_cache_clears_all(self):
+        """_reset_caller_cache() clears all cached identities, not just one slot.
+
+        Populates the cache with two distinct sub values then confirms both are
+        gone after calling _reset_caller_cache().
+        """
+        identity._caller_cache["sub-a"] = {"id": 1, "firstName": "Alice"}
+        identity._caller_cache["sub-b"] = {"id": 2, "firstName": "Bob"}
+        assert len(identity._caller_cache) == 2
+
+        identity._reset_caller_cache()
+
+        assert len(identity._caller_cache) == 0
+
 
 class TestResolveCaller_E2E:
     """End-to-end test for the full resolve_caller flow."""
 
     @respx.mock
     def test_resolve_caller_e2e_full_flow(self, client, mock_session):
-        """Full flow: token → email claim → CorporateUser query → cached result.
+        """Full flow: token → sub cache key → email claim → CorporateUser query → cached result.
 
         Verifies that:
         - resolve_caller() returns the expected dict from Bullhorn.
@@ -188,7 +267,7 @@ class TestResolveCaller_E2E:
         route = respx.get(QUERY_URL_PATTERN).mock(
             return_value=httpx.Response(200, json={"data": [SAMPLE_USER]})
         )
-        token = _make_token({"email": "beau@thepanel.com", "name": "Beau Warren"})
+        token = _make_token({"sub": "sub-beau", "email": "beau@thepanel.com", "name": "Beau Warren"})
 
         with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
             result1 = resolve_caller(client)
