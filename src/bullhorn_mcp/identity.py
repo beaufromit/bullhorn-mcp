@@ -32,7 +32,6 @@ _caller_cache: dict[str, dict] = {}
 
 def _reset_caller_cache() -> None:
     """Clear the per-user identity cache. Used in tests for isolation."""
-    global _caller_cache
     _caller_cache.clear()
 
 

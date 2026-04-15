@@ -212,6 +212,9 @@ class TestResolveCaller:
         token_beau = _make_token({"sub": "sub-beau", "email": "beau@thepanel.com"})
         token_fergal = _make_token({"sub": "sub-fergal", "email": "fergal@thepanel.com"})
 
+        # The two patch blocks share the same _caller_cache (the autouse fixture does not
+        # clear between them). Each resolve_caller call lands in a different cache slot
+        # because the sub values differ — that is the property under test.
         with patch("bullhorn_mcp.identity.get_access_token", return_value=token_beau):
             result_beau = resolve_caller(client)
 
@@ -238,14 +241,27 @@ class TestResolveCaller:
         assert first == second == SAMPLE_USER
         assert route.call_count == 1
 
-    def test_reset_caller_cache_clears_all(self):
+    @respx.mock
+    def test_reset_caller_cache_clears_all(self, client, mock_session):
         """_reset_caller_cache() clears all cached identities, not just one slot.
 
-        Populates the cache with two distinct sub values then confirms both are
-        gone after calling _reset_caller_cache().
+        Populates the cache with two distinct users via resolve_caller, then confirms
+        both slots are gone after calling _reset_caller_cache().
         """
-        identity._caller_cache["sub-a"] = {"id": 1, "firstName": "Alice"}
-        identity._caller_cache["sub-b"] = {"id": 2, "firstName": "Bob"}
+        respx.get(QUERY_URL_PATTERN).mock(
+            side_effect=[
+                httpx.Response(200, json={"data": [SAMPLE_USER]}),
+                httpx.Response(200, json={"data": [SAMPLE_USER_2]}),
+            ]
+        )
+        token_a = _make_token({"sub": "sub-a", "email": "beau@thepanel.com"})
+        token_b = _make_token({"sub": "sub-b", "email": "fergal@thepanel.com"})
+
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token_a):
+            resolve_caller(client)
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token_b):
+            resolve_caller(client)
+
         assert len(identity._caller_cache) == 2
 
         identity._reset_caller_cache()
