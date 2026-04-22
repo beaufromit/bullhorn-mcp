@@ -1,7 +1,7 @@
 [project]
 name = "bullhorn-mcp"
 version = "0.1.0"
-description = "MCP server for Bullhorn CRM - query jobs and candidates via natural language"
+description = "MCP server for querying and managing Bullhorn CRM data from AI clients"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

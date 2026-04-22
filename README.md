@@ -1,84 +1,122 @@
 # Bullhorn CRM MCP Server
 
-A Python [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that enables AI assistants to query your Bullhorn CRM data using natural language.
+A Python [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for querying and managing Bullhorn CRM data from AI clients.
 
-**Works with:** Claude Desktop, Claude Code, Cursor, Windsurf, Cline, Continue, Zed, and any MCP-compatible client.
+It supports both local `stdio` transport for desktop and CLI MCP clients and hosted HTTP transport for remote deployments.
 
-This is an open-source alternative to paid connectors - it connects directly to Bullhorn's REST API with no additional subscriptions required.
+**Works with:** Claude Desktop, Claude Code, Cursor, Windsurf, Cline, Continue, Zed, and other MCP-compatible clients.
 
-> **Brought to you by [Osher Digital](https://osher.com.au)** - Specialist AI consultants helping businesses harness the power of artificial intelligence.
+This project connects directly to the Bullhorn REST API with no third-party connector layer.
+
+## What It Does
+
+This server exposes Bullhorn workflows as MCP tools so AI assistants and automation agents can work with CRM data directly.
+
+Typical use cases:
+
+- Search and review Bullhorn records from an AI client
+- Create and update `ClientCorporation` and `ClientContact` records
+- Detect likely duplicates before creating new companies or contacts
+- Bulk-import discovered companies and contacts into Bullhorn
+- Host the MCP server remotely behind authenticated HTTP transport
 
 ## Features
 
-- **Direct API Access** - Connects to Bullhorn's REST API using OAuth 2.0
-- **Natural Language Queries** - Ask questions like "Show me the last 10 open jobs"
-- **6 Powerful Tools**:
-  - `list_jobs` - List and filter job orders
-  - `list_candidates` - List and filter candidates
-  - `get_job` - Get detailed job information by ID
-  - `get_candidate` - Get detailed candidate information by ID
-  - `search_entities` - Search any Bullhorn entity with Lucene queries
-  - `query_entities` - Query entities with SQL-like WHERE syntax
-- **Automatic Token Management** - Handles OAuth token refresh automatically
-- **Read-Only Access** - Safe to use, no risk of modifying your CRM data
+- Bullhorn OAuth 2.0 authentication with automatic session refresh
+- Support for Bullhorn regional auth redirects
+- Read tools for jobs, candidates, contacts, companies, and arbitrary entities
+- Create and update workflows for `ClientCorporation` and `ClientContact`
+- Duplicate detection for companies and contacts using fuzzy matching
+- Bulk import orchestration for companies and contacts
+- Bullhorn metadata lookup and field label resolution
+- Note creation for supported entities
+- Optional hosted HTTP mode with Microsoft Entra authentication
+- Session-level metadata caching
+- Per-user identity resolution for hosted multi-user deployments
 
-## Prerequisites
+## MCP Tools
+
+### Read tools
+
+- `list_jobs`
+- `list_candidates`
+- `list_contacts`
+- `list_companies`
+- `get_job`
+- `get_candidate`
+- `search_entities`
+- `query_entities`
+- `get_entity_fields`
+
+### Write tools
+
+- `create_company`
+- `create_contact`
+- `update_record`
+- `add_note`
+- `bulk_import`
+
+### Duplicate detection tools
+
+- `find_duplicate_companies`
+- `find_duplicate_contacts`
+
+## Supported Entity Scope
+
+The server supports generic search and query operations for Bullhorn entities, but write operations are intentionally limited.
+
+### Supported write targets
+
+- `ClientCorporation`
+- `ClientContact`
+- `Note`
+
+### Explicitly not supported
+
+- Deleting records
+- Merging records
+- Archiving records
+- Reassigning a `ClientContact` to a different company
+
+## Requirements
 
 - Python 3.10+
-- [uv](https://github.com/astral-sh/uv) (recommended) or pip
-- Bullhorn CRM account with API access
-- Bullhorn API credentials (Client ID, Client Secret, Username, Password)
-
-## Getting Your Bullhorn API Credentials
-
-You'll need four credentials from Bullhorn:
-
-1. **Client ID** and **Client Secret** - OAuth application credentials
-2. **API Username** and **API Password** - Service account for API access
-
-To obtain these:
-
-1. Contact your Bullhorn administrator or account manager
-2. Request API access for your account
-3. They will provide you with OAuth client credentials
-4. Create or use an existing service account for API authentication
-
-> **Note**: Your API username/password may be different from your regular Bullhorn login credentials.
+- [uv](https://github.com/astral-sh/uv) recommended, or `pip`
+- Bullhorn API credentials:
+  - `BULLHORN_CLIENT_ID`
+  - `BULLHORN_CLIENT_SECRET`
+  - `BULLHORN_USERNAME`
+  - `BULLHORN_PASSWORD`
 
 ## Installation
 
-### 1. Clone the Repository
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/osherai/bullhorn-mcp-python.git
 cd bullhorn-mcp-python
 ```
 
-### 2. Install Dependencies
+### 2. Install dependencies
 
-Using uv (recommended):
+Using `uv`:
 
 ```bash
-uv venv && uv pip install -e .
+uv venv
+uv pip install -e ".[dev]"
 ```
 
-Or using pip:
+Using `pip`:
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -e .
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
-### 3. Configure Credentials
+## Configuration
 
-Copy the example environment file and add your credentials:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your Bullhorn API credentials:
+Create a `.env` file with your Bullhorn credentials:
 
 ```env
 BULLHORN_CLIENT_ID=your_client_id
@@ -87,117 +125,95 @@ BULLHORN_USERNAME=your_api_username
 BULLHORN_PASSWORD=your_api_password
 ```
 
-### 4. Test the Connection
-
-```bash
-.venv/bin/python -c "
-from bullhorn_mcp.config import BullhornConfig
-from bullhorn_mcp.auth import BullhornAuth
-from bullhorn_mcp.client import BullhornClient
-
-config = BullhornConfig.from_env()
-auth = BullhornAuth(config)
-client = BullhornClient(auth)
-
-jobs = client.search('JobOrder', 'isDeleted:0', count=3)
-print(f'Successfully connected! Found {len(jobs)} jobs.')
-"
-```
-
-## Hosted Deployment
-
-The server supports an HTTP transport mode for hosting on remote infrastructure (Proxmox, Azure, a VPS, etc.) and exposing via a reverse proxy or Cloudflare Tunnel so that web-based AI clients (Claude.ai, ChatGPT) can connect to it.
-
-HTTP mode **requires** Microsoft Entra (Azure AD) OAuth to be configured. The server will refuse to start in HTTP mode if the Entra environment variables are missing. This ensures it is impossible to accidentally expose an unauthenticated endpoint.
-
-When a user connects, they are redirected to your Microsoft Entra tenant to sign in with their company account. Only users within your organisation's tenant can authenticate.
-
-### 1. Register an Entra application
-
-1. In the [Azure Portal](https://portal.azure.com), go to **Microsoft Entra ID > App registrations > New registration**
-2. Name it (e.g. `Bullhorn MCP Server`)
-3. Under **Supported account types**, select **Accounts in this organisational directory only**
-4. Under **Redirect URI**, select **Web** and enter: `https://your-domain.com/auth/callback`
-5. Click **Register** and note the **Application (client) ID** and **Directory (tenant) ID**
-6. Go to **Certificates & secrets > New client secret**, create a secret, and copy the value immediately
-7. Go to **Expose an API**, set the Application ID URI (accept the default `api://<client-id>`), and add a scope (e.g. `mcp.access`) with **Admins only** consent
-
-### 2. Set environment variables
+Optional Bullhorn endpoints:
 
 ```env
-MCP_TRANSPORT=http
-PORT=8000
-MCP_BASE_URL=https://your-domain.com
-
-ENTRA_TENANT_ID=your-tenant-id
-ENTRA_CLIENT_ID=your-client-id
-ENTRA_CLIENT_SECRET=your-client-secret
+BULLHORN_AUTH_URL=https://auth.bullhornstaffing.com
+BULLHORN_LOGIN_URL=https://rest.bullhornstaffing.com
 ```
 
-Add your Bullhorn credentials to `.env` as normal.
+## Running the Server
 
-### 3. Start the server
+### Local `stdio` mode
+
+`stdio` is the default transport and is intended for local MCP clients such as Claude Desktop, Claude Code, Cursor, Continue, Cline, and similar tools.
+
+Start the server with:
 
 ```bash
 .venv/bin/python -m bullhorn_mcp.server
 ```
 
-You should see a log line confirming HTTP mode and the bound port:
+Or via the console script:
 
-```
-INFO  Starting Bullhorn MCP server in HTTP mode on 0.0.0.0:8000
-```
-
-### 4. Expose via reverse proxy or tunnel
-
-Point a Cloudflare Tunnel (or nginx/caddy) at `http://localhost:8000` and expose it over HTTPS at a public domain, e.g. `https://bullhorn-mcp.example.com`.
-
-### 5. Connect your AI client
-
-In Claude.ai or ChatGPT, add a new MCP connector and set the server URL to:
-
-```
-https://bullhorn-mcp.example.com/mcp
+```bash
+.venv/bin/bullhorn-mcp
 ```
 
-The client will redirect you to your company Microsoft login on first connection. Once authenticated, the connection persists.
+### Hosted HTTP mode
 
-> **Note:** Local clients (Claude Desktop, Claude Code, Cursor, etc.) continue to use `stdio` transport and are unaffected by the Entra configuration.
+Set the transport to HTTP:
 
----
+```env
+MCP_TRANSPORT=http
+PORT=8000
+HOST=0.0.0.0
+MCP_BASE_URL=https://your-domain.example.com
+```
+
+HTTP mode requires Microsoft Entra configuration:
+
+```env
+ENTRA_TENANT_ID=your-tenant-id
+ENTRA_CLIENT_ID=your-client-id
+ENTRA_CLIENT_SECRET=your-client-secret
+```
+
+Then start the server normally:
+
+```bash
+.venv/bin/python -m bullhorn_mcp.server
+```
+
+The MCP endpoint will be served over HTTP and protected by Entra authentication.
+
+## Hosted Authentication Model
+
+When running in HTTP mode, the server requires Microsoft Entra authentication and resolves the authenticated caller to a Bullhorn `CorporateUser` by email.
+
+This is used for:
+
+- Protecting the hosted MCP endpoint
+- Auto-populating record ownership when supported
+- Ensuring per-user identity handling in multi-user deployments
+
+If the authenticated user cannot be mapped to a Bullhorn `CorporateUser`, create operations that rely on implicit ownership will fail with a clear error.
 
 ## Environment Variables
 
 | Variable                 | Required  | Description                                                               |
 | ------------------------ | --------- | ------------------------------------------------------------------------- |
-| `BULLHORN_CLIENT_ID`     | Yes       | Bullhorn OAuth 2.0 Client ID                                              |
-| `BULLHORN_CLIENT_SECRET` | Yes       | Bullhorn OAuth 2.0 Client Secret                                          |
-| `BULLHORN_USERNAME`      | Yes       | Bullhorn API Username                                                     |
-| `BULLHORN_PASSWORD`      | Yes       | Bullhorn API Password                                                     |
-| `BULLHORN_AUTH_URL`      | No        | Auth URL (default: https://auth.bullhornstaffing.com)                     |
-| `BULLHORN_LOGIN_URL`     | No        | Login URL (default: https://rest.bullhornstaffing.com)                    |
-| `MCP_TRANSPORT`          | No        | Transport mode: `stdio` (default) or `http`                               |
-| `PORT`                   | No        | HTTP listen port when `MCP_TRANSPORT=http` (default: 8000)                |
-| `HOST`                   | No        | HTTP bind address (default: `0.0.0.0` in http mode, `127.0.0.1` in stdio) |
-| `MCP_BASE_URL`           | HTTP only | Public URL of the server (e.g. `https://bullhorn-mcp.example.com`)        |
-| `ENTRA_TENANT_ID`        | HTTP only | Azure AD tenant ID                                                        |
+| `BULLHORN_CLIENT_ID`     | Yes       | Bullhorn OAuth 2.0 client ID                                              |
+| `BULLHORN_CLIENT_SECRET` | Yes       | Bullhorn OAuth 2.0 client secret                                          |
+| `BULLHORN_USERNAME`      | Yes       | Bullhorn API username                                                     |
+| `BULLHORN_PASSWORD`      | Yes       | Bullhorn API password                                                     |
+| `BULLHORN_AUTH_URL`      | No        | Auth URL, default `https://auth.bullhornstaffing.com`                     |
+| `BULLHORN_LOGIN_URL`     | No        | Login URL, default `https://rest.bullhornstaffing.com`                    |
+| `MCP_TRANSPORT`          | No        | Transport mode: `stdio` or `http`, default `stdio`                        |
+| `PORT`                   | No        | HTTP listen port when `MCP_TRANSPORT=http`, default `8000`                |
+| `HOST`                   | No        | HTTP bind host, default `0.0.0.0` in HTTP mode                            |
+| `MCP_BASE_URL`           | HTTP only | Public base URL of the hosted server                                      |
+| `ENTRA_TENANT_ID`        | HTTP only | Microsoft Entra tenant ID                                                 |
 | `ENTRA_CLIENT_ID`        | HTTP only | Entra app registration client ID                                          |
 | `ENTRA_CLIENT_SECRET`    | HTTP only | Entra app registration client secret                                      |
 
 ## Client Configuration
 
-This MCP server works with any MCP-compatible client. Below are setup instructions for popular clients.
-
-> **Note**: Replace `/path/to/bullhorn-mcp-python` with your actual installation path in all examples below.
-
----
+This server works with any MCP-compatible client. Replace `/path/to/bullhorn-mcp-python` with your actual installation path in the examples below.
 
 ### Claude Desktop
 
-Add to your Claude Desktop configuration file:
-
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+Add to your Claude Desktop MCP config:
 
 ```json
 {
@@ -211,13 +227,9 @@ Add to your Claude Desktop configuration file:
 }
 ```
 
-Restart Claude Desktop (fully quit and reopen) for changes to take effect.
+### Claude Code
 
----
-
-### Claude Code (CLI)
-
-Add the server using the Claude Code CLI:
+Add the server with the CLI:
 
 ```bash
 claude mcp add bullhorn \
@@ -228,28 +240,9 @@ claude mcp add bullhorn \
   -- /path/to/bullhorn-mcp-python/.venv/bin/python -m bullhorn_mcp.server
 ```
 
-Or add to your `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "bullhorn": {
-      "command": "/path/to/bullhorn-mcp-python/.venv/bin/python",
-      "args": ["-m", "bullhorn_mcp.server"],
-      "cwd": "/path/to/bullhorn-mcp-python"
-    }
-  }
-}
-```
-
----
-
 ### Cursor
 
-Add to your Cursor MCP configuration:
-
-**macOS**: `~/.cursor/mcp.json`
-**Windows**: `%USERPROFILE%\.cursor\mcp.json`
+Add to your Cursor MCP config:
 
 ```json
 {
@@ -263,388 +256,155 @@ Add to your Cursor MCP configuration:
 }
 ```
 
-Restart Cursor for changes to take effect.
+## Example MCP Usage
 
----
+### List recent companies
 
-### Windsurf (Codeium)
-
-Add to your Windsurf MCP configuration:
-
-**macOS**: `~/.codeium/windsurf/mcp_config.json`
-**Windows**: `%USERPROFILE%\.codeium\windsurf\mcp_config.json`
-
-```json
-{
-  "mcpServers": {
-    "bullhorn": {
-      "command": "/path/to/bullhorn-mcp-python/.venv/bin/python",
-      "args": ["-m", "bullhorn_mcp.server"],
-      "cwd": "/path/to/bullhorn-mcp-python"
-    }
-  }
-}
+```text
+list_companies()
 ```
 
-Restart Windsurf for changes to take effect.
+### Search open job orders
 
----
-
-### VS Code with Cline Extension
-
-Add to your Cline MCP settings:
-
-**macOS**: `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
-**Windows**: `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
-
-```json
-{
-  "mcpServers": {
-    "bullhorn": {
-      "command": "/path/to/bullhorn-mcp-python/.venv/bin/python",
-      "args": ["-m", "bullhorn_mcp.server"],
-      "cwd": "/path/to/bullhorn-mcp-python"
-    }
-  }
-}
+```text
+search_entities(entity="JobOrder", query="isOpen:1 AND title:Engineer")
 ```
 
----
+### Create a company
 
-### VS Code with Continue Extension
-
-Add to your Continue configuration at `~/.continue/config.json`:
-
-```json
-{
-  "experimental": {
-    "modelContextProtocolServers": [
-      {
-        "transport": {
-          "type": "stdio",
-          "command": "/path/to/bullhorn-mcp-python/.venv/bin/python",
-          "args": ["-m", "bullhorn_mcp.server"],
-          "cwd": "/path/to/bullhorn-mcp-python"
-        }
-      }
-    ]
-  }
-}
+```text
+create_company({
+  "name": "Northwind Analytics",
+  "status": "Prospect",
+  "phone": "+1 555 0100"
+})
 ```
 
----
+### Create a contact
 
-### Zed Editor
-
-Add to your Zed settings at `~/.config/zed/settings.json`:
-
-```json
-{
-  "context_servers": {
-    "bullhorn": {
-      "command": {
-        "path": "/path/to/bullhorn-mcp-python/.venv/bin/python",
-        "args": ["-m", "bullhorn_mcp.server"]
-      },
-      "settings": {}
-    }
-  }
-}
+```text
+create_contact({
+  "firstName": "Avery",
+  "lastName": "Cole",
+  "name": "Avery Cole",
+  "email": "avery.cole@northwind.example",
+  "occupation": "VP Engineering",
+  "clientCorporation": {"id": 12345},
+  "owner": "Jordan Patel"
+})
 ```
 
----
+### Update a company
 
-### Example Queries
-
-Once configured, you can ask natural language questions about your Bullhorn data:
-
-- "List the last 10 open jobs"
-- "Find candidates with Python experience"
-- "Show me details for job #12345"
-- "Search for active candidates added this month"
-- "What placements were made last week?"
-
-## Tools Reference
-
-### list_jobs
-
-List and filter job orders from Bullhorn CRM.
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `query` | string | No | Lucene search query |
-| `status` | string | No | Filter by job status |
-| `limit` | integer | No | Max results (default: 20, max: 500) |
-| `fields` | string | No | Comma-separated fields to return |
-
-**Examples:**
-
-```
-list_jobs()                                    # Recent jobs
-list_jobs(query="isOpen:1")                   # Open jobs only
-list_jobs(query="title:Engineer", limit=10)  # Engineer jobs
-list_jobs(status="Accepting Candidates")      # By status
+```text
+update_record("ClientCorporation", 12345, {
+  "status": "Active Account"
+})
 ```
 
-### list_candidates
+### Add a note
 
-List and filter candidates from Bullhorn CRM.
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `query` | string | No | Lucene search query |
-| `status` | string | No | Filter by candidate status |
-| `limit` | integer | No | Max results (default: 20, max: 500) |
-| `fields` | string | No | Comma-separated fields to return |
-
-**Examples:**
-
-```
-list_candidates()                              # Recent candidates
-list_candidates(query="skillSet:Python")      # Python developers
-list_candidates(status="Active", limit=50)    # Active candidates
+```text
+add_note("ClientCorporation", 12345, "General Note", "Spoke with the client about hiring plans.")
 ```
 
-### get_job
+### Bulk import
 
-Get detailed information for a specific job order.
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `job_id` | integer | Yes | The JobOrder ID |
-| `fields` | string | No | Comma-separated fields to return |
-
-### get_candidate
-
-Get detailed information for a specific candidate.
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `candidate_id` | integer | Yes | The Candidate ID |
-| `fields` | string | No | Comma-separated fields to return |
-
-### search_entities
-
-Search any Bullhorn entity type using Lucene query syntax.
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `entity` | string | Yes | Entity type (JobOrder, Candidate, Placement, etc.) |
-| `query` | string | Yes | Lucene search query |
-| `limit` | integer | No | Max results (default: 20, max: 500) |
-| `fields` | string | No | Comma-separated fields to return |
-
-**Supported Entities:**
-
-- `JobOrder` - Job postings
-- `Candidate` - Candidates/applicants
-- `Placement` - Job placements
-- `ClientCorporation` - Client companies
-- `ClientContact` - Client contacts
-- `JobSubmission` - Candidate submissions to jobs
-- `Appointment` - Scheduled appointments
-- `Note` - Notes and comments
-- And many more...
-
-### query_entities
-
-Query Bullhorn entities using SQL-like WHERE syntax.
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `entity` | string | Yes | Entity type |
-| `where` | string | Yes | WHERE clause |
-| `limit` | integer | No | Max results (default: 20, max: 500) |
-| `fields` | string | No | Comma-separated fields to return |
-| `order_by` | string | No | Sort order (e.g., "-dateAdded") |
-
-**Examples:**
-
-```
-query_entities(entity="JobOrder", where="salary > 100000")
-query_entities(entity="Candidate", where="status='Active'", order_by="-dateAdded")
+```text
+bulk_import(
+  companies=[{"name": "Northwind Analytics", "status": "Prospect"}],
+  contacts=[{
+    "firstName": "Avery",
+    "lastName": "Cole",
+    "company_name": "Northwind Analytics",
+    "email": "avery.cole@northwind.example",
+    "owner": "Jordan Patel"
+  }]
+)
 ```
 
-## Query Syntax
+## Field Resolution
 
-### Lucene Search Syntax
+The server supports Bullhorn metadata lookup and can resolve user-facing labels to API field names.
 
-Used by `list_jobs`, `list_candidates`, and `search_entities`:
+Use:
 
-```
-title:Engineer                           # Field contains value
-isOpen:1                                 # Boolean/numeric field
-salary:[50000 TO 100000]                # Range query
-firstName:"John"                         # Exact phrase
-firstName:John AND lastName:Smith       # AND condition
-status:Active OR status:Available       # OR condition
-NOT status:Inactive                      # Negation
-name:Acme*                              # Wildcard
+```text
+get_entity_fields("ClientContact")
 ```
 
-### SQL-like WHERE Syntax
+to inspect available fields and labels for an entity.
 
-Used by `query_entities`:
+## Duplicate Detection
 
-```
-salary > 100000                          # Comparison
-status = 'Active'                        # Equality (use single quotes)
-dateAdded > '2024-01-01'                # Date comparison
-id IN (1, 2, 3, 4, 5)                   # IN clause
-firstName = 'John' AND salary > 50000   # AND condition
-```
+The server provides duplicate detection before record creation:
 
-> **Note**: The LIKE operator is not supported in Bullhorn's query endpoint.
+- `find_duplicate_companies` performs fuzzy company-name matching
+- `find_duplicate_contacts` checks contacts within a company
 
-## Default Fields
+`create_contact` also performs duplicate detection unless explicitly forced.
 
-When `fields` is not specified, the following fields are returned:
+This is intended to reduce accidental duplicate CRM records during AI-assisted and bulk-import workflows.
 
-**JobOrder:**
-`id, title, status, employmentType, dateAdded, startDate, salary, clientCorporation, owner, description, numOpenings, isOpen`
+## Testing
 
-**Candidate:**
-`id, firstName, lastName, email, phone, status, dateAdded, occupation, skillSet, owner`
-
-## Hosted Deployment
-
-The server supports an HTTP transport mode for hosting on remote infrastructure (Proxmox, Azure, a VPS, etc.) and exposing via a reverse proxy or Cloudflare Tunnel so that web-based AI clients (Claude.ai, ChatGPT) can connect to it.
-
-### 1. Set environment variables
-
-```env
-MCP_TRANSPORT=http
-PORT=8000
-```
-
-Add your Bullhorn credentials to `.env` as normal.
-
-### 2. Start the server
+Run the full test suite:
 
 ```bash
-.venv/bin/python -m bullhorn_mcp.server
+.venv/bin/pytest
 ```
 
-You should see a log line confirming HTTP mode and the bound port:
+Run a single test file:
 
-```
-INFO  Starting Bullhorn MCP server in HTTP mode on 0.0.0.0:8000
-```
-
-The server binds on `0.0.0.0` by default in HTTP mode so it is reachable from outside the host.
-
-### 3. Expose via reverse proxy or tunnel
-
-Point a Cloudflare Tunnel (or nginx/caddy) at `http://localhost:8000` and expose it over HTTPS at a public domain, e.g. `https://bullhorn-mcp.example.com`.
-
-### 4. Connect your AI client
-
-In Claude.ai or ChatGPT, add a new MCP connector and set the server URL to:
-
-```
-https://bullhorn-mcp.example.com/mcp
+```bash
+.venv/bin/pytest tests/test_auth.py
 ```
 
-> **Note:** Local clients (Claude Desktop, Claude Code, Cursor, etc.) continue to work without any changes — the default transport remains `stdio`.
+Run a single test:
 
----
-
-## Environment Variables
-
-| Variable                 | Required | Description                                                |
-| ------------------------ | -------- | ---------------------------------------------------------- |
-| `BULLHORN_CLIENT_ID`     | Yes      | OAuth 2.0 Client ID                                        |
-| `BULLHORN_CLIENT_SECRET` | Yes      | OAuth 2.0 Client Secret                                    |
-| `BULLHORN_USERNAME`      | Yes      | API Username                                               |
-| `BULLHORN_PASSWORD`      | Yes      | API Password                                               |
-| `BULLHORN_AUTH_URL`      | No       | Auth URL (default: https://auth.bullhornstaffing.com)      |
-| `BULLHORN_LOGIN_URL`     | No       | Login URL (default: https://rest.bullhornstaffing.com)     |
-| `MCP_TRANSPORT`          | No       | Transport mode: `stdio` (default) or `http`                |
-| `PORT`                   | No       | HTTP listen port when `MCP_TRANSPORT=http` (default: 8000) |
-
-## Project Structure
-
-```
-bullhorn-mcp-python/
-├── pyproject.toml              # Project configuration and dependencies
-├── .env.example                # Environment variables template
-├── README.md                   # This file
-├── LICENSE                     # MIT License
-└── src/
-    └── bullhorn_mcp/
-        ├── __init__.py         # Package initialization
-        ├── server.py           # MCP server with tool definitions
-        ├── auth.py             # Bullhorn OAuth 2.0 authentication
-        ├── client.py           # Bullhorn REST API client
-        └── config.py           # Configuration management
+```bash
+.venv/bin/pytest tests/test_auth.py::TestBullhornAuth::test_full_auth_flow
 ```
 
-## Troubleshooting
+## Project Layout
 
-### "Missing required environment variables"
+```text
+src/bullhorn_mcp/
+  auth.py       Bullhorn OAuth flow and REST login
+  bulk.py       Bulk import orchestration
+  client.py     Bullhorn REST API wrapper
+  config.py     Environment-based configuration
+  fuzzy.py      Duplicate matching helpers
+  identity.py   Authenticated-user to CorporateUser resolution
+  metadata.py   Field metadata and label resolution
+  server.py     MCP server entry point and tool definitions
 
-Ensure all required variables are set in your `.env` file or environment.
+tests/
+  test_auth.py
+  test_bulk.py
+  test_client.py
+  test_config.py
+  test_fuzzy.py
+  test_identity.py
+  test_metadata.py
+  test_server.py
+```
 
-### Authentication Errors
+## Design Notes
 
-1. Verify your credentials are correct
-2. Check that your API user has appropriate permissions
-3. Ensure your Bullhorn account has API access enabled
+- Bullhorn authentication is non-standard and requires an auth-code step, token exchange, and a REST login to obtain `BhRestToken`
+- The client automatically refreshes sessions and retries once on `401`
+- Metadata is cached within a session
+- Hosted identity resolution is cached per authenticated user
+- `ClientContact.title` is intentionally stripped from write payloads to avoid confusion with `occupation`
 
-### "Connection refused" or timeout errors
+## Limitations
 
-1. Check your internet connection
-2. Verify the auth/login URLs are correct for your Bullhorn datacenter
-3. Some Bullhorn instances use regional URLs (e.g., `rest9.bullhornstaffing.com`)
-
-### MCP server not appearing in your client
-
-1. Ensure the config file path is correct for your client (see Client Configuration section)
-2. Verify the Python path in the config points to the `.venv` directory
-3. Fully quit and restart your client application
-4. Check your client's logs for error messages
-5. Test the server manually:
-   ```bash
-   cd /path/to/bullhorn-mcp-python
-   .venv/bin/python -m bullhorn_mcp.server
-   ```
-   The server should start without errors (it will wait for input on stdin)
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+- No delete or merge support
+- No company reassignment for contacts
+- No Bullhorn bulk-create endpoint exists, so bulk import is processed one record at a time
+- Bullhorn metadata is not always reliable for required-field enforcement
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- [Bullhorn](https://www.bullhorn.com/) for their REST API
-- [Model Context Protocol](https://modelcontextprotocol.io/) for the MCP specification
-- [Anthropic](https://www.anthropic.com/) for Claude and the MCP Python SDK
-- The teams behind [Cursor](https://cursor.sh/), [Windsurf](https://codeium.com/windsurf), [Cline](https://github.com/saoudrizwan/claude-dev), [Continue](https://continue.dev/), and [Zed](https://zed.dev/) for MCP support
-
----
-
-## About Osher Digital
-
-This project is maintained by [Osher Digital](https://osher.com.au), specialist AI consultants based in Australia. We help businesses integrate AI solutions to streamline operations and drive growth.
-
-**Need help with AI integration?** [Get in touch](https://osher.com.au)
-
-## Disclaimer
-
-This is an unofficial, community-maintained project. It is not affiliated with, officially maintained, or endorsed by Bullhorn.
+See [LICENSE](LICENSE).
