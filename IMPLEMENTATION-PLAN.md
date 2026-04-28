@@ -1372,5 +1372,12 @@ If re-authentication still occurs after more than 1 hour, extend the access toke
 
 - `src/bullhorn_mcp/server.py`: `extra_authorize_params["scope"]` updated from `"openid profile email"` to `"openid profile email offline_access"`. `required_scopes` unchanged (governs server-side token validation, not the authorization request).
 - `.env.example`: added a three-line comment under the Entra block clarifying that `offline_access` is handled automatically by the server.
-- `README.md`: added `### Session Persistence` subsection between `### Hosted HTTP mode` and `## Hosted Authentication Model`, explaining `offline_access`, the default 1-hour token lifetime, and two options (Azure Portal and PowerShell) for extending the lifetime via a Token Lifetime Policy.
+- `README.md`: added `#### Session Persistence` subsection nested under `### Hosted HTTP mode`, explaining `offline_access`, the default 1-hour token lifetime, and how to extend it via a Token Lifetime Policy using `Invoke-MgGraphRequest` (universally supported across Graph SDK versions). Includes link to Microsoft Learn documentation.
 - **248 tests passing, 0 failing** (no new tests; all existing tests pass unchanged).
+
+### Review cycle learnings
+
+- Token Lifetime Policies in Entra have **no Azure Portal UI** — they are managed exclusively via Microsoft Graph (PowerShell or direct API). Do not document an Azure Portal path for this.
+- When assigning a Token Lifetime Policy to a service principal via PowerShell, use `Invoke-MgGraphRequest` with a `POST` to `servicePrincipals/<id>/tokenLifetimePolicies/$ref` and an `@odata.id` body. `New-MgServicePrincipalTokenLifetimePolicyByRef` is not a stable Graph SDK v2 cmdlet.
+- README sections documenting HTTP-only features should use `####` headings when placed under an existing `### Hosted HTTP mode` section to preserve correct heading hierarchy.
+- Avoid using `$ref` as a PowerShell variable name alongside URI strings that contain the literal path segment `$ref` — use a less ambiguous name (e.g. `$policyRef`) to prevent reader confusion.
