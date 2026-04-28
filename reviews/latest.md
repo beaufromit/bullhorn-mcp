@@ -1,8 +1,8 @@
-# Review: restore dropped test assertions for create_company label resolution and payload
+# Review: Fix m1/m2/m3 minor issues from Sprint 18 review
 
-**Commit:** e5b8a52
-**Date:** 2026-04-14
-**Files changed:** 3 (IMPLEMENTATION-PLAN.md, reviews/latest.md, tests/test_server.py)
+**Commit:** e284427
+**Date:** 2026-04-15
+**Files changed:** 3
 
 ## CRITICAL
 
@@ -14,8 +14,7 @@ None.
 
 ## MINOR
 
-- **m1: Unused import `mock_patch` persists** — `tests/test_server.py:7`
-  `from unittest.mock import Mock, patch, patch as mock_patch`. Not introduced by this diff; carried forward from earlier sprints.
+None.
 
 ## Verdict
 
