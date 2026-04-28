@@ -177,7 +177,7 @@ Then start the server normally:
 
 The MCP endpoint will be served over HTTP and protected by Entra authentication.
 
-### Session Persistence
+#### Session Persistence
 
 The server automatically requests the `offline_access` scope during the Entra authorization flow. This causes Entra to issue a refresh token alongside the short-lived access token, allowing the MCP client to silently renew sessions without prompting the user to sign in again.
 
@@ -185,11 +185,7 @@ No configuration is required — `offline_access` is handled entirely by the ser
 
 **Default token lifetime:** Microsoft Entra access tokens have a default lifetime of 1 hour. With `offline_access` in place, sessions are renewed silently before the user notices any interruption. If users are still being prompted to re-authenticate more frequently than expected (e.g. after idle periods exceeding the token lifetime), you can extend the access token lifetime via a Token Lifetime Policy in the Entra tenant.
 
-**Option 1 — Azure Portal:**
-1. Go to **App registrations** → select your app.
-2. Under **Token configuration**, add or modify a Token Lifetime Policy via Microsoft Graph, setting `AccessTokenLifetime` to your desired duration (e.g. `PT8H` for 8 hours).
-
-**Option 2 — PowerShell (requires tenant admin access):**
+Token Lifetime Policies are managed via Microsoft Graph — there is no Azure Portal UI for this. Using the Microsoft.Graph PowerShell module (requires tenant admin access):
 
 ```powershell
 # Create a token lifetime policy extending access tokens to 8 hours
@@ -197,13 +193,15 @@ $policy = New-MgPolicyTokenLifetimePolicy -DisplayName "MCP Extended Session" `
     -Definition @('{"TokenLifetimePolicy":{"Version":1,"AccessTokenLifetime":"08:00:00"}}') `
     -IsOrganizationDefault $false
 
-# Assign the policy to your app registration (replace <app-object-id>)
-New-MgServicePrincipalTokenLifetimePolicyByRef `
-    -ServicePrincipalId <app-object-id> `
-    -OdataId "https://graph.microsoft.com/v1.0/policies/tokenLifetimePolicies/$($policy.Id)"
+# Assign the policy to the app's service principal (replace <service-principal-object-id>)
+# Find the Object ID in Azure Portal → Enterprise applications → your app → Overview
+$ref = @{ "@odata.id" = "https://graph.microsoft.com/v1.0/policies/tokenLifetimePolicies/$($policy.Id)" }
+Invoke-MgGraphRequest -Method POST `
+    -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/<service-principal-object-id>/tokenLifetimePolicies/`$ref" `
+    -Body $ref
 ```
 
-Replace `<app-object-id>` with the Object ID of your app registration's service principal (found in **Enterprise applications** in the Azure Portal).
+See [Configure token lifetimes — Microsoft Learn](https://learn.microsoft.com/en-us/entra/identity-platform/configure-token-lifetimes) for full documentation.
 
 ## Hosted Authentication Model
 
