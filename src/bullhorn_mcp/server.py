@@ -81,7 +81,7 @@ def _build_auth() -> OIDCProxy | None:
         audience=client_id,
         verify_id_token=True,
         extra_authorize_params={
-            "scope": "openid profile email",
+            "scope": "openid profile email offline_access",
         },
     )
 

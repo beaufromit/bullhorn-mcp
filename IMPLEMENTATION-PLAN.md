@@ -34,6 +34,7 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 16 | **COMPLETE** | Fix Sprint 15 test regressions + CR9: Identity resolution — 229 tests passing |
 | Sprint 17 | **COMPLETE** | CR10: Owner stamping — auto-populate owner from authenticated user in create_contact / create_company — 244 tests passing |
 | Sprint 18 | **COMPLETE** | CR11: Per-user identity cache — fix first-writer-wins bug for multi-user HTTP deployments — 248 tests passing |
+| Sprint 19 | **COMPLETE** | CR12: Add offline_access scope + README Session Persistence docs — 248 tests passing, tagged v0.0.19 |
 
 ### Sprint 15 post-tag regression note
 
@@ -1280,3 +1281,96 @@ If any existing test's mock token lacks `sub`, add `"sub": "test-sub-value"` to 
 - `tests/test_identity.py`: added `"sub"` claim to all existing mock token fixtures (required by the new `sub`-first extraction order). Added 4 new tests: `test_resolve_caller_no_sub_claim`, `test_resolve_caller_multi_user_isolation`, `test_resolve_caller_multi_user_cache_hit`, `test_reset_caller_cache_clears_all`.
 - `tests/test_server.py`: updated Sprint 17 E2E token fixtures for `test_e2e_create_contact_no_owner_auto_populated` and `test_e2e_create_company_no_owner_auto_populated` to include `"sub": "sub-beau"` — these tests mock `get_access_token` directly and call the real `identity.py`, so they also needed the `sub` claim.
 - **248 tests passing, 0 failing.**
+
+---
+
+## Sprint 19: CR12 — Add offline_access Scope and Document Session Persistence
+
+**Change request:** CR12.md
+**User stories affected:** US-22 (HTTP mode sessions now persist across idle periods without re-authentication)
+**Dependency:** Sprint 18 complete
+**Tag:** v0.0.19
+
+### Background
+
+Users of the hosted MCP server are forced to re-authenticate via Windows Hello / Microsoft SSO after a period of inactivity. The root cause is that `_build_auth()` does not request the `offline_access` scope, so Entra never issues a refresh token — only a short-lived access token (default lifetime: 1 hour). When that expires, FastMCP's `OIDCProxy` has no way to silently renew the session and the MCP client forces a full re-authentication.
+
+This sprint is a minimal change: one-line string update in `server.py`, one doc comment in `.env.example`, and a `Session Persistence` subsection in `README.md`. No logic changes, no new tests.
+
+### Tasks
+
+#### T19.1 — Add `offline_access` to `extra_authorize_params` in `_build_auth()`
+**File:** `src/bullhorn_mcp/server.py`
+
+**Current state** (lines ~83–85):
+```python
+extra_authorize_params={
+    "scope": "openid profile email",
+},
+```
+
+**Change to:**
+```python
+extra_authorize_params={
+    "scope": "openid profile email offline_access",
+},
+```
+
+`required_scopes` (which governs what the server validates on incoming tokens) is **not** changed — only `extra_authorize_params` (what the server requests during the authorization redirect) is updated.
+
+No tests needed — the behaviour depends on a live Entra tenant issuing a refresh token, which cannot be unit tested meaningfully. All 248 existing tests must continue to pass.
+
+#### T19.2 — Update `.env.example` with `offline_access` note
+**File:** `.env.example`
+
+Under the `ENTRA_*` variables block, add a comment clarifying that `offline_access` is handled automatically:
+
+```
+# Microsoft Entra OAuth (required for remote HTTP deployment)
+# Note: offline_access scope is requested automatically by the server
+# to enable session persistence. No additional configuration is required.
+ENTRA_TENANT_ID=
+ENTRA_CLIENT_ID=
+ENTRA_CLIENT_SECRET=
+MCP_BASE_URL=
+```
+
+This prevents future operators from wondering why `offline_access` does not appear in the env config.
+
+#### T19.3 — Add `Session Persistence` subsection to `README.md`
+**File:** `README.md`
+
+Add a `### Session Persistence` subsection under `## Hosted Deployment`. The subsection should explain:
+
+1. The server requests `offline_access` automatically, enabling refresh tokens and avoiding repeated sign-in prompts during a working session.
+2. The default Entra access token lifetime is 1 hour. If users are still being prompted to re-authenticate more frequently than expected, a Token Lifetime Policy can be configured in the Entra tenant.
+3. Two approaches to extend the token lifetime:
+   - **Azure Portal:** App registrations → the app → Token configuration → add a Token Lifetime Policy via Microsoft Graph.
+   - **PowerShell (if tenant admin access is available):** brief example showing the command to extend access token lifetime to 8 hours and assign it to the app registration.
+
+Do not hardcode any tenant-specific values — this is guidance only.
+
+### Acceptance criteria (from CR12)
+
+1. The authorization request sent to Entra includes `offline_access` in the scope parameter.
+2. After deployment, a user who authenticates once can continue using MCP tools across a full working day without re-authentication prompts.
+3. `.env.example` includes a comment clarifying that `offline_access` is handled automatically by the server.
+4. `README.md` includes a `Session Persistence` subsection under hosted deployment documentation.
+5. All 248 existing tests pass unchanged. No new tests required.
+
+### Testing notes
+
+The `offline_access` behaviour cannot be meaningfully unit tested because it depends on Entra issuing a refresh token from a live tenant. Verify the fix manually:
+1. Deploy the updated server.
+2. Connect from Claude.ai or ChatGPT and authenticate.
+3. Leave the connection idle for more than 1 hour.
+4. Invoke a tool — if the session persists without a re-authentication prompt, the fix is working.
+
+If re-authentication still occurs after more than 1 hour, extend the access token lifetime in the Entra tenant as documented in the README.
+
+### What was delivered
+
+- `src/bullhorn_mcp/server.py`: `extra_authorize_params["scope"]` updated from `"openid profile email"` to `"openid profile email offline_access"`. `required_scopes` unchanged (governs server-side token validation, not the authorization request).
+- `.env.example`: added a three-line comment under the Entra block clarifying that `offline_access` is handled automatically by the server.
+- `README.md`: added `### Session Persistence` subsection between `### Hosted HTTP mode` and `## Hosted Authentication Model`, explaining `offline_access`, the default 1-hour token lifetime, and two options (Azure Portal and PowerShell) for extending the lifetime via a Token Lifetime Policy.
+- **248 tests passing, 0 failing** (no new tests; all existing tests pass unchanged).
