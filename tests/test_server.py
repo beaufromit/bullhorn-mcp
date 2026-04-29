@@ -741,6 +741,25 @@ class TestCreateJob:
         mock_resolve.assert_not_called()
         assert mock_client.create.call_args.args[1]["owner"] == {"id": 99}
 
+    def test_create_job_owner_ambiguous(self, mock_client, mock_metadata):
+        """create_job returns owner_ambiguous when a name resolves to multiple CorporateUsers."""
+        mock_client.resolve_owner.return_value = [
+            {"id": 10, "firstName": "John", "lastName": "Smith", "email": "j1@firm.com"},
+            {"id": 11, "firstName": "John", "lastName": "Smith", "email": "j2@firm.com"},
+        ]
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_job(
+                clientCorporation={"id": 1},
+                clientContact={"id": 2},
+                title="Engineer",
+                fields={"owner": "John Smith"},
+            )
+        data = json.loads(result)
+        assert data["error"] == "owner_ambiguous"
+        assert len(data["matches"]) == 2
+        mock_client.create.assert_not_called()
+
     def test_create_job_identity_resolution_fails(self, mock_client, mock_metadata):
         from bullhorn_mcp.identity import IdentityResolutionError
         with patch.object(server, "get_client", return_value=mock_client), \
