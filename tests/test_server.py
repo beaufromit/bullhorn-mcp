@@ -504,6 +504,440 @@ class TestCreateContact:
         mock_client.resolve_owner.assert_called_once_with({"id": 99})
 
 
+class TestCreateJob:
+    """Tests for create_job tool."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = [
+            {"name": "clientCorporation"},
+            {"name": "clientContact"},
+            {"name": "title"},
+            {"name": "source"},
+            {"name": "grade"},
+            {"name": "fee"},
+            {"name": "salary"},
+            {"name": "website_sector_range"},
+            {"name": "website_salary_range"},
+            {"name": "website_location"},
+            {"name": "status"},
+            {"name": "isOpen"},
+            {"name": "customText12"},
+            {"name": "publicDescription"},
+            {"name": "description"},
+            {"name": "owner"},
+        ]
+        return meta
+
+    def _required_kwargs(self):
+        return {
+            "clientCorporation": {"id": 12345},
+            "clientContact": {"id": 67890},
+            "title": "Senior Software Engineer",
+            "source": "Email",
+            "grade": "Senior",
+            "fee": 25000,
+            "salary": 90000,
+            "website_sector_range": "Technology",
+            "website_salary_range": "80000-100000",
+            "website_location": "London",
+        }
+
+    def test_create_job_success(self, mock_client, mock_metadata):
+        """create_job validates/defaults payload and creates a JobOrder."""
+        mock_client.create.return_value = {
+            "changedEntityId": 12345,
+            "changeType": "INSERT",
+            "data": {"id": 12345, "title": "Senior Software Engineer"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            result = server.create_job(**self._required_kwargs(), publicDescription="Public copy")
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 12345
+        payload = mock_client.create.call_args.args[1]
+        assert payload["clientCorporation"] == {"id": 12345}
+        assert payload["clientContact"] == {"id": 67890}
+        assert payload["status"] == "Accepting Candidates"
+        assert payload["isOpen"] is True
+        assert payload["customText12"] == 0
+        assert payload["owner"] == {"id": 42}
+        assert payload["publicDescription"] == "Public copy"
+        mock_client.create.assert_called_once()
+        assert mock_client.create.call_args.args[0] == "JobOrder"
+
+    def test_create_job_requires_client_corporation(self, mock_client, mock_metadata):
+        kwargs = self._required_kwargs()
+        kwargs["clientCorporation"] = None
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_job(**kwargs)
+
+        data = json.loads(result)
+        assert data["error"] == "clientCorporation_required"
+        mock_client.create.assert_not_called()
+
+    def test_create_job_requires_client_contact(self, mock_client, mock_metadata):
+        kwargs = self._required_kwargs()
+        kwargs["clientContact"] = None
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_job(**kwargs)
+
+        data = json.loads(result)
+        assert data["error"] == "clientContact_required"
+        mock_client.create.assert_not_called()
+
+    def test_create_job_rejects_malformed_client_corporation(self, mock_client, mock_metadata):
+        kwargs = self._required_kwargs()
+        kwargs["clientCorporation"] = {"name": "Acme"}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_job(**kwargs)
+
+        data = json.loads(result)
+        assert data["error"] == "clientCorporation_required"
+        mock_client.create.assert_not_called()
+
+    def test_create_job_rejects_malformed_client_contact(self, mock_client, mock_metadata):
+        kwargs = self._required_kwargs()
+        kwargs["clientContact"] = {"name": "Jane Doe"}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_job(**kwargs)
+
+        data = json.loads(result)
+        assert data["error"] == "clientContact_required"
+        mock_client.create.assert_not_called()
+
+    def test_create_job_defaults(self, mock_client, mock_metadata):
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            server.create_job(**self._required_kwargs())
+
+        payload = mock_client.create.call_args.args[1]
+        assert payload["status"] == "Accepting Candidates"
+        assert payload["isOpen"] is True
+        assert payload["customText12"] == 0
+        assert payload["owner"] == {"id": 42}
+
+    def test_create_job_owner_auto_populated(self, mock_client, mock_metadata):
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 77, "email": "user@example.com"}):
+            server.create_job(**self._required_kwargs())
+
+        payload = mock_client.create.call_args.args[1]
+        assert payload["owner"] == {"id": 77}
+
+    def test_create_job_explicit_owner_wins(self, mock_client, mock_metadata):
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller") as mock_resolve:
+            server.create_job(**self._required_kwargs(), owner={"id": 99})
+
+        mock_resolve.assert_not_called()
+        mock_client.resolve_owner.assert_called_once_with({"id": 99})
+        assert mock_client.create.call_args.args[1]["owner"] == {"id": 99}
+
+    def test_create_job_identity_resolution_fails(self, mock_client, mock_metadata):
+        from bullhorn_mcp.identity import IdentityResolutionError
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("No authentication token available")):
+            result = server.create_job(**self._required_kwargs())
+
+        data = json.loads(result)
+        assert data["error"] == "identity_resolution_failed"
+        mock_client.create.assert_not_called()
+
+    def test_create_job_public_description_optional(self, mock_client, mock_metadata):
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            server.create_job(**self._required_kwargs())
+
+        assert "publicDescription" not in mock_client.create.call_args.args[1]
+
+    def test_create_job_rejects_unknown_structured_field(self, mock_client, mock_metadata):
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            result = server.create_job(**self._required_kwargs(), extra_fields={"unknownJobField": "x"})
+
+        data = json.loads(result)
+        assert data["error"] == "unknown_job_fields"
+        assert data["fields"] == ["unknownJobField"]
+        mock_client.create.assert_not_called()
+
+    def test_create_job_does_not_call_create_on_validation_error(self, mock_client, mock_metadata):
+        kwargs = self._required_kwargs()
+        kwargs["title"] = None
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            result = server.create_job(**kwargs)
+
+        data = json.loads(result)
+        assert data["error"] == "required_fields_missing"
+        assert data["fields"] == ["title"]
+        mock_client.create.assert_not_called()
+
+    def test_create_job_required_business_fields_are_explicit(self, mock_client, mock_metadata):
+        kwargs = self._required_kwargs()
+        kwargs["website_location"] = None
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            result = server.create_job(**kwargs)
+
+        data = json.loads(result)
+        assert data["error"] == "required_fields_missing"
+        assert data["fields"] == ["website_location"]
+        mock_client.create.assert_not_called()
+
+
+class TestUpdateJob:
+    """Tests for update_job tool."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_update_job_success(self, mock_client, mock_metadata):
+        mock_client.update.return_value = {
+            "changedEntityId": 12345,
+            "changeType": "UPDATE",
+            "data": {"id": 12345, "title": "Senior Engineer"},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_job(12345, {"title": "Senior Engineer"})
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 12345
+        mock_client.update.assert_called_once_with("JobOrder", 12345, {"title": "Senior Engineer"})
+
+    def test_update_job_label_resolution(self, mock_client):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.return_value = {"publicDescription": "Copy"}
+        mock_client.update.return_value = {"changedEntityId": 1, "changeType": "UPDATE", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            server.update_job(1, {"Published Description": "Copy"})
+
+        meta.resolve_fields.assert_called_once_with("JobOrder", {"Published Description": "Copy"})
+        mock_client.update.assert_called_once_with("JobOrder", 1, {"publicDescription": "Copy"})
+
+    def test_update_job_public_description_alias(self, mock_client):
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = BullhornMetadata(mock_client)
+        mock_client.get_meta.return_value = {"fields": []}
+        mock_client.update.return_value = {"changedEntityId": 1, "changeType": "UPDATE", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            server.update_job(1, {"published description": "Copy"})
+
+        mock_client.update.assert_called_once_with("JobOrder", 1, {"publicDescription": "Copy"})
+
+    def test_update_job_publish_on_website_alias(self, mock_client):
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = BullhornMetadata(mock_client)
+        mock_client.get_meta.return_value = {"fields": []}
+        mock_client.update.return_value = {"changedEntityId": 1, "changeType": "UPDATE", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta):
+            server.update_job(1, {"publish on website": 0})
+
+        mock_client.update.assert_called_once_with("JobOrder", 1, {"customText12": 0})
+
+    def test_update_job_does_not_strip_title(self, mock_client, mock_metadata):
+        mock_client.update.return_value = {"changedEntityId": 1, "changeType": "UPDATE", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.update_job(1, {"title": "Senior Engineer"})
+
+        assert mock_client.update.call_args.args[2] == {"title": "Senior Engineer"}
+
+    def test_update_job_payload_only_contains_caller_fields(self, mock_client, mock_metadata):
+        mock_client.update.return_value = {"changedEntityId": 1, "changeType": "UPDATE", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller") as mock_resolve:
+            server.update_job(1, {"publicDescription": "Copy"})
+
+        mock_resolve.assert_not_called()
+        assert mock_client.update.call_args.args[2] == {"publicDescription": "Copy"}
+
+    def test_update_job_api_error(self, mock_client, mock_metadata):
+        mock_client.update.side_effect = BullhornAPIError("update failed")
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_job(1, {"title": "Senior Engineer"})
+
+        assert result.startswith("ERROR:")
+
+
+class TestSprint21JobOrderE2E:
+    """E2E-style tests for first-class JobOrder write tools."""
+
+    @pytest.fixture
+    def mock_auth(self, mock_session):
+        from unittest.mock import Mock, PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+        return auth
+
+    def _job_meta_response(self):
+        names = [
+            "clientCorporation",
+            "clientContact",
+            "title",
+            "source",
+            "grade",
+            "fee",
+            "salary",
+            "website_sector_range",
+            "website_salary_range",
+            "website_location",
+            "status",
+            "isOpen",
+            "customText12",
+            "publicDescription",
+            "description",
+            "owner",
+        ]
+        return {
+            "entity": "JobOrder",
+            "fields": [
+                {"name": name, "label": name, "type": "STRING", "required": False}
+                for name in names
+            ],
+        }
+
+    def test_e2e_create_job(self, mock_auth, mock_session):
+        """Full create_job path sends required fields, defaults, owner, and publicDescription."""
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        captured = {}
+
+        def capture_put(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"changedEntityId": 12345, "changeType": "INSERT"})
+
+        created_record = {
+            "id": 12345,
+            "title": "Senior Software Engineer",
+            "status": "Accepting Candidates",
+            "isOpen": True,
+            "customText12": 0,
+            "publicDescription": "Public-facing job description...",
+            "owner": {"id": 42},
+        }
+        real_client = BullhornClient(mock_auth)
+        real_metadata = BullhornMetadata(real_client)
+
+        with respx.mock:
+            respx.get(f"{mock_session.rest_url}/meta/JobOrder").mock(
+                return_value=httpx.Response(200, json=self._job_meta_response())
+            )
+            respx.put(f"{mock_session.rest_url}/entity/JobOrder").mock(side_effect=capture_put)
+            respx.get(f"{mock_session.rest_url}/entity/JobOrder/12345").mock(
+                return_value=httpx.Response(200, json={"data": created_record})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=real_metadata), \
+                 patch.object(server, "resolve_caller", return_value={"id": 42}):
+                result = server.create_job(
+                    clientCorporation={"id": 100},
+                    clientContact={"id": 200},
+                    title="Senior Software Engineer",
+                    source="Email",
+                    grade="Senior",
+                    fee=25000,
+                    salary=90000,
+                    website_sector_range="Technology",
+                    website_salary_range="80000-100000",
+                    website_location="London",
+                    publicDescription="Public-facing job description...",
+                )
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 12345
+        assert captured["body"]["clientCorporation"] == {"id": 100}
+        assert captured["body"]["clientContact"] == {"id": 200}
+        assert captured["body"]["status"] == "Accepting Candidates"
+        assert captured["body"]["isOpen"] is True
+        assert captured["body"]["customText12"] == 0
+        assert captured["body"]["owner"] == {"id": 42}
+        assert captured["body"]["publicDescription"] == "Public-facing job description..."
+
+    def test_e2e_update_job_public_description(self, mock_auth, mock_session):
+        """Full update_job path resolves published-description alias before POST."""
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        captured = {}
+
+        def capture_post(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"changedEntityId": 12345, "changeType": "UPDATE"})
+
+        updated_record = {
+            "id": 12345,
+            "publicDescription": "Updated public-facing job description...",
+        }
+        real_client = BullhornClient(mock_auth)
+        real_metadata = BullhornMetadata(real_client)
+
+        with respx.mock:
+            respx.post(f"{mock_session.rest_url}/entity/JobOrder/12345").mock(
+                side_effect=capture_post
+            )
+            respx.get(f"{mock_session.rest_url}/entity/JobOrder/12345").mock(
+                return_value=httpx.Response(200, json={"data": updated_record})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=real_metadata):
+                result = server.update_job(
+                    12345,
+                    {"published description": "Updated public-facing job description..."},
+                )
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 12345
+        assert captured["body"] == {
+            "publicDescription": "Updated public-facing job description..."
+        }
+
+
 class TestUpdateRecord:
     """Tests for update_record tool."""
 
@@ -1032,6 +1466,8 @@ class TestMCPServerSetup:
         assert "get_entity_fields" in tools
         assert "create_company" in tools
         assert "create_contact" in tools
+        assert "create_job" in tools
+        assert "update_job" in tools
         assert "find_duplicate_companies" in tools
         assert "find_duplicate_contacts" in tools
         assert "update_record" in tools

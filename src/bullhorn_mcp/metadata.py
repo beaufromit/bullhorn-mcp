@@ -18,6 +18,11 @@ FIELD_ALIASES: dict[str, dict[str, str]] = {
     "ClientContact": {
         "job title": "occupation",
     },
+    "JobOrder": {
+        "published description": "publicDescription",
+        "public description": "publicDescription",
+        "publish on website": "customText12",
+    },
 }
 
 

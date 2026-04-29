@@ -6,13 +6,13 @@ PRD.md now contains 13 functional requirements (FR-1 through FR-13) and user sto
 
 **Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
 
-**Current validation note:** Sprints 1-20 are implemented and tested, with 260 tests passing. Sprint 20 closed the PRD parity gaps found during replan review: `find_duplicate_contacts` now supports company-name resolution and email-aware partial matching, bulk import flags likely/possible contact duplicate matches, stdio startup logging is covered, and an in-process streamable HTTP smoke test proves an MCP HTTP request reaches a registered tool. The HTTP smoke test intentionally avoids production Entra OIDC and Bullhorn credentials; those remain covered by mocked startup/config tests and deployment verification.
+**Current validation note:** Sprints 1-21 are implemented and tested, with 286 tests passing. Sprint 21 completed CR13: first-class JobOrder create/update tools, JobOrder aliases, README docs, and unit/E2E coverage. Sprint 20 closed the PRD parity gaps found during replan review: `find_duplicate_contacts` now supports company-name resolution and email-aware partial matching, bulk import flags likely/possible contact duplicate matches, stdio startup logging is covered, and an in-process streamable HTTP smoke test proves an MCP HTTP request reaches a registered tool. The HTTP smoke test intentionally avoids production Entra OIDC and Bullhorn credentials; those remain covered by mocked startup/config tests and deployment verification.
 
 **Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete for their original scope. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
 
 **CR8-CR12 — hosted deployment and identity:** FR-11 and FR-12 cover HTTP transport, Entra authentication, identity resolution, owner stamping, per-user identity cache, and session persistence. Sprints 15-19 implement this scope.
 
-**CR13 — JobOrder writes:** FR-13 and US-24 through US-26 cover first-class JobOrder create/update tools. Sprint 21 plans this work.
+**CR13 — JobOrder writes:** FR-13 and US-24 through US-26 cover first-class JobOrder create/update tools. Sprint 21 completed this scope with `create_job`, `update_job`, JobOrder aliases, README documentation, and unit/E2E coverage. No PRD/user-story discrepancy was found for CR13.
 
 ---
 
@@ -40,7 +40,7 @@ PRD.md now contains 13 functional requirements (FR-1 through FR-13) and user sto
 | Sprint 18 | **COMPLETE** | CR11: Per-user identity cache — fix first-writer-wins bug for multi-user HTTP deployments — 248 tests passing |
 | Sprint 19 | **COMPLETE** | CR12: Add offline_access scope + README Session Persistence docs — 248 tests passing, tagged v0.0.19 |
 | Sprint 20 | **COMPLETE** | PRD parity hardening: contact duplicate company-name support, bulk likely/possible contact flags, HTTP smoke test, stdio startup logging — 260 tests passing |
-| Sprint 21 | **PLANNED** | CR13: First-class JobOrder create/update tools, JobOrder aliases, README updates, unit and E2E tests |
+| Sprint 21 | **COMPLETE** | CR13: First-class JobOrder create/update tools, JobOrder aliases, README updates, unit and E2E tests — 286 tests passing |
 
 ### Sprint 15 post-tag regression note
 
@@ -63,8 +63,8 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/config.py` — `BullhornConfig` dataclass with env loading
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note()`
-- `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant for known metadata gaps (e.g. "job title" → `occupation` for ClientContact)
-- `src/bullhorn_mcp/server.py` — MCP server with 16 implemented tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`. Includes `get_client()` and `get_metadata()` helpers. Sprint 21 plans adding `create_job` and `update_job`, which will bring the tool count to 18.
+- `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant for known metadata gaps (e.g. "job title" → `occupation` for ClientContact, JobOrder published-description/publish-on-website aliases)
+- `src/bullhorn_mcp/server.py` — MCP server with 18 implemented tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`. Includes `get_client()` and `get_metadata()` helpers.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
@@ -78,12 +78,12 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_auth.py` — 13 tests (auth flow, regional servers)
 - `tests/test_config.py` — 6 tests
 - `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
-- `tests/test_metadata.py` — 21 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, e2e)
+- `tests/test_metadata.py` — 25 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, Sprint 21 JobOrder aliases, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 119 tests (all 16 implemented tools + server setup + E2E tests Sprints 1–20)
+- `tests/test_server.py` — 141 tests (all 18 implemented tools + server setup + E2E tests Sprints 1–21)
 - `tests/test_bulk.py` — 18 tests (company processing, contact processing, summary, E2E)
 - `tests/test_identity.py` — 13 tests (Entra token to CorporateUser resolution, per-user cache)
-- **Total: 260 tests, all passing**
+- **Total: 286 tests, all passing**
 
 ---
 
@@ -1491,12 +1491,13 @@ PRD FR-4, FR-5, FR-11, US-7, US-8, US-9, US-10, and US-22 now have implementatio
 
 ---
 
-## Sprint 21: CR13 — First-class JobOrder Create and Update Tools — PLANNED
+## Sprint 21: CR13 — First-class JobOrder Create and Update Tools — COMPLETE
 
 **Change request:** CR13.md
 **User stories:** US-24, US-25, US-26
 **Functional requirement:** FR-13
 **Dependency:** Sprint 20 complete
+**Completion status:** Implemented and tested. CR13 now has first-class JobOrder create/update tools, JobOrder aliases, README documentation, and unit/E2E coverage.
 
 ### Background
 
@@ -1508,7 +1509,7 @@ CR13 adds two first-class MCP tools:
 
 ### Tasks
 
-#### T21.1 — Add JobOrder field aliases
+#### T21.1 — Add JobOrder field aliases (DONE)
 **File:** `src/bullhorn_mcp/metadata.py`
 
 Extend `FIELD_ALIASES` with a `JobOrder` entry:
@@ -1529,7 +1530,7 @@ Tests:
 - `tests/test_metadata.py::test_resolve_fields_joborder_publish_on_website_alias`
 - `tests/test_metadata.py::test_joborder_aliases_do_not_affect_client_contact`
 
-#### T21.2 — Add `create_job` MCP tool
+#### T21.2 — Add `create_job` MCP tool (DONE)
 **File:** `src/bullhorn_mcp/server.py`
 
 Add a new `@mcp.tool()` named `create_job` with explicit required business inputs:
@@ -1562,9 +1563,10 @@ Defaults:
 Validation:
 - Reject missing or malformed `clientCorporation` before calling Bullhorn.
 - Reject missing or malformed `clientContact` before calling Bullhorn.
-- Reject unknown structured create fields before calling Bullhorn.
+- Validate structured business keys against JobOrder metadata or explicit aliases before calling Bullhorn; reject unknown structured create fields instead of passing them through silently.
 - Caller-provided owner always wins; if owner is absent and identity resolution fails, return the same `identity_resolution_failed` response shape used by `create_contact`/`create_company`.
 - Do not default or invent `publicDescription`; only send it if supplied.
+- Preserve the existing `client.create()` response shape (`changedEntityId`, `changeType`, `data`) and do not add duplicate detection, company/contact auto-creation, or bulk job import.
 
 Tests:
 - `tests/test_server.py::test_create_job_success`
@@ -1578,8 +1580,10 @@ Tests:
 - `tests/test_server.py::test_create_job_identity_resolution_fails`
 - `tests/test_server.py::test_create_job_public_description_optional`
 - `tests/test_server.py::test_create_job_rejects_unknown_structured_field`
+- `tests/test_server.py::test_create_job_does_not_call_create_on_validation_error`
+- `tests/test_server.py::test_create_job_required_business_fields_are_explicit`
 
-#### T21.3 — Add `update_job` MCP tool
+#### T21.3 — Add `update_job` MCP tool (DONE)
 **File:** `src/bullhorn_mcp/server.py`
 
 Signature:
@@ -1595,6 +1599,7 @@ Behavior:
 - Return the existing update response shape.
 - Do not strip or block `title`; ClientContact title stripping must remain scoped only to ClientContact.
 - Leave `update_record` unchanged for backward compatibility.
+- Do not auto-populate owner or defaults in `update_job`; it must update only caller-supplied fields after resolution.
 
 Tests:
 - `tests/test_server.py::test_update_job_success`
@@ -1605,7 +1610,7 @@ Tests:
 - `tests/test_server.py::test_update_job_payload_only_contains_caller_fields`
 - `tests/test_server.py::test_update_job_api_error`
 
-#### T21.4 — Register tools and update tool-list tests
+#### T21.4 — Register tools and update tool-list tests (DONE)
 **File:** `tests/test_server.py`
 
 Update MCP tool registration tests to include `create_job` and `update_job`. Expected implemented tool count becomes 18.
@@ -1613,7 +1618,7 @@ Update MCP tool registration tests to include `create_job` and `update_job`. Exp
 Test:
 - `tests/test_server.py::TestMCPServerSetup::test_server_has_tools`
 
-#### T21.5 — Update README and tool documentation
+#### T21.5 — Update README and tool documentation (DONE)
 **Files:** `README.md`, `src/bullhorn_mcp/server.py`
 
 README changes:
@@ -1622,12 +1627,13 @@ README changes:
 - Document that `publicDescription` is Bullhorn's published job description field.
 - Document that `customText12` controls "Publish on website" in the local Bullhorn configuration and defaults to `0`.
 - Note that generic `update_record` remains available but JobOrder callers should use `update_job`.
+- Keep unsupported-scope documentation explicit: no JobOrder duplicate detection, bulk job import, deletion, merging, archiving, or automatic company/contact creation.
 
 Tool docstrings:
 - Add clear `create_job` and `update_job` examples.
 - Do not include unconfirmed local custom-field mappings beyond the structured fields accepted by the tool.
 
-#### T21.6 — Add E2E-style mocked HTTP tests
+#### T21.6 — Add E2E-style mocked HTTP tests (DONE)
 **Files:** `tests/test_server.py`, `tests/test_metadata.py`
 
 Tests:
@@ -1656,6 +1662,15 @@ Tests:
 14. README documents the new tools and JobOrder write support.
 15. All existing tests pass plus the new Sprint 21 tests.
 
+### What was delivered
+
+- Added first-class `create_job` and `update_job` MCP tools for JobOrder writes.
+- Added JobOrder aliases for published description/public description and publish-on-website fields.
+- Kept JobOrder `title` writes separate from ClientContact title stripping and preserved exact caller-field update payloads for `update_job`.
+- Updated README documentation for JobOrder write support, `publicDescription`, and local publish-on-website behavior.
+- Added Sprint 21 unit and E2E coverage across metadata aliases, tool registration, `create_job`, and `update_job`.
+- **286 tests passing, 0 failing.**
+
 ### Expected outcome
 
-After Sprint 21, PRD FR-13 and US-24 through US-26 should be implemented and tested. The MCP server should expose 18 tools. Existing ClientContact title stripping remains scoped to ClientContact and does not affect JobOrder.
+PRD FR-13 and US-24 through US-26 are implemented and tested. The MCP server exposes 18 tools. Existing ClientContact title stripping remains scoped to ClientContact and does not affect JobOrder.

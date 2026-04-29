@@ -3,13 +3,14 @@
 import json
 import logging
 import os
+from typing import Any
 from fastmcp import FastMCP
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 
 from .config import BullhornConfig
 from .auth import BullhornAuth, AuthenticationError
 from .client import BullhornClient, BullhornAPIError
-from .metadata import BullhornMetadata
+from .metadata import BullhornMetadata, FIELD_ALIASES
 from .fuzzy import score_company_match, categorize_score, score_contact_match
 from .bulk import BulkImporter
 from .identity import resolve_caller, IdentityResolutionError
@@ -44,6 +45,56 @@ def _company_name_search_query(company_name: str) -> str:
         return f"name:{first_term[0]}*"
 
     return f"name:{first_term}*"
+
+
+JOB_REQUIRED_BUSINESS_FIELDS = (
+    "title",
+    "source",
+    "grade",
+    "fee",
+    "salary",
+    "website_sector_range",
+    "website_salary_range",
+    "website_location",
+)
+
+
+def _validate_job_reference(field_name: str, value: Any) -> dict | None:
+    """Return an error dict if a JobOrder relationship reference is malformed."""
+    if not isinstance(value, dict) or "id" not in value:
+        return {
+            "error": f"{field_name}_required",
+            "message": f"{field_name} must be an object containing an id.",
+        }
+    return None
+
+
+def _missing_job_required_fields(fields: dict) -> list[str]:
+    """Return required JobOrder business fields that were not supplied."""
+    missing = []
+    for field in JOB_REQUIRED_BUSINESS_FIELDS:
+        value = fields.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            missing.append(field)
+    return missing
+
+
+def _validate_job_fields_known(metadata: BullhornMetadata, fields: dict) -> dict | None:
+    """Ensure structured JobOrder create keys resolved to known fields."""
+    known_fields = {field["name"] for field in metadata.get_fields("JobOrder")}
+    known_fields.update(FIELD_ALIASES.get("JobOrder", {}).values())
+    unknown_fields = [field for field in fields if field not in known_fields]
+
+    if unknown_fields:
+        return {
+            "error": "unknown_job_fields",
+            "message": (
+                "These JobOrder fields could not be resolved from Bullhorn metadata "
+                "or confirmed aliases."
+            ),
+            "fields": unknown_fields,
+        }
+    return None
 
 
 # Read transport configuration at module load so FastMCP receives the right host/port.
@@ -597,6 +648,167 @@ def create_contact(fields: dict, force: bool = False) -> str:
 
     except ValueError as e:
         return format_response({"error": "owner_not_found", "message": str(e)})
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def create_job(
+    clientCorporation: dict | None = None,
+    clientContact: dict | None = None,
+    title: str | None = None,
+    source: Any | None = None,
+    grade: Any | None = None,
+    fee: Any | None = None,
+    salary: Any | None = None,
+    website_sector_range: Any | None = None,
+    website_salary_range: Any | None = None,
+    website_location: Any | None = None,
+    publicDescription: str | None = None,
+    description: str | None = None,
+    owner: dict | str | None = None,
+    status: str = "Accepting Candidates",
+    isOpen: bool = True,
+    customText12: Any = 0,
+    extra_fields: dict | None = None,
+) -> str:
+    """Create a new JobOrder record in Bullhorn CRM.
+
+    Args:
+        clientCorporation: Bullhorn company reference, {"id": int}.
+        clientContact: Bullhorn client contact reference, {"id": int}.
+        title: Job title.
+        source: Source field value.
+        grade: Grade field value.
+        fee: Fee field value.
+        salary: Salary field value.
+        website_sector_range: Website sector range field value.
+        website_salary_range: Website salary range field value.
+        website_location: Website location field value.
+        publicDescription: Optional public-facing job description.
+        description: Optional internal job description.
+        owner: Optional Bullhorn owner reference or resolvable consultant name.
+        status: Job status, default "Accepting Candidates".
+        isOpen: Open flag, default True.
+        customText12: Local "Publish on website" field, default 0.
+        extra_fields: Optional additional JobOrder fields validated against metadata.
+
+    Returns:
+        JSON object with changedEntityId, changeType, and full created JobOrder data.
+
+    Examples:
+        - create_job(clientCorporation={"id": 12345}, clientContact={"id": 67890},
+                     title="Senior Software Engineer", source="Email",
+                     grade="Senior", fee=25000, salary=90000,
+                     website_sector_range="Technology",
+                     website_salary_range="80000-100000",
+                     website_location="London")
+    """
+    try:
+        client = get_client()
+        metadata = get_metadata()
+
+        for field_name, value in (
+            ("clientCorporation", clientCorporation),
+            ("clientContact", clientContact),
+        ):
+            error = _validate_job_reference(field_name, value)
+            if error is not None:
+                return format_response(error)
+
+        if extra_fields is not None and not isinstance(extra_fields, dict):
+            return format_response({
+                "error": "invalid_extra_fields",
+                "message": "extra_fields must be a dictionary when provided.",
+            })
+
+        payload = {
+            "clientCorporation": clientCorporation,
+            "clientContact": clientContact,
+            "title": title,
+            "source": source,
+            "grade": grade,
+            "fee": fee,
+            "salary": salary,
+            "website_sector_range": website_sector_range,
+            "website_salary_range": website_salary_range,
+            "website_location": website_location,
+            "status": status,
+            "isOpen": isOpen,
+            "customText12": customText12,
+        }
+
+        missing_fields = _missing_job_required_fields(payload)
+        if missing_fields:
+            return format_response({
+                "error": "required_fields_missing",
+                "message": "Missing required JobOrder business fields.",
+                "fields": missing_fields,
+            })
+
+        if publicDescription is not None:
+            payload["publicDescription"] = publicDescription
+        if description is not None:
+            payload["description"] = description
+
+        if owner is None:
+            try:
+                caller = resolve_caller(client)
+                payload["owner"] = {"id": caller["id"]}
+            except IdentityResolutionError as e:
+                return format_response({
+                    "error": "identity_resolution_failed",
+                    "message": str(e),
+                    "hint": "Provide an explicit 'owner' field or check that your email matches a Bullhorn CorporateUser.",
+                })
+        else:
+            owner_result = client.resolve_owner(owner)
+            if isinstance(owner_result, list):
+                return format_response({
+                    "error": "owner_ambiguous",
+                    "matches": owner_result,
+                    "message": "Multiple users found. Specify owner by ID.",
+                })
+            payload["owner"] = owner_result
+
+        if extra_fields:
+            payload.update(extra_fields)
+
+        resolved = metadata.resolve_fields("JobOrder", payload)
+        unknown_error = _validate_job_fields_known(metadata, resolved)
+        if unknown_error is not None:
+            return format_response(unknown_error)
+
+        result = client.create("JobOrder", resolved)
+        return format_response(result)
+
+    except ValueError as e:
+        return format_response({"error": "owner_not_found", "message": str(e)})
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def update_job(job_id: int, fields: dict) -> str:
+    """Update fields on an existing JobOrder record.
+
+    Args:
+        job_id: Bullhorn JobOrder ID to update.
+        fields: Dictionary of JobOrder field names or display labels to update.
+
+    Returns:
+        JSON object with changedEntityId, changeType, and full updated JobOrder data.
+
+    Examples:
+        - update_job(12345, {"published description": "Updated public copy"})
+        - update_job(12345, {"publish on website": 0, "title": "Senior Engineer"})
+    """
+    try:
+        client = get_client()
+        resolved = get_metadata().resolve_fields("JobOrder", fields)
+        result = client.update("JobOrder", job_id, resolved)
+        return format_response(result)
+
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
 

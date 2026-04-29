@@ -16,6 +16,7 @@ Typical use cases:
 
 - Search and review Bullhorn records from an AI client
 - Create and update `ClientCorporation` and `ClientContact` records
+- Create and update `JobOrder` records with explicit job-specific tools
 - Detect likely duplicates before creating new companies or contacts
 - Bulk-import discovered companies and contacts into Bullhorn
 - Host the MCP server remotely behind authenticated HTTP transport
@@ -25,7 +26,7 @@ Typical use cases:
 - Bullhorn OAuth 2.0 authentication with automatic session refresh
 - Support for Bullhorn regional auth redirects
 - Read tools for jobs, candidates, contacts, companies, and arbitrary entities
-- Create and update workflows for `ClientCorporation` and `ClientContact`
+- Create and update workflows for `ClientCorporation`, `ClientContact`, and `JobOrder`
 - Duplicate detection for companies and contacts using fuzzy matching
 - Bulk import orchestration for companies and contacts
 - Bullhorn metadata lookup and field label resolution
@@ -52,7 +53,9 @@ Typical use cases:
 
 - `create_company`
 - `create_contact`
+- `create_job`
 - `update_record`
+- `update_job`
 - `add_note`
 - `bulk_import`
 
@@ -69,6 +72,7 @@ The server supports generic search and query operations for Bullhorn entities, b
 
 - `ClientCorporation`
 - `ClientContact`
+- `JobOrder`
 - `Note`
 
 ### Explicitly not supported
@@ -77,6 +81,8 @@ The server supports generic search and query operations for Bullhorn entities, b
 - Merging records
 - Archiving records
 - Reassigning a `ClientContact` to a different company
+- JobOrder duplicate detection or bulk job import
+- Automatic company or client-contact creation during JobOrder creation
 
 ## Requirements
 
@@ -320,6 +326,24 @@ create_contact({
 })
 ```
 
+### Create a job
+
+```text
+create_job(
+  clientCorporation={"id": 12345},
+  clientContact={"id": 67890},
+  title="Senior Software Engineer",
+  source="Email",
+  grade="Senior",
+  fee=25000,
+  salary=90000,
+  website_sector_range="Technology",
+  website_salary_range="80000-100000",
+  website_location="London",
+  publicDescription="Public-facing job description..."
+)
+```
+
 ### Update a company
 
 ```text
@@ -327,6 +351,17 @@ update_record("ClientCorporation", 12345, {
   "status": "Active Account"
 })
 ```
+
+### Update a job
+
+```text
+update_job(12345, {
+  "publicDescription": "Updated public-facing job description...",
+  "customText12": 0
+})
+```
+
+`publicDescription` is Bullhorn's published job description field. In this local Bullhorn configuration, `customText12` controls "Publish on website" and defaults to `0`, meaning not published. Existing generic `update_record` remains available for backward compatibility, but JobOrder callers should use `update_job`.
 
 ### Add a note
 

@@ -215,6 +215,29 @@ class TestSprint9FieldAudit:
         assert set(result.keys()) == {"name"}
 
 
+def test_resolve_fields_joborder_published_description_alias(metadata, mock_client):
+    result = metadata.resolve_fields("JobOrder", {"published description": "External posting text"})
+    assert result == {"publicDescription": "External posting text"}
+    mock_client.get_meta.assert_not_called()
+
+
+def test_resolve_fields_joborder_public_description_alias(metadata, mock_client):
+    result = metadata.resolve_fields("JobOrder", {"public description": "External posting text"})
+    assert result == {"publicDescription": "External posting text"}
+    mock_client.get_meta.assert_not_called()
+
+
+def test_resolve_fields_joborder_publish_on_website_alias(metadata, mock_client):
+    result = metadata.resolve_fields("JobOrder", {"publish on website": "Yes"})
+    assert result == {"customText12": "Yes"}
+    mock_client.get_meta.assert_not_called()
+
+
+def test_joborder_aliases_do_not_affect_client_contact(metadata):
+    result = metadata.resolve_fields("ClientContact", {"published description": "External posting text"})
+    assert result == {"published description": "External posting text"}
+
+
 class TestSprint2E2E:
     def test_sprint2_e2e_full_resolution_cycle(self, metadata):
         """Full round-trip: get fields, resolve label->api, resolve api->label."""
