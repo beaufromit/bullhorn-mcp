@@ -1671,6 +1671,18 @@ Tests:
 - Added Sprint 21 unit and E2E coverage across metadata aliases, tool registration, `create_job`, and `update_job`.
 - **286 tests passing, 0 failing.**
 
+### Review cycle findings
+
+Two moderate findings were identified and fixed during the Sprint 21 review cycle.
+
+**Finding 1 — `extra_fields` could silently override resolved owner.**
+`payload.update(extra_fields)` executed after owner resolution, so a caller passing `owner` inside `extra_fields` would silently overwrite the resolved owner. Fixed by storing `resolved_owner` before the merge and re-applying it after `payload.update(extra_fields)` so owner always wins regardless of `extra_fields` contents.
+
+**Finding 2 — Defaulted non-required fields could pass `None` to Bullhorn.**
+`status`, `isOpen`, and `customText12` are non-required with defaults. If a caller explicitly passed `None` for any of these, the default logic did not guard against it and `None` would be sent to Bullhorn. Fixed by using `x if x is not None else default` in payload construction for each of these fields.
+
+**Final state: 290 tests passing, 0 failing. Tagged v0.0.21.**
+
 ### Expected outcome
 
 PRD FR-13 and US-24 through US-26 are implemented and tested. The MCP server exposes 18 tools. Existing ClientContact title stripping remains scoped to ClientContact and does not affect JobOrder.
