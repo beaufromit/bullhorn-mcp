@@ -1482,6 +1482,8 @@ Test:
 
 - For FastMCP HTTP smoke coverage, avoid `main()` and `MCP_TRANSPORT=http` because that path intentionally constructs Entra `OIDCProxy` at import/startup and may perform discovery. Use `mcp.http_app(path="/mcp", transport="streamable-http", stateless_http=True)` with `httpx.ASGITransport` and the FastMCP client under the app lifespan context.
 - The HTTP smoke test verifies transport wiring and registered-tool dispatch only. Production Entra auth remains covered by startup/config tests plus deployment verification.
+- Review found acronym company-name lookup was still too narrow with searches like `name:BNY*`. Uppercase acronym searches now route through the first initial query, for example `name:B*`, so local fuzzy scoring can see candidates such as Bank of New York Mellon.
+- Fresh review cleared CRITICAL and MODERATE issues.
 
 ### Expected outcome
 
