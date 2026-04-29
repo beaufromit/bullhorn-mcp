@@ -844,6 +844,7 @@ class TestFindDuplicateContacts:
         assert data["resolved_company"]["id"] == 44321
         assert data["matches"][0]["category"] in {"likely", "possible"}
         assert data["matches"][0]["record"]["id"] == 11234
+        assert mock_client.search.call_args_list[0].kwargs["query"] == "name:B*"
 
     def test_find_duplicate_contacts_api_error(self, mock_client):
         """Returns ERROR prefix on API failure."""

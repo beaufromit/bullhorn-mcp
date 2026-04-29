@@ -31,6 +31,21 @@ def _strip_contact_title(fields: dict, entity: str) -> tuple[dict, list[str]]:
     return fields, warnings
 
 
+def _company_name_search_query(company_name: str) -> str:
+    """Build a company search query broad enough for local fuzzy matching."""
+    stripped = company_name.strip()
+    if not stripped:
+        return "isDeleted:0"
+
+    first_term = stripped.split()[0]
+    # Acronyms like BNY need candidates such as "Bank of New York Mellon" to be
+    # returned before local fuzzy scoring can identify the abbreviation match.
+    if first_term.isupper() and first_term.isalpha() and 2 <= len(first_term) <= 6:
+        return f"name:{first_term[0]}*"
+
+    return f"name:{first_term}*"
+
+
 # Read transport configuration at module load so FastMCP receives the right host/port.
 # MCP_TRANSPORT: "stdio" (default, backward-compatible) or "http" (hosted deployment).
 # PORT: HTTP listen port (default 8000). Ignored in stdio mode.
@@ -751,10 +766,9 @@ def find_duplicate_contacts(
                     "message": "Provide either client_corporation_id or company_name.",
                 })
 
-            broad_term = company_name.split()[0] if company_name.strip() else company_name
             companies = client.search(
                 "ClientCorporation",
-                query=f"name:{broad_term}*",
+                query=_company_name_search_query(company_name),
                 fields="id,name,status,phone",
                 count=50,
             )
