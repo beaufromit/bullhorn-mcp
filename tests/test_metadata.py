@@ -238,6 +238,45 @@ def test_joborder_aliases_do_not_affect_client_contact(metadata):
     assert result == {"published description": "External posting text"}
 
 
+class TestCR14JobOrderEnvAliases:
+    """Tests for BULLHORN_JOBORDER_ALIASES wired into FIELD_ALIASES at module load."""
+
+    def test_field_aliases_joborder_includes_env_entries(self, monkeypatch):
+        """Env-defined aliases appear in FIELD_ALIASES['JobOrder'] after module reload."""
+        import importlib
+        monkeypatch.setenv("BULLHORN_JOBORDER_ALIASES", '{"sector": "customText1"}')
+        import bullhorn_mcp.metadata as meta_mod
+        importlib.reload(meta_mod)
+        try:
+            assert meta_mod.FIELD_ALIASES["JobOrder"]["sector"] == "customText1"
+        finally:
+            monkeypatch.delenv("BULLHORN_JOBORDER_ALIASES", raising=False)
+            importlib.reload(meta_mod)
+
+    def test_field_aliases_env_overrides_hardcoded(self, monkeypatch):
+        """Env alias overrides a hardcoded entry on key conflict."""
+        import importlib
+        monkeypatch.setenv("BULLHORN_JOBORDER_ALIASES", '{"publish on website": "customText99"}')
+        import bullhorn_mcp.metadata as meta_mod
+        importlib.reload(meta_mod)
+        try:
+            assert meta_mod.FIELD_ALIASES["JobOrder"]["publish on website"] == "customText99"
+        finally:
+            monkeypatch.delenv("BULLHORN_JOBORDER_ALIASES", raising=False)
+            importlib.reload(meta_mod)
+
+    def test_field_aliases_hardcoded_intact_when_env_empty(self, monkeypatch):
+        """Hardcoded JobOrder aliases survive when env var is unset."""
+        import importlib
+        monkeypatch.delenv("BULLHORN_JOBORDER_ALIASES", raising=False)
+        import bullhorn_mcp.metadata as meta_mod
+        importlib.reload(meta_mod)
+        aliases = meta_mod.FIELD_ALIASES["JobOrder"]
+        assert aliases["published description"] == "publicDescription"
+        assert aliases["public description"] == "publicDescription"
+        assert aliases["publish on website"] == "customText12"
+
+
 class TestSprint2E2E:
     def test_sprint2_e2e_full_resolution_cycle(self, metadata):
         """Full round-trip: get fields, resolve label->api, resolve api->label."""

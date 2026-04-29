@@ -209,6 +209,28 @@ Invoke-MgGraphRequest -Method POST `
 
 See [Configure token lifetimes — Microsoft Learn](https://learn.microsoft.com/en-us/entra/identity-platform/configure-token-lifetimes) for full documentation.
 
+### JobOrder Per-instance Configuration
+
+Bullhorn custom field names vary between instances. Three optional environment variables allow operators to configure `create_job` for their specific setup without code changes.
+
+| Variable | Format | Purpose |
+|----------|--------|---------|
+| `BULLHORN_JOBORDER_ALIASES` | JSON object | Map friendly names to API field names. Keys are lowercased. Env entries override hardcoded aliases on conflict. |
+| `BULLHORN_JOBORDER_REQUIRED` | JSON array | Additional fields required beyond `title`, `clientCorporation`, `clientContact`. Entries may be aliases. |
+| `BULLHORN_JOBORDER_DEFAULTS` | JSON object | Default values applied when caller omits a field. Caller values always win. |
+
+Example (set in `.env` or environment):
+
+```
+BULLHORN_JOBORDER_ALIASES='{"sector": "customText1", "salary range": "customText10", "location": "customText11", "grade": "correlatedCustomText2", "fee": "feeArrangement"}'
+BULLHORN_JOBORDER_REQUIRED='["source"]'
+BULLHORN_JOBORDER_DEFAULTS='{"status": "Accepting Candidates", "isOpen": true, "customText12": 0}'
+```
+
+With these set, callers can use `"sector"`, `"salary range"`, and `"location"` as keys in `fields` and they resolve to the correct custom fields. Use `get_entity_fields("JobOrder")` to discover the API field names for your instance.
+
+Invalid JSON in any of these variables logs a warning and falls back to the empty default. The server starts normally.
+
 ## Hosted Authentication Model
 
 When running in HTTP mode, the server requires Microsoft Entra authentication and resolves the authenticated caller to a Bullhorn `CorporateUser` by email.
@@ -333,16 +355,18 @@ create_job(
   clientCorporation={"id": 12345},
   clientContact={"id": 67890},
   title="Senior Software Engineer",
-  source="Email",
-  grade="Senior",
-  fee=25000,
-  salary=90000,
-  website_sector_range="Technology",
-  website_salary_range="80000-100000",
-  website_location="London",
-  publicDescription="Public-facing job description..."
+  fields={
+    "source": "Email",
+    "salary": 90000,
+    "publicDescription": "Public-facing job description...",
+    "sector": "Technology",
+    "salary range": "80000-100000",
+    "location": "London"
+  }
 )
 ```
+
+`clientCorporation`, `clientContact`, and `title` are the only Bullhorn-required fields. Everything else goes in `fields` using API names, metadata labels, or aliases configured in `BULLHORN_JOBORDER_ALIASES`. Use `get_entity_fields("JobOrder")` to discover available field names for your instance.
 
 ### Update a company
 

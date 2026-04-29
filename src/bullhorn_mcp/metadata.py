@@ -1,6 +1,7 @@
 """Bullhorn entity field metadata and label resolution."""
 
 from .client import BullhornClient
+from .joborder_config import get_joborder_aliases
 
 # Hardcoded aliases for known cases where Bullhorn's metadata labels do not
 # reliably map to the correct API field name. These supplement (and take
@@ -14,6 +15,10 @@ from .client import BullhornClient
 #     - `occupation` — the person's job title (e.g. "VP of Engineering")
 #   Callers commonly say "job title" meaning the role; without this alias the
 #   key would pass through as `title`, silently setting the salutation field.
+#
+# JobOrder aliases extend the hardcoded set with env-defined entries at module
+# load. Env entries override hardcoded ones on conflict so operators can correct
+# instance-specific mappings without code changes (BULLHORN_JOBORDER_ALIASES).
 FIELD_ALIASES: dict[str, dict[str, str]] = {
     "ClientContact": {
         "job title": "occupation",
@@ -22,6 +27,7 @@ FIELD_ALIASES: dict[str, dict[str, str]] = {
         "published description": "publicDescription",
         "public description": "publicDescription",
         "publish on website": "customText12",
+        **get_joborder_aliases(),
     },
 }
 

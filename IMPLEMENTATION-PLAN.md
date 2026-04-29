@@ -6,13 +6,13 @@ PRD.md now contains 13 functional requirements (FR-1 through FR-13) and user sto
 
 **Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
 
-**Current validation note:** Sprints 1-21 are implemented and tested, with 286 tests passing. Sprint 21 completed CR13: first-class JobOrder create/update tools, JobOrder aliases, README docs, and unit/E2E coverage. Sprint 20 closed the PRD parity gaps found during replan review: `find_duplicate_contacts` now supports company-name resolution and email-aware partial matching, bulk import flags likely/possible contact duplicate matches, stdio startup logging is covered, and an in-process streamable HTTP smoke test proves an MCP HTTP request reaches a registered tool. The HTTP smoke test intentionally avoids production Entra OIDC and Bullhorn credentials; those remain covered by mocked startup/config tests and deployment verification.
+**Current validation note:** Sprints 1-22 are implemented and tested, with 305 tests passing. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load. Sprint 21 completed CR13: first-class JobOrder create/update tools, JobOrder aliases, README docs, and unit/E2E coverage. Sprint 20 closed the PRD parity gaps found during replan review.
 
 **Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete for their original scope. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
 
 **CR8-CR12 — hosted deployment and identity:** FR-11 and FR-12 cover HTTP transport, Entra authentication, identity resolution, owner stamping, per-user identity cache, and session persistence. Sprints 15-19 implement this scope.
 
-**CR13 — JobOrder writes:** FR-13 and US-24 through US-26 cover first-class JobOrder create/update tools. Sprint 21 completed this scope with `create_job`, `update_job`, JobOrder aliases, README documentation, and unit/E2E coverage. No PRD/user-story discrepancy was found for CR13.
+**CR13/CR14 — JobOrder writes:** FR-13 and US-24 through US-26 cover first-class JobOrder create/update tools. Sprint 21 completed CR13 and Sprint 22 completed CR14 (the fix for CR13's broken `create_job`). `update_job` and JobOrder aliases were implemented correctly in CR13 and remain unchanged.
 
 ---
 
@@ -40,7 +40,8 @@ PRD.md now contains 13 functional requirements (FR-1 through FR-13) and user sto
 | Sprint 18 | **COMPLETE** | CR11: Per-user identity cache — fix first-writer-wins bug for multi-user HTTP deployments — 248 tests passing |
 | Sprint 19 | **COMPLETE** | CR12: Add offline_access scope + README Session Persistence docs — 248 tests passing, tagged v0.0.19 |
 | Sprint 20 | **COMPLETE** | PRD parity hardening: contact duplicate company-name support, bulk likely/possible contact flags, HTTP smoke test, stdio startup logging — 260 tests passing |
-| Sprint 21 | **COMPLETE** | CR13: First-class JobOrder create/update tools, JobOrder aliases, README updates, unit and E2E tests — 286 tests passing |
+| Sprint 21 | **COMPLETE** | CR13: First-class JobOrder create/update tools, JobOrder aliases, README updates, unit and E2E tests — 290 tests passing, tagged v0.0.21 |
+| Sprint 22 | **COMPLETE** | CR14: Refactor `create_job` to dict-based signature with per-instance env configuration — fixes broken CR13 implementation — 305 tests passing |
 
 ### Sprint 15 post-tag regression note
 
@@ -63,13 +64,14 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/config.py` — `BullhornConfig` dataclass with env loading
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note()`
-- `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant for known metadata gaps (e.g. "job title" → `occupation` for ClientContact, JobOrder published-description/publish-on-website aliases)
+- `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant extended at module load with env-defined JobOrder aliases via `joborder_config.get_joborder_aliases()`
 - `src/bullhorn_mcp/server.py` — MCP server with 18 implemented tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`. Includes `get_client()` and `get_metadata()` helpers.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
 - `src/bullhorn_mcp/bulk.py` — BulkImporter with process(), _process_single_company(), _process_single_contact(), _resolve_or_create_company(), _build_summary()
 - `src/bullhorn_mcp/identity.py` — Entra token claim extraction and per-user Bullhorn CorporateUser identity cache
+- `src/bullhorn_mcp/joborder_config.py` — Per-instance JobOrder env configuration: `get_joborder_aliases()`, `get_joborder_required()`, `get_joborder_defaults()` reading from `BULLHORN_JOBORDER_ALIASES/REQUIRED/DEFAULTS`
 
 ### Existing modules extended
 - `src/bullhorn_mcp/server.py` — Add `bulk_import` MCP tool (Sprint 7)
@@ -78,12 +80,13 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_auth.py` — 13 tests (auth flow, regional servers)
 - `tests/test_config.py` — 6 tests
 - `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
-- `tests/test_metadata.py` — 25 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, Sprint 21 JobOrder aliases, e2e)
+- `tests/test_metadata.py` — 28 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, Sprint 21 JobOrder aliases, CR14 env-alias tests, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 141 tests (all 18 implemented tools + server setup + E2E tests Sprints 1–21)
+- `tests/test_server.py` — 136 tests (all 18 implemented tools + server setup + E2E tests Sprints 1–22)
 - `tests/test_bulk.py` — 18 tests (company processing, contact processing, summary, E2E)
 - `tests/test_identity.py` — 13 tests (Entra token to CorporateUser resolution, per-user cache)
-- **Total: 286 tests, all passing**
+- `tests/test_joborder_config.py` — 10 tests (env config loaders for aliases/required/defaults)
+- **Total: 305 tests, all passing**
 
 ---
 
@@ -1686,3 +1689,237 @@ Two moderate findings were identified and fixed during the Sprint 21 review cycl
 ### Expected outcome
 
 PRD FR-13 and US-24 through US-26 are implemented and tested. The MCP server exposes 18 tools. Existing ClientContact title stripping remains scoped to ClientContact and does not affect JobOrder.
+
+---
+
+## Sprint 22: CR14 — Refactor `create_job` to Dict-Based Signature with Per-instance Configuration
+
+**Change request:** CR14.md
+**User stories affected:** US-24 (Create a JobOrder), US-25 (JobOrder creation applies safe defaults)
+**Functional requirement:** FR-13
+**Dependency:** Sprint 21 complete
+
+### Background
+
+CR13's `create_job` cannot create a JobOrder under any input combination. Three structural issues stack: (1) the parameter names (`website_sector_range`, `website_salary_range`, `website_location`, `fee`) do not match real Bullhorn API field names in the local instance; (2) `_missing_job_required_fields` rejects null values for those parameters before metadata resolution runs while `_validate_job_fields_known` rejects non-null values for the same parameters after resolution — no value satisfies both gates; (3) structured parameters bypass metadata discovery entirely. CR14 fixes this by adopting a `fields: dict` signature identical to `create_contact`, and externalising instance-specific concerns (aliases, required fields, defaults) to environment variables via a new `joborder_config.py` module.
+
+### Tasks
+
+#### T22.1 — Refactor `create_job` signature
+**File:** `src/bullhorn_mcp/server.py`
+
+Change the signature to:
+
+```python
+@mcp.tool()
+def create_job(
+    clientCorporation: dict,
+    clientContact: dict,
+    title: str,
+    fields: dict | None = None,
+) -> str:
+```
+
+`clientCorporation`, `clientContact`, and `title` remain explicit named parameters because they are Bullhorn's hard API minimum. Everything else flows through `fields`.
+
+Remove the following:
+- `source`, `grade`, `fee`, `salary`, `website_sector_range`, `website_salary_range`, `website_location`, `publicDescription`, `description`, `owner`, `status`, `isOpen`, `customText12`, `extra_fields` parameters
+- `JOB_REQUIRED_BUSINESS_FIELDS` constant
+- `_missing_job_required_fields` helper
+- `_validate_job_fields_known` helper
+- `_validate_job_reference` helper (replaced by inline checks per T22.2)
+
+`fields` is treated as a free-form dict — caller may use API names, metadata labels, or configured aliases. Owner remains optional in `fields` and falls back to `resolve_caller()` when absent, identical to `create_contact`.
+
+**Unit tests** (replace all existing CR13 `TestCreateJob` tests):
+- `test_create_job_minimal_success` — only `clientCorporation`, `clientContact`, `title`, no env config; assert `client.create("JobOrder", payload)` called with those three plus auto-stamped owner.
+- `test_create_job_requires_client_corporation` — missing or non-dict returns `clientCorporation_required`; no API call.
+- `test_create_job_rejects_malformed_client_corporation` — dict without `id`; same error.
+- `test_create_job_requires_client_contact` — missing or non-dict returns `clientContact_required`.
+- `test_create_job_rejects_malformed_client_contact` — dict without `id`; same error.
+- `test_create_job_requires_title` — missing, empty, or whitespace-only returns `title_required`.
+- `test_create_job_fields_passthrough` — arbitrary `fields={"source": "Email", "salary": 90000}` appear in payload.
+- `test_create_job_alias_resolution` — `fields={"sector": "Tech"}` with `BULLHORN_JOBORDER_ALIASES='{"sector": "customText1"}'` produces `customText1` in payload, not `sector`.
+- `test_create_job_defaults_applied` — caller omits status; env default `"status": "Accepting Candidates"` in payload.
+- `test_create_job_caller_overrides_default` — caller supplies `status="Closed"`; env default does not win.
+- `test_create_job_required_validation_passes` — env required `["source"]`; caller supplies `source`; create succeeds.
+- `test_create_job_required_validation_fails` — env required `["source"]`; caller omits source; returns `required_fields_missing` with `["source"]`.
+- `test_create_job_required_via_alias` — env required `["sector"]` with alias `"sector" → "customText1"`; validates `customText1` presence in payload.
+- `test_create_job_owner_auto_populated` — no owner, mock `resolve_caller()` returning `{"id": 42}`; payload has `owner: {"id": 42}`.
+- `test_create_job_explicit_owner_wins` — `fields={"owner": {"id": 99}}`; `resolve_caller()` not called; payload preserves caller owner.
+- `test_create_job_identity_resolution_fails` — `resolve_caller()` raises; returns `identity_resolution_failed`.
+- `test_create_job_payload_no_unexpected_keys` — payload audit: raw PUT body contains only resolved caller fields + defaults + owner. No `website_*` injection.
+
+#### T22.2 — Inline relationship validation
+**File:** `src/bullhorn_mcp/server.py`
+
+Replace `_validate_job_reference` with direct inline checks at the top of `create_job`:
+
+```python
+if not isinstance(clientCorporation, dict) or "id" not in clientCorporation:
+    return format_response({"error": "clientCorporation_required", "message": "clientCorporation must be an object containing an id."})
+
+if not isinstance(clientContact, dict) or "id" not in clientContact:
+    return format_response({"error": "clientContact_required", "message": "clientContact must be an object containing an id."})
+
+if not isinstance(title, str) or not title.strip():
+    return format_response({"error": "title_required", "message": "title must be a non-empty string."})
+```
+
+These three are the only hardcoded required fields. Any further requirements come from `BULLHORN_JOBORDER_REQUIRED` (T22.3).
+
+#### T22.3 — Create `src/bullhorn_mcp/joborder_config.py`
+**File:** `src/bullhorn_mcp/joborder_config.py` (new)
+
+New module with three loader functions and a shared `_load_json_env` helper:
+
+- `_load_json_env(var_name: str, default)` — reads an env var, parses it as JSON, returns `default` on missing or invalid JSON, logs a warning on parse failure.
+- `get_joborder_aliases() -> dict[str, str]` — reads `BULLHORN_JOBORDER_ALIASES` (JSON object); returns dict with all keys lowercased; returns `{}` on error.
+- `get_joborder_required() -> list[str]` — reads `BULLHORN_JOBORDER_REQUIRED` (JSON array); returns `[]` on error.
+- `get_joborder_defaults() -> dict` — reads `BULLHORN_JOBORDER_DEFAULTS` (JSON object); returns `{}` on error.
+
+Invalid JSON logs a warning and falls back to empty default. Server starts normally.
+
+**Unit tests** in `tests/test_joborder_config.py` (new file):
+- `test_get_joborder_aliases_default` — env unset, returns `{}`.
+- `test_get_joborder_aliases_valid` — valid JSON object, returns dict with lowercased keys.
+- `test_get_joborder_aliases_invalid_json` — malformed JSON, returns `{}` and logs warning.
+- `test_get_joborder_aliases_wrong_type` — JSON array instead of object, returns `{}`.
+- `test_get_joborder_required_default` — env unset, returns `[]`.
+- `test_get_joborder_required_valid` — valid JSON array, returns list.
+- `test_get_joborder_required_invalid_json` — malformed JSON, returns `[]` and logs warning.
+- `test_get_joborder_defaults_default` — env unset, returns `{}`.
+- `test_get_joborder_defaults_valid` — valid JSON object, returns dict.
+- `test_get_joborder_defaults_invalid_json` — malformed JSON, returns `{}` and logs warning.
+
+#### T22.4 — Wire env aliases into `FIELD_ALIASES` at startup
+**File:** `src/bullhorn_mcp/metadata.py`
+
+Import `get_joborder_aliases` from the new module and extend `FIELD_ALIASES["JobOrder"]` at module load:
+
+```python
+from .joborder_config import get_joborder_aliases
+
+FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "ClientContact": {
+        "job title": "occupation",
+    },
+    "JobOrder": {
+        "published description": "publicDescription",
+        "public description": "publicDescription",
+        "publish on website": "customText12",
+        **get_joborder_aliases(),
+    },
+}
+```
+
+Env entries take precedence over hardcoded entries on key conflict. Operators must restart the server to pick up alias changes.
+
+**Unit tests** in `tests/test_metadata.py`:
+- `test_field_aliases_joborder_includes_env_entries` — set `BULLHORN_JOBORDER_ALIASES`, reload `metadata` module, assert `FIELD_ALIASES["JobOrder"]` contains env entries.
+- `test_field_aliases_env_overrides_hardcoded` — env defines `"publish on website"` mapped to a different field; env entry wins.
+- `test_field_aliases_hardcoded_intact_when_env_empty` — no env set; hardcoded entries still present.
+
+#### T22.5 — Apply defaults and env-required validation in `create_job`
+**File:** `src/bullhorn_mcp/server.py`
+
+Implement the resolution order in the refactored `create_job` body:
+
+1. Build `caller_fields` dict from `fields` plus the three named params.
+2. Owner fallback: if `"owner"` not in `caller_fields`, call `resolve_caller(client)`; on `IdentityResolutionError` return `identity_resolution_failed` response. If owner is present, pass through existing `client.resolve_owner()` logic (supports name string, `{"id": int}`, ambiguous list).
+3. `resolved_caller = metadata.resolve_fields("JobOrder", caller_fields)`
+4. `resolved_defaults = metadata.resolve_fields("JobOrder", get_joborder_defaults())`
+5. `merged = {**resolved_defaults, **resolved_caller}` — caller values always win.
+6. Resolve env-required entries through alias map by passing `{k: None for k in get_joborder_required()}` through `resolve_fields`. Validate all resolved keys are present and non-empty in `merged`; if not, return `required_fields_missing` response.
+7. `client.create("JobOrder", merged)`.
+
+#### T22.6 — Update `.env.example`
+**File:** `.env.example`
+
+Add under a clearly labelled section:
+
+```
+# === JobOrder per-instance configuration (all optional) ===
+
+# Field aliases: JSON object of {alias_lowercase: api_field_name}.
+# Extends hardcoded FIELD_ALIASES with instance-specific mappings.
+# BULLHORN_JOBORDER_ALIASES='{"sector": "customText1", "salary range": "customText10", "location": "customText11", "grade": "correlatedCustomText2", "fee": "feeArrangement"}'
+
+# Additional required fields beyond title/clientCorporation/clientContact.
+# Format: JSON array of API names or aliases.
+# BULLHORN_JOBORDER_REQUIRED='["source", "salary"]'
+
+# Default values applied when caller omits a field. Caller values always win.
+# Format: JSON object of {field_name_or_alias: value}.
+# BULLHORN_JOBORDER_DEFAULTS='{"status": "Accepting Candidates", "isOpen": true, "customText12": 0}'
+```
+
+#### T22.7 — Update README
+**File:** `README.md`
+
+a. Update the `create_job` usage example to the new dict-based signature:
+
+```text
+create_job(
+  clientCorporation={"id": 12345},
+  clientContact={"id": 67890},
+  title="Senior Software Engineer",
+  fields={
+    "source": "Email",
+    "salary": 90000,
+    "publicDescription": "Public-facing job description...",
+    "sector": "Technology",
+    "salary range": "80000-100000",
+    "location": "London"
+  }
+)
+```
+
+b. Add a `### JobOrder Per-instance Configuration` subsection under the hosted deployment section. Explain the three env vars, their JSON format, alias resolution order, and recommend using `get_entity_fields("JobOrder")` to discover API field names when setting up a new instance.
+
+#### T22.8 — E2E-style mocked HTTP tests
+**File:** `tests/test_server.py`
+
+Replace the existing `test_e2e_create_job` with:
+
+- `test_e2e_create_job_minimal` — mock CorporateUser query, JobOrder PUT, JobOrder GET. Call `create_job(clientCorporation={"id": 1}, clientContact={"id": 2}, title="Engineer")`. Assert raw PUT body is exactly `{"clientCorporation": {"id": 1}, "clientContact": {"id": 2}, "title": "Engineer", "owner": {"id": <caller_id>}}`.
+- `test_e2e_create_job_with_aliases_and_defaults` — set all three env vars; call with caller `fields` using aliases; assert raw PUT body has all keys in API-name form, env defaults applied for omitted fields, no alias keys leaking through.
+
+#### T22.9 — Removal verification test
+**File:** `tests/test_server.py`
+
+- `test_joborder_no_legacy_validation` — assert that `_missing_job_required_fields`, `_validate_job_fields_known`, `_validate_job_reference`, and `JOB_REQUIRED_BUSINESS_FIELDS` are no longer importable from or present as attributes of `bullhorn_mcp.server`. Use `hasattr` or `inspect` checks.
+
+### Acceptance criteria
+
+1. `create_job` is callable with only `clientCorporation`, `clientContact`, and `title` and creates a JobOrder successfully (assuming `BULLHORN_JOBORDER_REQUIRED` is empty and the instance accepts that minimal payload).
+2. `clientCorporation` missing or malformed returns `clientCorporation_required` without calling Bullhorn.
+3. `clientContact` missing or malformed returns `clientContact_required` without calling Bullhorn.
+4. `title` missing or empty returns `title_required` without calling Bullhorn.
+5. `fields` accepts arbitrary keys including aliases, API names, and metadata labels.
+6. `BULLHORN_JOBORDER_ALIASES` extends `FIELD_ALIASES["JobOrder"]` at module load; env entries override hardcoded on conflict.
+7. `BULLHORN_JOBORDER_DEFAULTS` values are applied to fields the caller does not supply; caller values always win.
+8. `BULLHORN_JOBORDER_REQUIRED` entries are validated as present after defaults are merged.
+9. `BULLHORN_JOBORDER_REQUIRED` entries written as aliases resolve to API names before validation.
+10. Owner falls back to `resolve_caller()` when not supplied; `IdentityResolutionError` returns `identity_resolution_failed`. Caller-supplied owner always wins.
+11. Invalid JSON in any env var causes a logged warning and falls back to the empty default. Server starts normally.
+12. `JOB_REQUIRED_BUSINESS_FIELDS`, `_missing_job_required_fields`, `_validate_job_fields_known`, and `_validate_job_reference` are removed from `server.py`.
+13. README `create_job` example reflects the dict-based signature.
+14. `.env.example` includes the three new vars under a `JobOrder per-instance configuration` section.
+15. All existing non-CR13-`create_job` tests pass. CR13 `create_job` tests are replaced by the CR14 test list.
+
+### What was delivered
+
+- `src/bullhorn_mcp/joborder_config.py` (new): `get_joborder_aliases()`, `get_joborder_required()`, `get_joborder_defaults()` — each reads from a corresponding env var, parses JSON, logs warning on invalid JSON, and falls back to the empty default. Server starts normally on misconfiguration.
+- `src/bullhorn_mcp/metadata.py`: imports `get_joborder_aliases` and extends `FIELD_ALIASES["JobOrder"]` with `**get_joborder_aliases()` at module load. Env entries override hardcoded ones on conflict.
+- `src/bullhorn_mcp/server.py`: `create_job` refactored to `(clientCorporation: dict, clientContact: dict, title: str, fields: dict | None = None)`. Legacy helpers `JOB_REQUIRED_BUSINESS_FIELDS`, `_validate_job_reference`, `_missing_job_required_fields`, `_validate_job_fields_known` removed. Resolution order: inline validation → owner fallback → `resolve_fields` on caller fields → `resolve_fields` on env defaults → merge (defaults first, caller wins) → env-required validation → `client.create("JobOrder", merged)`. Import of `FIELD_ALIASES` from metadata removed (no longer needed in server.py).
+- `.env.example`: added `BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS` under a `JobOrder per-instance configuration` section.
+- `README.md`: updated `create_job` usage example to dict-based signature; added `### JobOrder Per-instance Configuration` subsection before Hosted Authentication Model.
+- `tests/test_joborder_config.py` (new): 10 tests for all three config loaders.
+- `tests/test_metadata.py`: 3 new `TestCR14JobOrderEnvAliases` tests for env alias inclusion, env-override-hardcoded, and hardcoded-intact-when-env-empty.
+- `tests/test_server.py`: `TestCreateJob` replaced (17 new CR14 unit tests); `TestCreateJobReviewFixes` removed; `test_e2e_create_job` replaced with `test_e2e_create_job_minimal` + `test_e2e_create_job_with_defaults`; `test_joborder_no_legacy_validation` added.
+- **305 tests passing, 0 failing.** Net change: −18 old tests + 33 new tests = +15.
+
+### Expected test count after Sprint 22
+
+Previous: 290. Removed 18 (CR13 create_job unit + review-fix + E2E). Added 33 (17 unit + 10 joborder_config + 3 metadata + 2 E2E + 1 removal). **Actual: 305 passing, 0 failing.**
