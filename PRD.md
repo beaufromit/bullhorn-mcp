@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, and field metadata resolution — primarily for ClientCorporation and ClientContact entities.
+The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, field metadata resolution, hosted HTTP access, authenticated-user owner stamping, and first-class JobOrder create/update workflows.
 
 The MCP serves two classes of consumer:
 
@@ -20,10 +20,11 @@ Until these records are in Bullhorn, downstream tools cannot act on them. Automa
 ## 3. Goals
 
 - Enable automated agents to create ClientCorporation and ClientContact records in Bullhorn without human intervention.
+- Enable consultants and AI-assisted workflows to create and update JobOrder records with explicit, documented tools.
 - Prevent duplicate records through fuzzy matching with confidence-scored results.
 - Allow consultants to review, update, and enrich records through a chat agent without opening the Bullhorn UI.
 - Ensure all newly discovered opportunities are captured in Bullhorn so downstream automation tools (email sequences, Bullhorn Automation workflows, etc.) can trigger follow-up.
-- Require and resolve consultant ownership on every new contact record, so that records enter Bullhorn with clear accountability from day one. The MCP resolves consultant names to Bullhorn user IDs internally.
+- Ensure consultant ownership on every new contact/company record, either from an explicit owner supplied by the caller or by resolving the authenticated user to a Bullhorn CorporateUser.
 - Resolve field names between API names and user-facing labels so agents and users can work naturally.
 - Preserve all existing read-only MCP functionality.
 
@@ -34,7 +35,8 @@ Until these records are in Bullhorn, downstream tools cannot act on them. Automa
 - Building the Twin.so agent or the chat agent that calls the MCP (those are separate projects).
 - Creating new Bullhorn field types, custom objects, or note action types.
 - Real-time sync or webhook-based triggers.
-- Managing Candidate or JobOrder creation (existing read tools remain, but write scope is limited to ClientCorporation and ClientContact).
+- Managing Candidate creation (existing Candidate read tools remain).
+- JobOrder duplicate detection, bulk job import, deletion, merging, or archiving.
 
 ## 5. Context and Workflow
 
@@ -46,16 +48,16 @@ Until these records are in Bullhorn, downstream tools cannot act on them. Automa
 
 ### FR-1: Create ClientCorporation Records
 
-The MCP shall provide a tool to create a new ClientCorporation entity in Bullhorn. The tool accepts standard Bullhorn fields (name, status, phone, address, industry, etc.) and any custom fields. All mandatory Bullhorn fields that lack defaults must be provided by the caller. An owner (recruiterUserID) may optionally be provided. The tool returns the created record including its new Bullhorn ID.
+The MCP shall provide a tool to create a new ClientCorporation entity in Bullhorn. The tool accepts standard Bullhorn fields (name, status, phone, address, industry, etc.) and any custom fields. All mandatory Bullhorn fields that lack defaults must be provided by the caller. An owner may be provided explicitly; if omitted, the MCP resolves the authenticated user to a Bullhorn CorporateUser and auto-populates the owner. The tool returns the created record including its new Bullhorn ID.
 
 ### FR-2: Create ClientContact Records
 
 The MCP shall provide a tool to create a new ClientContact entity in Bullhorn, linked to an existing ClientCorporation. The tool accepts standard Bullhorn fields (firstName, lastName, name, email, phone, occupation, etc.) and any custom fields. The caller must provide:
 
 - A valid ClientCorporation ID to associate the contact with.
-- An owner (consultant) — this is **required**. The caller may provide either a Bullhorn user ID or a consultant name. If a name is provided, the MCP resolves it to a Bullhorn CorporateUser ID internally by searching the CorporateUser entity. If the name resolves to multiple users, the MCP returns all matches with disambiguation information (email, department) and does not create the record until the caller specifies which user.
+- An owner may be provided as either a Bullhorn user ID or a consultant name. If omitted, the MCP resolves the authenticated user to a Bullhorn CorporateUser and auto-populates the owner. If a name is provided, the MCP resolves it to a Bullhorn CorporateUser ID internally by searching the CorporateUser entity. If the name resolves to multiple users, the MCP returns all matches with disambiguation information (email and available identity fields) and does not create the record until the caller specifies which user.
 
-The tool returns the created record including its new Bullhorn ID.
+Before creating, the tool checks for existing contacts with the same name at the same company. Exact, likely, or possible matches are returned for review instead of creating a duplicate unless the caller explicitly sets a force/bypass option. The tool returns the created record including its new Bullhorn ID when creation proceeds.
 
 ### FR-3: Duplicate Detection — Company
 
@@ -139,6 +141,21 @@ The MCP server shall support an HTTP transport mode (`streamable-http`) in addit
 - `.env.example` shall document the new variables.
 - `README.md` shall include a Hosted Deployment section.
 
+### FR-12: Authenticated User Identity Resolution
+
+For hosted HTTP deployments, the MCP shall authenticate users with Microsoft Entra OIDC and resolve the authenticated user's email claim to a Bullhorn CorporateUser record. Resolved identities shall be cached per authenticated user, not globally, so a shared HTTP server can safely serve multiple consultants. Identity resolution failures shall return clear errors when an operation needs the caller identity and no explicit owner was supplied.
+
+### FR-13: First-class JobOrder Create and Update Tools
+
+The MCP shall provide first-class tools for creating and updating JobOrder records:
+
+- `create_job` shall create a Bullhorn JobOrder using explicit business inputs including `clientCorporation`, `clientContact`, `title`, `source`, `grade`, `fee`, `salary`, `website_sector_range`, `website_salary_range`, and `website_location`.
+- `create_job` shall default `status` to `"Accepting Candidates"`, `isOpen` to `true`, `customText12` to `0`, and owner to the authenticated Bullhorn CorporateUser when owner is omitted.
+- `create_job` shall validate required relationships (`clientCorporation` and `clientContact` objects with IDs) and reject unknown structured fields before calling Bullhorn.
+- `update_job` shall update an existing JobOrder using only caller-supplied fields after metadata/alias resolution.
+- JobOrder aliases shall include `"published description"` and `"public description"` resolving to `publicDescription`, and `"publish on website"` resolving to `customText12`.
+- `update_job` shall not strip or block the `title` field; `title` is valid on JobOrder.
+
 ## 7. Non-Functional Requirements
 
 ### NFR-1: No Destructive Operations
@@ -158,6 +175,8 @@ The MCP shall explicitly reject any attempt to change a ClientContact's associat
 ### NFR-4: Field Name Flexibility
 
 All tools that accept field names (create, update, query) should accept either API field names or user-facing labels, resolving via the metadata API where needed.
+
+For ClientContact write payloads, the ambiguous `title` key shall be stripped with a warning because Bullhorn uses it for salutation/name prefix rather than job title. Callers should use `occupation` for job title or `namePrefix` for salutation. This stripping must not apply to JobOrder.
 
 ### NFR-5: Fuzzy Matching Quality
 
@@ -183,7 +202,7 @@ Bulk operations should process records as efficiently as possible given the one-
 - **No record deletion or merging** — out of scope and explicitly prohibited.
 - **No company reassignment** — moving a contact from one company to another is not supported due to known Bullhorn data integrity issues.
 - **No bulk API** — Bullhorn does not offer a bulk create endpoint; all creates are individual PUT requests to `/entity/{EntityType}`.
-- **Entity scope** — new create/update capabilities are for ClientCorporation and ClientContact only. Existing generic search/query tools continue to work for all entity types.
+- **Entity scope** — create/update capabilities are for ClientCorporation, ClientContact, and JobOrder only. Existing generic search/query tools continue to work for all entity types.
 - **Note actions** — must correspond to valid actions in the target Bullhorn instance; the MCP does not create new action types.
 - **Bullhorn meta API inconsistencies** — the meta endpoint's `required` and `optional` flags do not always reflect what the API actually enforces. The MCP should rely on Bullhorn's error responses to surface genuinely missing fields rather than pre-validating against metadata alone.
 
@@ -203,13 +222,13 @@ As an automated agent, I want to create a new ClientContact record linked to an 
 As an automated agent, when I attempt to add a contact whose company does not yet exist in Bullhorn or in my current batch, I want the MCP to create the company first with available information and then create the contact linked to it.
 - **Acceptance**: Submitting a contact with a company name that doesn't exist in Bullhorn results in both a ClientCorporation and ClientContact being created, with the contact linked to the new company. The response includes IDs for both.
 
-**US-4: Owner is required when creating a contact**
+**US-4: Owner is assigned when creating a contact**
 As a system, I want every new ClientContact to be created with an assigned owner (consultant), so that records enter Bullhorn with clear accountability.
-- **Acceptance**: Attempting to create a ClientContact without specifying an owner returns an error indicating owner is required. Providing a consultant name (e.g. "Maryrose Lyons") resolves to the correct CorporateUser ID and the contact is created with that owner.
+- **Acceptance**: If the caller omits owner, the MCP resolves the authenticated user to a Bullhorn CorporateUser and creates the contact with that owner. If identity resolution fails, the tool returns a clear `identity_resolution_failed` error and does not create the contact. Providing a consultant name (e.g. "Maryrose Lyons") resolves to the correct CorporateUser ID and the contact is created with that owner.
 
 **US-5: Owner name resolves to user ID**
 As an automated agent, I want to specify a consultant by name rather than Bullhorn user ID, so that I don't need to maintain a mapping of internal IDs.
-- **Acceptance**: Providing `owner: "Maryrose Lyons"` resolves to the matching CorporateUser ID. If multiple users match, the response returns all matches with email and department for disambiguation, and the contact is not created until the caller specifies which user.
+- **Acceptance**: Providing `owner: "Maryrose Lyons"` resolves to the matching CorporateUser ID. If multiple users match, the response returns all matches with email and available disambiguation fields, and the contact is not created until the caller specifies which user.
 
 ### Duplicate Detection
 
@@ -220,6 +239,10 @@ As an automated agent, before creating a company, I want to check whether it alr
 **US-7: Check if a contact already exists at a company**
 As an automated agent, before creating a contact, I want to check whether a person with the same name already exists at the same company in Bullhorn, so that I avoid creating duplicates.
 - **Acceptance**: Checking "John Smith" at ClientCorporation ID 123 returns any existing "John Smith" contacts at that company with confidence scores. If no match exists, the response indicates no matches found.
+
+**US-7A: Direct contact creation checks for duplicates**
+As an automated agent, when I create a single contact, I want duplicate detection to run before creation so that retries after transient Bullhorn errors do not create silent duplicates.
+- **Acceptance**: Calling `create_contact` for a contact whose name already matches a contact at the same company returns `duplicate_found: true` with the matched record and does not create a new record. Passing `force=true` bypasses the check and creates regardless.
 
 **US-8: Flag partial matches for human review**
 As a consultant, when duplicate detection finds a likely or possible match (but not an exact match), I want those flagged for my review so that I can decide whether to proceed or merge information manually.
@@ -256,6 +279,10 @@ As a system, when an update request attempts to change a ClientContact's associa
 **US-15: Use field labels or API names interchangeably**
 As a consultant, I want to reference fields by their user-facing label (e.g. "Consultant") or their API name (e.g. "recruiterUserID"), and have the MCP resolve the correct field, so that I don't need to know Bullhorn's internal schema.
 - **Acceptance**: Updating `{"Consultant": {"id": 123}}` on a ClientContact is equivalent to updating `{"recruiterUserID": {"id": 123}}` — both succeed and modify the same field.
+
+**US-15A: Ambiguous ClientContact title field does not break writes**
+As a consultant or agent, when I accidentally provide `title` for a ClientContact, I want the MCP to prevent Bullhorn write failures and tell me which field to use instead.
+- **Acceptance**: `create_contact` or `update_record("ClientContact", ...)` strips `title` from the write payload, proceeds with remaining fields, and returns a warning explaining to use `occupation` for job title or `namePrefix` for salutation. JobOrder `title` is not stripped.
 
 ### Notes
 
@@ -294,6 +321,24 @@ As any user, I want all existing MCP tools (list_jobs, list_candidates, get_job,
 **US-22: Run the server in HTTP mode for remote clients**
 As a system administrator, I want to start the MCP server in HTTP mode by setting `MCP_TRANSPORT=http`, so that web-based AI clients (Claude.ai, ChatGPT) can connect to it over HTTPS without requiring a local process spawn.
 - **Acceptance**: Setting `MCP_TRANSPORT=http` and running the server causes it to bind on the configured `PORT` (default 8000) and respond to HTTP requests from an MCP client. Setting `MCP_TRANSPORT=stdio` (or leaving it unset) behaves identically to the current behaviour. The server logs the active transport and port on startup.
+
+**US-23: Authenticated user resolves to Bullhorn owner**
+As a hosted MCP user, I want the server to map my Entra-authenticated identity to my Bullhorn CorporateUser, so that records I create can be stamped with the correct owner automatically.
+- **Acceptance**: With an Entra token containing an email claim, the MCP queries CorporateUser by email and caches the result per token subject. Different users in the same HTTP server process resolve to distinct Bullhorn users.
+
+### JobOrder Writes
+
+**US-24: Create a JobOrder**
+As a consultant or AI-assisted workflow, I want to create a Bullhorn JobOrder from user-confirmed job details, so that new roles can be set up without manual Bullhorn entry.
+- **Acceptance**: Calling `create_job` with valid company/contact references, title, source, grade, fee, salary, and website fields creates a JobOrder and returns `changedEntityId`, `changeType`, and the created record.
+
+**US-25: JobOrder creation applies safe defaults**
+As a consultant, I want common JobOrder defaults to be applied when omitted, so that created jobs have the expected initial state.
+- **Acceptance**: Omitting `status`, `isOpen`, `customText12`, or owner causes `create_job` to send `"Accepting Candidates"`, `true`, `0`, and the authenticated user's Bullhorn owner respectively. Caller-provided owner always wins.
+
+**US-26: Update a JobOrder**
+As a consultant or AI-assisted workflow, I want to update JobOrder fields through a dedicated tool, so that reviewed job descriptions and website settings can be written back to Bullhorn.
+- **Acceptance**: Calling `update_job(job_id, {"published description": "..."})` resolves the alias to `publicDescription`, updates the JobOrder, and returns the full updated record. Updating `title` on a JobOrder succeeds without ClientContact title stripping.
 
 ## 10. Input/Output Schemas
 
@@ -354,7 +399,7 @@ The following schemas are illustrative of the expected data shapes. Field sets m
 }
 ```
 
-Note: `owner` accepts either a name string (resolved internally to a CorporateUser ID) or an object `{"id": 12345}`.
+Note: `owner` accepts either a name string (resolved internally to a CorporateUser ID) or an object `{"id": 12345}`. If omitted in direct contact/company creation, the MCP resolves the authenticated user and auto-populates owner. Bulk imports still require owner per contact unless explicitly changed by a future requirement.
 
 ### Create ClientContact — Response
 
@@ -581,6 +626,73 @@ Note: `owner` accepts either a name string (resolved internally to a CorporateUs
 }
 ```
 
+### Create JobOrder — Request
+
+```json
+{
+  "clientCorporation": {"id": 98765},
+  "clientContact": {"id": 54321},
+  "title": "Senior Software Engineer",
+  "source": "Email",
+  "grade": "Senior",
+  "fee": 25000,
+  "salary": 90000,
+  "website_sector_range": "Technology",
+  "website_salary_range": "80000-100000",
+  "website_location": "London",
+  "publicDescription": "Public-facing job description text",
+  "description": "Internal notes from email review"
+}
+```
+
+If omitted, `status` defaults to `"Accepting Candidates"`, `isOpen` defaults to `true`, `customText12` defaults to `0`, and `owner` defaults to the authenticated Bullhorn CorporateUser.
+
+### Create JobOrder — Response
+
+```json
+{
+  "changedEntityId": 12345,
+  "changeType": "INSERT",
+  "data": {
+    "id": 12345,
+    "title": "Senior Software Engineer",
+    "status": "Accepting Candidates",
+    "isOpen": true,
+    "customText12": 0,
+    "clientCorporation": {"id": 98765, "name": "Acme Holdings Ltd"},
+    "clientContact": {"id": 54321, "name": "Jane Doe"},
+    "owner": {"id": 12345, "firstName": "Maryrose", "lastName": "Lyons"}
+  }
+}
+```
+
+### Update JobOrder — Request
+
+```json
+{
+  "job_id": 12345,
+  "fields": {
+    "published description": "Updated public-facing job description text",
+    "publish on website": 0
+  }
+}
+```
+
+### Update JobOrder — Response
+
+```json
+{
+  "changedEntityId": 12345,
+  "changeType": "UPDATE",
+  "data": {
+    "id": 12345,
+    "title": "Senior Software Engineer",
+    "publicDescription": "Updated public-facing job description text",
+    "customText12": 0
+  }
+}
+```
+
 ## 11. Risks and Mitigations
 
 | Risk | Mitigation |
@@ -589,7 +701,9 @@ Note: `owner` accepts either a name string (resolved internally to a CorporateUs
 | Fuzzy matching misses true duplicates (abbreviations not covered by matching logic) | Support common patterns (legal suffixes, known abbreviations); design matching logic to be extensible over time |
 | Bullhorn meta API reports inconsistent required/optional flags | Test actual creation requirements empirically; document known quirks; rely on Bullhorn's error responses to surface genuinely missing fields rather than pre-validating solely against metadata |
 | Bullhorn API rate limiting during bulk imports | Add configurable delay between requests; respect rate limit headers if present; halt-on-consecutive-errors protects against runaway failures |
-| User lookup by name returns multiple matches (e.g. two "John Smith" consultants) | Return all matches with disambiguation info (email, department); require caller to resolve before proceeding |
+| User lookup by name returns multiple matches (e.g. two "John Smith" consultants) | Return all matches with email and available disambiguation fields; require caller to resolve before proceeding |
 | Custom field names vary between Bullhorn instances | Use meta API at runtime to resolve labels; never hardcode custom field names |
+| Hosted multi-user deployments stamp records with the wrong owner | Cache resolved identities per authenticated token subject, not in a single global slot |
+| JobOrder custom fields vary between Bullhorn instances | Validate structured JobOrder fields against metadata/confirmed aliases before create; reject unknown structured fields clearly |
 | Note action string doesn't match a valid Bullhorn action | Return Bullhorn's error response clearly so the caller can correct the action |
 | Intermittent Bullhorn API errors on entity creation | Implement retry logic for known transient errors (e.g. "error persisting an entity" which Bullhorn support acknowledges as intermittent) |

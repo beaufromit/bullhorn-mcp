@@ -278,6 +278,130 @@ def test_process_contacts_skips_existing(importer):
 
 
 @respx.mock
+def test_process_contacts_flags_likely_match(importer):
+    """Likely contact matches are flagged for review instead of created."""
+    respx.get(f"{BASE_URL}/query/CorporateUser").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": 5, "firstName": "A", "lastName": "B"}]})
+    )
+    respx.get(f"{BASE_URL}/search/ClientContact").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": 501, "firstName": "Janet", "lastName": "Doe", "email": "j@acme.com"}]},
+        )
+    )
+
+    detail, halted = importer._process_single_contact(
+        {
+            "firstName": "Jane",
+            "lastName": "Doe",
+            "company_name": "Acme",
+            "owner": "A B",
+        },
+        {"Acme": 42},
+    )
+
+    assert halted is False
+    assert detail["status"] == "flagged"
+    assert detail["reason"] == "possible_duplicate"
+    assert detail["match_category"] == "likely"
+    assert detail["match"]["id"] == 501
+
+
+@respx.mock
+def test_process_contacts_flags_possible_match(importer):
+    """Possible contact matches are flagged for review instead of created."""
+    respx.get(f"{BASE_URL}/query/CorporateUser").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": 5, "firstName": "A", "lastName": "B"}]})
+    )
+    respx.get(f"{BASE_URL}/search/ClientContact").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": 502, "firstName": "Jan", "lastName": "X", "email": "jan@acme.com"}]},
+        )
+    )
+
+    detail, halted = importer._process_single_contact(
+        {
+            "firstName": "Jane",
+            "lastName": "Doe",
+            "company_name": "Acme",
+            "owner": "A B",
+        },
+        {"Acme": 42},
+    )
+
+    assert halted is False
+    assert detail["status"] == "flagged"
+    assert detail["match_category"] == "possible"
+    assert detail["match"]["id"] == 502
+
+
+@respx.mock
+def test_process_contacts_exact_match_still_existing(importer):
+    """Exact matches keep the existing duplicate status."""
+    respx.get(f"{BASE_URL}/query/CorporateUser").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": 5, "firstName": "A", "lastName": "B"}]})
+    )
+    respx.get(f"{BASE_URL}/search/ClientContact").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": 503, "firstName": "Jane", "lastName": "Doe", "email": "j@acme.com"}]},
+        )
+    )
+
+    detail, halted = importer._process_single_contact(
+        {
+            "firstName": "Jane",
+            "lastName": "Doe",
+            "company_name": "Acme",
+            "owner": "A B",
+        },
+        {"Acme": 42},
+    )
+
+    assert halted is False
+    assert detail["status"] == "existing"
+    assert detail["bullhorn_id"] == 503
+
+
+@respx.mock
+def test_sprint20_e2e_bulk_flags_contact_partial_match(importer):
+    """E2E: process() includes likely contact duplicate in flagged summary/details."""
+    respx.get(f"{BASE_URL}/search/ClientCorporation").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": 42, "name": "Acme Ltd", "status": "Active"}]},
+        )
+    )
+    respx.get(f"{BASE_URL}/query/CorporateUser").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": 5, "firstName": "A", "lastName": "B"}]})
+    )
+    respx.get(f"{BASE_URL}/search/ClientContact").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": 504, "firstName": "Janet", "lastName": "Doe", "email": "janet@acme.com"}]},
+        )
+    )
+
+    result = importer.process(
+        companies=[],
+        contacts=[
+            {
+                "firstName": "Jane",
+                "lastName": "Doe",
+                "company_name": "Acme Ltd",
+                "owner": "A B",
+            }
+        ],
+    )
+
+    assert result["halted"] is False
+    assert result["summary"]["contacts"]["flagged"] == 1
+    assert result["details"]["contacts"][0]["status"] == "flagged"
+    assert result["details"]["contacts"][0]["match"]["id"] == 504
+
+
+@respx.mock
 def test_process_contacts_flags_ambiguous_owner(importer):
     """When owner resolves to multiple users, status is 'flagged' (not 'failed')."""
     respx.get(f"{BASE_URL}/query/CorporateUser").mock(

@@ -723,7 +723,35 @@ class TestFindDuplicateContacts:
         assert data["matches"][0]["category"] == "exact"
 
     def test_find_duplicate_contacts_partial(self, mock_client):
-        """Same name with email present is flagged as partial_match."""
+        """Same name with different email is flagged as partial_match."""
+        mock_client.search.return_value = [
+            {"id": 11, "firstName": "John", "lastName": "Smith",
+             "email": "other@co.com", "phone": None, "clientCorporation": {"id": 123}}
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts(
+                "John", "Smith", client_corporation_id=123, email="john@co.com"
+            )
+
+        data = json.loads(result)
+        assert data["matches"][0].get("partial_match") is True
+
+    def test_find_duplicate_contacts_same_email_not_partial(self, mock_client):
+        """Same name with same email is not flagged as partial_match."""
+        mock_client.search.return_value = [
+            {"id": 11, "firstName": "John", "lastName": "Smith",
+             "email": "john@co.com", "phone": None, "clientCorporation": {"id": 123}}
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts(
+                "John", "Smith", client_corporation_id=123, email="john@co.com"
+            )
+
+        data = json.loads(result)
+        assert "partial_match" not in data["matches"][0]
+
+    def test_find_duplicate_contacts_without_email_preserves_existing_shape(self, mock_client):
+        """Without input email, same-name matches are returned without partial_match."""
         mock_client.search.return_value = [
             {"id": 11, "firstName": "John", "lastName": "Smith",
              "email": "other@co.com", "phone": None, "clientCorporation": {"id": 123}}
@@ -732,7 +760,51 @@ class TestFindDuplicateContacts:
             result = server.find_duplicate_contacts("John", "Smith", 123)
 
         data = json.loads(result)
-        assert data["matches"][0].get("partial_match") is True
+        assert data["matches"][0]["category"] == "exact"
+        assert "partial_match" not in data["matches"][0]
+
+    def test_find_duplicate_contacts_by_company_name(self, mock_client):
+        """Resolves a company name to ClientCorporation ID before searching contacts."""
+        mock_client.search.side_effect = [
+            [{"id": 123, "name": "Acme Ltd", "status": "Active", "phone": None}],
+            [{"id": 11, "firstName": "John", "lastName": "Smith",
+              "email": "john@acme.com", "phone": None,
+              "clientCorporation": {"id": 123, "name": "Acme Ltd"}}],
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts(
+                "John", "Smith", company_name="Acme Limited"
+            )
+
+        data = json.loads(result)
+        assert data["query"]["clientCorporation"]["id"] == 123
+        assert data["resolved_company"]["id"] == 123
+        assert data["matches"][0]["record"]["id"] == 11
+        assert mock_client.search.call_args_list[0].args[0] == "ClientCorporation"
+        assert mock_client.search.call_args_list[1].args[0] == "ClientContact"
+
+    def test_find_duplicate_contacts_requires_company_reference(self, mock_client):
+        """Returns a structured error when no company reference is supplied."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts("John", "Smith")
+
+        data = json.loads(result)
+        assert data["error"] == "company_reference_required"
+        mock_client.search.assert_not_called()
+
+    def test_find_duplicate_contacts_company_name_no_match(self, mock_client):
+        """Returns structured error when company_name cannot be resolved."""
+        mock_client.search.return_value = [
+            {"id": 999, "name": "Globex Corporation", "status": "Active", "phone": None}
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts(
+                "John", "Smith", company_name="Acme Limited"
+            )
+
+        data = json.loads(result)
+        assert data["error"] == "company_not_found"
+        assert mock_client.search.call_count == 1
 
     def test_find_duplicate_contacts_no_match(self, mock_client):
         """Returns empty matches when no contacts found."""
@@ -754,6 +826,24 @@ class TestFindDuplicateContacts:
         assert data["query"]["firstName"] == "Jane"
         assert data["query"]["lastName"] == "Doe"
         assert data["query"]["clientCorporation"]["id"] == 456
+
+    def test_sprint20_find_duplicate_contacts_company_name_flow(self, mock_client):
+        """E2E-style flow: resolve company name, then return likely contact duplicate."""
+        mock_client.search.side_effect = [
+            [{"id": 44321, "name": "Bank of New York Mellon", "status": "Active"}],
+            [{"id": 11234, "firstName": "John", "lastName": "Smyth",
+              "email": "john.smyth@bnymellon.com", "phone": "+1 212 495 2000",
+              "clientCorporation": {"id": 44321, "name": "Bank of New York Mellon"}}],
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_contacts(
+                "John", "Smith", company_name="BNY", email="john.smith@bnymellon.com"
+            )
+
+        data = json.loads(result)
+        assert data["resolved_company"]["id"] == 44321
+        assert data["matches"][0]["category"] in {"likely", "possible"}
+        assert data["matches"][0]["record"]["id"] == 11234
 
     def test_find_duplicate_contacts_api_error(self, mock_client):
         """Returns ERROR prefix on API failure."""
@@ -780,7 +870,7 @@ class TestSprint5E2E:
         assert data["exact_match"] is True
         assert data["matches"][0]["record"]["id"] == 11234
         assert data["matches"][0]["confidence"] >= 0.95
-        assert "partial_match" in data["matches"][0]  # has email so partial_match present
+        assert "partial_match" not in data["matches"][0]  # no query email was provided
 
 
 class TestSprint4E2E:
@@ -1883,6 +1973,15 @@ class TestSprint15HttpTransport:
                 server.main()
         mock_run.assert_called_once_with()
 
+    def test_main_stdio_logs_transport(self, caplog):
+        """main() logs the active stdio transport mode before running."""
+        with patch.object(server, "_transport_mode", "stdio"):
+            with patch.object(server.mcp, "run"):
+                with caplog.at_level("INFO", logger="bullhorn_mcp.server"):
+                    server.main()
+
+        assert "Starting Bullhorn MCP server in stdio mode" in caplog.text
+
     def test_main_http_transport(self):
         """main() with _transport_mode=http calls mcp.run(transport='streamable-http').
 
@@ -1960,6 +2059,47 @@ class TestSprint15HttpTransport:
         # cannot be affected by any stale MCP_TRANSPORT=http left in the environment.
         with patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}, clear=False):
             importlib.reload(server_module)
+
+    @pytest.mark.asyncio
+    async def test_sprint20_http_transport_smoke_request(self):
+        """In-process streamable HTTP request reaches a registered MCP tool."""
+        import httpx
+        from fastmcp import Client
+        from fastmcp.client.transports import StreamableHttpTransport
+
+        app = server.mcp.http_app(
+            path="/mcp",
+            transport="streamable-http",
+            stateless_http=True,
+        )
+
+        def httpx_client_factory(**kwargs):
+            kwargs.setdefault("base_url", "http://testserver")
+            return httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                **kwargs,
+            )
+
+        mock_bullhorn = Mock()
+        mock_bullhorn.search.return_value = [{"id": 1, "title": "Smoke"}]
+
+        async with app.router.lifespan_context(app):
+            transport = StreamableHttpTransport(
+                "http://testserver/mcp",
+                httpx_client_factory=httpx_client_factory,
+            )
+            async with Client(transport) as client:
+                assert await client.ping()
+
+                tool_names = {tool.name for tool in await client.list_tools()}
+                assert "list_jobs" in tool_names
+
+                with patch.object(server, "get_client", return_value=mock_bullhorn):
+                    result = await client.call_tool("list_jobs", {"limit": 1})
+
+        assert not result.is_error
+        assert "Smoke" in str(result.data)
+        mock_bullhorn.search.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

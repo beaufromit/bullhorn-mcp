@@ -718,7 +718,9 @@ def find_duplicate_companies(
 def find_duplicate_contacts(
     first_name: str,
     last_name: str,
-    client_corporation_id: int,
+    client_corporation_id: int | None = None,
+    company_name: str | None = None,
+    email: str | None = None,
 ) -> str:
     """Check whether a contact already exists at a given company in Bullhorn.
 
@@ -726,6 +728,8 @@ def find_duplicate_contacts(
         first_name: Contact's first name
         last_name: Contact's last name
         client_corporation_id: Bullhorn ClientCorporation ID to scope the search
+        company_name: Company name to resolve when client_corporation_id is not provided
+        email: Optional input email; same-name contacts with different emails are partial matches
 
     Returns:
         JSON object: {"query": {...}, "matches": [...], "exact_match": bool}
@@ -733,18 +737,65 @@ def find_duplicate_contacts(
 
     Examples:
         - find_duplicate_contacts("John", "Smith", 123)
+        - find_duplicate_contacts("John", "Smith", company_name="Acme Ltd")
     """
     try:
         client = get_client()
+        resolved_company_id = client_corporation_id
+        resolved_company: dict | None = None
+
+        if resolved_company_id is None:
+            if not company_name:
+                return format_response({
+                    "error": "company_reference_required",
+                    "message": "Provide either client_corporation_id or company_name.",
+                })
+
+            broad_term = company_name.split()[0] if company_name.strip() else company_name
+            companies = client.search(
+                "ClientCorporation",
+                query=f"name:{broad_term}*",
+                fields="id,name,status,phone",
+                count=50,
+            )
+
+            company_matches = []
+            for company in companies:
+                score = score_company_match(company_name, company.get("name", ""))
+                if score >= 0.75:
+                    company_matches.append((score, company))
+
+            company_matches.sort(key=lambda match: match[0], reverse=True)
+            if not company_matches:
+                return format_response({
+                    "error": "company_not_found",
+                    "message": f"No likely ClientCorporation match found for '{company_name}'.",
+                    "company_name": company_name,
+                })
+
+            best_company_score, resolved_company = company_matches[0]
+            resolved_company_id = resolved_company.get("id")
+            if resolved_company_id is None:
+                return format_response({
+                    "error": "company_missing_id",
+                    "message": f"Resolved ClientCorporation for '{company_name}' did not include an id.",
+                    "company": resolved_company,
+                })
+            resolved_company = {
+                **resolved_company,
+                "confidence": round(best_company_score, 4),
+                "category": categorize_score(best_company_score),
+            }
+
         results = client.search(
             "ClientContact",
-            query=f"clientCorporation.id:{client_corporation_id}",
+            query=f"clientCorporation.id:{resolved_company_id}",
             fields="id,firstName,lastName,email,phone,clientCorporation",
             count=100,
         )
 
-        query_email_map: dict[int, str] = {}  # not used for scoring but for partial flag
         matches = []
+        query_email = email.lower().strip() if email else None
         for record in results:
             score = score_contact_match(first_name, last_name, record)
             if score >= 0.50:
@@ -756,7 +807,13 @@ def find_duplicate_contacts(
                 # Flag as partial if same name but email is present and differs
                 query_full = f"{first_name} {last_name}".lower().strip()
                 cand_full = f"{record.get('firstName', '')} {record.get('lastName', '')}".lower().strip()
-                if query_full == cand_full and record.get("email"):
+                candidate_email = (record.get("email") or "").lower().strip()
+                if (
+                    query_full == cand_full
+                    and query_email
+                    and candidate_email
+                    and candidate_email != query_email
+                ):
                     match_entry["partial_match"] = True
                 matches.append(match_entry)
 
@@ -764,8 +821,14 @@ def find_duplicate_contacts(
         exact_match = bool(matches and matches[0]["category"] == "exact")
 
         return format_response({
-            "query": {"firstName": first_name, "lastName": last_name,
-                      "clientCorporation": {"id": client_corporation_id}},
+            "query": {
+                "firstName": first_name,
+                "lastName": last_name,
+                "email": email,
+                "clientCorporation": {"id": resolved_company_id},
+                "company_name": company_name,
+            },
+            "resolved_company": resolved_company,
             "matches": matches,
             "exact_match": exact_match,
         })
@@ -880,6 +943,7 @@ def main():
         )
         mcp.run(transport="streamable-http", host=_host, port=_port)
     elif _transport_mode == "stdio":
+        _logger.info("Starting Bullhorn MCP server in stdio mode")
         mcp.run()
     else:
         raise ValueError(

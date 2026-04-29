@@ -224,21 +224,43 @@ class BulkImporter:
                 existing = self.client.search(
                     "ClientContact",
                     query=f"clientCorporation.id:{company_id_value}",
-                    fields="id,firstName,lastName,email",
+                    fields="id,firstName,lastName,email,phone,clientCorporation",
                     count=100,
                 )
+                best_score = 0.0
+                best_match = None
                 for record in existing:
-                    if score_contact_match(first, last, record) >= 0.95:
-                        self._consecutive_errors = 0
-                        return (
-                            {
-                                "input_name": input_name,
-                                "status": "existing",
-                                "bullhorn_id": record["id"],
-                                "company_id": company_id_value,
-                            },
-                            False,
-                        )
+                    score = score_contact_match(first, last, record)
+                    if score > best_score:
+                        best_score = score
+                        best_match = record
+
+                if best_match is not None and best_score >= 0.95:
+                    self._consecutive_errors = 0
+                    return (
+                        {
+                            "input_name": input_name,
+                            "status": "existing",
+                            "bullhorn_id": best_match["id"],
+                            "company_id": company_id_value,
+                        },
+                        False,
+                    )
+
+                if best_match is not None and best_score >= 0.50:
+                    self._consecutive_errors = 0
+                    return (
+                        {
+                            "input_name": input_name,
+                            "status": "flagged",
+                            "reason": "possible_duplicate",
+                            "match_confidence": round(best_score, 4),
+                            "match_category": categorize_score(best_score),
+                            "match": best_match,
+                            "company_id": company_id_value,
+                        },
+                        False,
+                    )
             except BullhornAPIError:
                 pass  # Search failure is non-fatal; proceed to create attempt
 

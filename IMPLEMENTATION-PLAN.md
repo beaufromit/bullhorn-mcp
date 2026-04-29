@@ -2,13 +2,17 @@
 
 ## PRD Validation Notes
 
-All 10 functional requirements (FR-1 through FR-10) are covered by user stories US-1 through US-21. No user stories were found that implement features outside the stated requirements.
+PRD.md now contains 13 functional requirements (FR-1 through FR-13) and user stories US-1 through US-26, plus targeted addendum stories US-7A and US-15A for duplicate preflight and ClientContact title stripping. This includes the accepted change-request scope for hosted identity/owner stamping and first-class JobOrder writes. The implementation plan has been updated to cover the expanded PRD.
 
 **Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
 
-**Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete. All FR-1 through FR-10, US-1 through US-21, and NFR-1 through NFR-7 are fully covered. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
+**Current validation note:** Sprints 1-20 are implemented and tested, with 260 tests passing. Sprint 20 closed the PRD parity gaps found during replan review: `find_duplicate_contacts` now supports company-name resolution and email-aware partial matching, bulk import flags likely/possible contact duplicate matches, stdio startup logging is covered, and an in-process streamable HTTP smoke test proves an MCP HTTP request reaches a registered tool. The HTTP smoke test intentionally avoids production Entra OIDC and Bullhorn credentials; those remain covered by mocked startup/config tests and deployment verification.
 
-**CR8 — new requirement:** CR8.md introduces HTTP transport for remote hosting, which has no equivalent in the original PRD. FR-11 (HTTP Transport Mode) and US-22 have been added to PRD.md to cover this requirement. Sprint 15 implements them.
+**Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete for their original scope. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
+
+**CR8-CR12 — hosted deployment and identity:** FR-11 and FR-12 cover HTTP transport, Entra authentication, identity resolution, owner stamping, per-user identity cache, and session persistence. Sprints 15-19 implement this scope.
+
+**CR13 — JobOrder writes:** FR-13 and US-24 through US-26 cover first-class JobOrder create/update tools. Sprint 21 plans this work.
 
 ---
 
@@ -35,6 +39,8 @@ All 10 functional requirements (FR-1 through FR-10) are covered by user stories 
 | Sprint 17 | **COMPLETE** | CR10: Owner stamping — auto-populate owner from authenticated user in create_contact / create_company — 244 tests passing |
 | Sprint 18 | **COMPLETE** | CR11: Per-user identity cache — fix first-writer-wins bug for multi-user HTTP deployments — 248 tests passing |
 | Sprint 19 | **COMPLETE** | CR12: Add offline_access scope + README Session Persistence docs — 248 tests passing, tagged v0.0.19 |
+| Sprint 20 | **COMPLETE** | PRD parity hardening: contact duplicate company-name support, bulk likely/possible contact flags, HTTP smoke test, stdio startup logging — 260 tests passing |
+| Sprint 21 | **PLANNED** | CR13: First-class JobOrder create/update tools, JobOrder aliases, README updates, unit and E2E tests |
 
 ### Sprint 15 post-tag regression note
 
@@ -58,11 +64,12 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note()`
 - `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant for known metadata gaps (e.g. "job title" → `occupation` for ClientContact)
-- `src/bullhorn_mcp/server.py` — MCP server with 16 tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`. Includes `get_client()` and `get_metadata()` helpers.
+- `src/bullhorn_mcp/server.py` — MCP server with 16 implemented tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`. Includes `get_client()` and `get_metadata()` helpers. Sprint 21 plans adding `create_job` and `update_job`, which will bring the tool count to 18.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
 - `src/bullhorn_mcp/bulk.py` — BulkImporter with process(), _process_single_company(), _process_single_contact(), _resolve_or_create_company(), _build_summary()
+- `src/bullhorn_mcp/identity.py` — Entra token claim extraction and per-user Bullhorn CorporateUser identity cache
 
 ### Existing modules extended
 - `src/bullhorn_mcp/server.py` — Add `bulk_import` MCP tool (Sprint 7)
@@ -73,9 +80,10 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
 - `tests/test_metadata.py` — 21 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 105 tests (all 16 tools + server setup + E2E tests Sprints 1–14)
-- `tests/test_bulk.py` — 14 tests (company processing, contact processing, summary, E2E)
-- **Total: 244 tests, all passing**
+- `tests/test_server.py` — 119 tests (all 16 implemented tools + server setup + E2E tests Sprints 1–20)
+- `tests/test_bulk.py` — 18 tests (company processing, contact processing, summary, E2E)
+- `tests/test_identity.py` — 13 tests (Entra token to CorporateUser resolution, per-user cache)
+- **Total: 260 tests, all passing**
 
 ---
 
@@ -1381,3 +1389,271 @@ If re-authentication still occurs after more than 1 hour, extend the access toke
 - When assigning a Token Lifetime Policy to a service principal via PowerShell, use `Invoke-MgGraphRequest` with a `POST` to `servicePrincipals/<id>/tokenLifetimePolicies/$ref` and an `@odata.id` body. `New-MgServicePrincipalTokenLifetimePolicyByRef` is not a stable Graph SDK v2 cmdlet.
 - README sections documenting HTTP-only features should use `####` headings when placed under an existing `### Hosted HTTP mode` section to preserve correct heading hierarchy.
 - Avoid using `$ref` as a PowerShell variable name alongside URI strings that contain the literal path segment `$ref` — use a less ambiguous name (e.g. `$policyRef`) to prevent reader confusion.
+
+---
+
+## Sprint 20: PRD Parity Hardening — COMPLETE
+
+**User stories affected:** US-7, US-8, US-9, US-10, US-22
+**Dependency:** Sprint 19 complete
+
+### Background
+
+The replan review confirmed that Sprints 1-19 are implemented and the existing 248-test suite passes. It also found a few PRD behaviors that are only partially covered by the current implementation. These should be addressed before the larger JobOrder write expansion so the baseline remains clean.
+
+### Tasks
+
+#### T20.1 — Support company-name input in `find_duplicate_contacts`
+**File:** `src/bullhorn_mcp/server.py`
+
+Current tool accepts only `client_corporation_id`. FR-4 allows a ClientCorporation ID or company name. Add an optional `company_name` parameter while preserving backward compatibility with the existing `client_corporation_id` path.
+
+Implementation outline:
+- Accept `client_corporation_id: int | None = None` and `company_name: str | None = None`.
+- If ID is supplied, use the current behavior.
+- If only company name is supplied, search ClientCorporation by name, score matches with `score_company_match`, and use the exact/likely best match's ID for contact search.
+- If no usable company is resolved, return a structured error and do not run the contact search.
+
+Tests:
+- `tests/test_server.py::test_find_duplicate_contacts_by_company_name`
+- `tests/test_server.py::test_find_duplicate_contacts_requires_company_reference`
+- `tests/test_server.py::test_find_duplicate_contacts_company_name_no_match`
+
+#### T20.2 — Add optional email input for contact duplicate partial-match detection
+**File:** `src/bullhorn_mcp/server.py`
+
+Current partial-match logic flags same-name records with any email because the tool has no input email to compare. Add optional `email: str | None = None`; when present, flag `partial_match: true` only when name matches and candidate email differs.
+
+Tests:
+- `tests/test_server.py::test_find_duplicate_contacts_partial_email_differs`
+- `tests/test_server.py::test_find_duplicate_contacts_same_email_not_partial`
+- `tests/test_server.py::test_find_duplicate_contacts_without_email_preserves_existing_shape`
+
+#### T20.3 — Flag likely/possible contact matches in bulk import
+**File:** `src/bullhorn_mcp/bulk.py`
+
+Current bulk contact processing skips exact matches but creates when a likely/possible contact match exists. FR-5/US-8 require likely/possible matches to be flagged for review.
+
+Implementation outline:
+- After contact duplicate scoring, if best score is `>= 0.95`, keep existing `"existing"` behavior.
+- If best score is `>= 0.50` and `< 0.95`, return status `"flagged"` with confidence, category, and record details. Do not create.
+- Keep no-match behavior unchanged.
+
+Tests:
+- `tests/test_bulk.py::test_process_contacts_flags_likely_match`
+- `tests/test_bulk.py::test_process_contacts_flags_possible_match`
+- `tests/test_bulk.py::test_process_contacts_exact_match_still_existing`
+- `tests/test_bulk.py::test_sprint20_e2e_bulk_flags_contact_partial_match`
+
+#### T20.4 — Add live HTTP smoke test or documented manual verification path
+**Files:** `tests/test_server.py`, `README.md` if manual-only
+
+FR-11 acceptance says HTTP mode responds to HTTP requests from an MCP client. Current tests mock startup/configuration only. Prefer a lightweight integration test that starts the app on an ephemeral port with auth disabled or mocked and verifies a real HTTP request reaches the server. If FastMCP's auth/startup model makes that brittle, document manual verification explicitly and add the rationale to this plan.
+
+Tests:
+- Preferred: `tests/test_server.py::test_sprint20_http_transport_smoke_request`
+- If not feasible: add README manual verification steps and a plan note explaining why the behavior is not unit-tested.
+
+#### T20.5 — Log stdio startup mode
+**File:** `src/bullhorn_mcp/server.py`
+
+FR-11 requires startup logging of the active transport and port. HTTP mode logs this today; add an INFO log for stdio mode as well. The port is irrelevant in stdio mode, so the message should identify stdio transport without implying a listening socket.
+
+Test:
+- `tests/test_server.py::test_main_stdio_logs_transport`
+
+### Sprint 20 End-to-End Tests
+
+- `tests/test_bulk.py::test_sprint20_e2e_bulk_flags_contact_partial_match`
+- `tests/test_server.py::test_sprint20_find_duplicate_contacts_company_name_flow`
+- `tests/test_server.py::test_sprint20_http_transport_smoke_request` if feasible
+
+### What was delivered
+
+- `find_duplicate_contacts` now accepts either `client_corporation_id` or `company_name`. Company-name resolution searches ClientCorporation, scores candidates with `score_company_match`, accepts the best exact/likely match, and returns structured errors when no company reference or no likely company match is available.
+- `find_duplicate_contacts` now accepts optional `email`; `partial_match` is set only when the input email and candidate email are both present, the name matches, and the emails differ. This removes the previous coarse behavior where any same-name contact with an email was marked partial.
+- Bulk contact duplicate detection now finds the best existing contact match. Exact matches remain `"existing"`; likely/possible matches are returned as `"flagged"` with confidence/category and match details, and no contact is created.
+- `main()` logs stdio startup mode as well as HTTP startup mode, satisfying the active-transport logging requirement without implying a stdio listening port.
+- Added an in-process FastMCP streamable HTTP smoke test using `server.mcp.http_app(...)`, `httpx.ASGITransport`, and FastMCP's `Client`/`StreamableHttpTransport`. This proves an HTTP MCP request can ping the server, list tools, and dispatch `list_jobs` without opening a socket or requiring Entra/Bullhorn credentials.
+- Updated one Sprint 5 E2E assertion to match the new email-aware partial-match semantics.
+- **260 tests passing, 0 failing.**
+
+### Review cycle learnings
+
+- For FastMCP HTTP smoke coverage, avoid `main()` and `MCP_TRANSPORT=http` because that path intentionally constructs Entra `OIDCProxy` at import/startup and may perform discovery. Use `mcp.http_app(path="/mcp", transport="streamable-http", stateless_http=True)` with `httpx.ASGITransport` and the FastMCP client under the app lifespan context.
+- The HTTP smoke test verifies transport wiring and registered-tool dispatch only. Production Entra auth remains covered by startup/config tests plus deployment verification.
+
+### Expected outcome
+
+PRD FR-4, FR-5, FR-11, US-7, US-8, US-9, US-10, and US-22 now have implementation/test alignment. Existing tests continue to pass plus 12 Sprint 20 tests.
+
+---
+
+## Sprint 21: CR13 — First-class JobOrder Create and Update Tools — PLANNED
+
+**Change request:** CR13.md
+**User stories:** US-24, US-25, US-26
+**Functional requirement:** FR-13
+**Dependency:** Sprint 20 complete
+
+### Background
+
+The current server can read JobOrder records and the generic `update_record("JobOrder", ...)` path works in practice because the client update method is generic. That is not a clear public contract: README/tool guidance does not present JobOrder writes as supported, and there is no first-class create path, JobOrder-specific validation, defaulting, or alias support.
+
+CR13 adds two first-class MCP tools:
+- `create_job` for structured JobOrder creation.
+- `update_job` for dedicated JobOrder updates.
+
+### Tasks
+
+#### T21.1 — Add JobOrder field aliases
+**File:** `src/bullhorn_mcp/metadata.py`
+
+Extend `FIELD_ALIASES` with a `JobOrder` entry:
+
+```python
+"JobOrder": {
+    "published description": "publicDescription",
+    "public description": "publicDescription",
+    "publish on website": "customText12",
+}
+```
+
+Do not guess local custom-field API names for `source`, `grade`, `fee`, `salary`, `website_sector_range`, `website_salary_range`, or `website_location` unless confirmed from metadata or existing local conventions. Unknown structured create fields must produce a validation error before calling Bullhorn.
+
+Tests:
+- `tests/test_metadata.py::test_resolve_fields_joborder_published_description_alias`
+- `tests/test_metadata.py::test_resolve_fields_joborder_public_description_alias`
+- `tests/test_metadata.py::test_resolve_fields_joborder_publish_on_website_alias`
+- `tests/test_metadata.py::test_joborder_aliases_do_not_affect_client_contact`
+
+#### T21.2 — Add `create_job` MCP tool
+**File:** `src/bullhorn_mcp/server.py`
+
+Add a new `@mcp.tool()` named `create_job` with explicit required business inputs:
+- `clientCorporation: dict`
+- `clientContact: dict`
+- `title: str`
+- `source`
+- `grade`
+- `fee`
+- `salary`
+- `website_sector_range`
+- `website_salary_range`
+- `website_location`
+
+Optional inputs:
+- `publicDescription`
+- `description`
+- `owner`
+- `status`
+- `isOpen`
+- `customText12`
+- Optional `extra_fields: dict | None = None` if needed for additional validated JobOrder fields.
+
+Defaults:
+- `status`: `"Accepting Candidates"`
+- `isOpen`: `True`
+- `customText12`: `0`
+- `owner`: authenticated caller's Bullhorn CorporateUser via `resolve_caller()` when omitted
+
+Validation:
+- Reject missing or malformed `clientCorporation` before calling Bullhorn.
+- Reject missing or malformed `clientContact` before calling Bullhorn.
+- Reject unknown structured create fields before calling Bullhorn.
+- Caller-provided owner always wins; if owner is absent and identity resolution fails, return the same `identity_resolution_failed` response shape used by `create_contact`/`create_company`.
+- Do not default or invent `publicDescription`; only send it if supplied.
+
+Tests:
+- `tests/test_server.py::test_create_job_success`
+- `tests/test_server.py::test_create_job_requires_client_corporation`
+- `tests/test_server.py::test_create_job_requires_client_contact`
+- `tests/test_server.py::test_create_job_rejects_malformed_client_corporation`
+- `tests/test_server.py::test_create_job_rejects_malformed_client_contact`
+- `tests/test_server.py::test_create_job_defaults`
+- `tests/test_server.py::test_create_job_owner_auto_populated`
+- `tests/test_server.py::test_create_job_explicit_owner_wins`
+- `tests/test_server.py::test_create_job_identity_resolution_fails`
+- `tests/test_server.py::test_create_job_public_description_optional`
+- `tests/test_server.py::test_create_job_rejects_unknown_structured_field`
+
+#### T21.3 — Add `update_job` MCP tool
+**File:** `src/bullhorn_mcp/server.py`
+
+Signature:
+
+```python
+def update_job(job_id: int, fields: dict) -> str:
+```
+
+Behavior:
+- Resolve field labels/API aliases for `JobOrder`.
+- Send exactly and only caller-specified fields after resolution.
+- Call `client.update("JobOrder", job_id, resolved_fields)`.
+- Return the existing update response shape.
+- Do not strip or block `title`; ClientContact title stripping must remain scoped only to ClientContact.
+- Leave `update_record` unchanged for backward compatibility.
+
+Tests:
+- `tests/test_server.py::test_update_job_success`
+- `tests/test_server.py::test_update_job_label_resolution`
+- `tests/test_server.py::test_update_job_public_description_alias`
+- `tests/test_server.py::test_update_job_publish_on_website_alias`
+- `tests/test_server.py::test_update_job_does_not_strip_title`
+- `tests/test_server.py::test_update_job_payload_only_contains_caller_fields`
+- `tests/test_server.py::test_update_job_api_error`
+
+#### T21.4 — Register tools and update tool-list tests
+**File:** `tests/test_server.py`
+
+Update MCP tool registration tests to include `create_job` and `update_job`. Expected implemented tool count becomes 18.
+
+Test:
+- `tests/test_server.py::TestMCPServerSetup::test_server_has_tools`
+
+#### T21.5 — Update README and tool documentation
+**Files:** `README.md`, `src/bullhorn_mcp/server.py`
+
+README changes:
+- Add `create_job` and `update_job` to write tools.
+- Add JobOrder to supported write targets.
+- Document that `publicDescription` is Bullhorn's published job description field.
+- Document that `customText12` controls "Publish on website" in the local Bullhorn configuration and defaults to `0`.
+- Note that generic `update_record` remains available but JobOrder callers should use `update_job`.
+
+Tool docstrings:
+- Add clear `create_job` and `update_job` examples.
+- Do not include unconfirmed local custom-field mappings beyond the structured fields accepted by the tool.
+
+#### T21.6 — Add E2E-style mocked HTTP tests
+**Files:** `tests/test_server.py`, `tests/test_metadata.py`
+
+Tests:
+- `tests/test_server.py::test_e2e_create_job`
+- `tests/test_server.py::test_e2e_update_job_public_description`
+
+`test_e2e_create_job` should mock CorporateUser resolution, JobOrder PUT, and JobOrder GET, then assert the raw PUT body includes required fields, defaults, owner, and `publicDescription` when provided.
+
+`test_e2e_update_job_public_description` should mock JobOrder POST and GET, call `update_job(job_id, {"published description": "..."})`, and assert the raw POST body contains `{"publicDescription": "..."}`.
+
+### Acceptance criteria
+
+1. `create_job` is registered as an MCP tool.
+2. `update_job` is registered as an MCP tool.
+3. `create_job` calls `client.create("JobOrder", payload)` with only validated/defaulted JobOrder fields.
+4. `create_job` rejects missing or malformed `clientCorporation` before calling Bullhorn.
+5. `create_job` rejects missing or malformed `clientContact` before calling Bullhorn.
+6. `create_job` applies defaults for `status`, `isOpen`, `customText12`, and owner.
+7. Caller-provided owner is preserved and not overwritten.
+8. `publicDescription` is sent only when provided.
+9. Required JobOrder aliases resolve correctly.
+10. Unknown structured create fields return a clear validation error before API calls.
+11. `update_job` sends exactly and only caller-specified fields after resolution.
+12. `update_job` can update `publicDescription`.
+13. `update_job` does not strip or block `title`.
+14. README documents the new tools and JobOrder write support.
+15. All existing tests pass plus the new Sprint 21 tests.
+
+### Expected outcome
+
+After Sprint 21, PRD FR-13 and US-24 through US-26 should be implemented and tested. The MCP server should expose 18 tools. Existing ClientContact title stripping remains scoped to ClientContact and does not affect JobOrder.
