@@ -733,9 +733,9 @@ def create_job(
             "website_sector_range": website_sector_range,
             "website_salary_range": website_salary_range,
             "website_location": website_location,
-            "status": status,
-            "isOpen": isOpen,
-            "customText12": customText12,
+            "status": status if status is not None else "Accepting Candidates",
+            "isOpen": isOpen if isOpen is not None else True,
+            "customText12": customText12 if customText12 is not None else 0,
         }
 
         missing_fields = _missing_job_required_fields(payload)
@@ -754,7 +754,7 @@ def create_job(
         if owner is None:
             try:
                 caller = resolve_caller(client)
-                payload["owner"] = {"id": caller["id"]}
+                resolved_owner = {"id": caller["id"]}
             except IdentityResolutionError as e:
                 return format_response({
                     "error": "identity_resolution_failed",
@@ -769,10 +769,12 @@ def create_job(
                     "matches": owner_result,
                     "message": "Multiple users found. Specify owner by ID.",
                 })
-            payload["owner"] = owner_result
+            resolved_owner = owner_result
 
         if extra_fields:
             payload.update(extra_fields)
+
+        payload["owner"] = resolved_owner
 
         resolved = metadata.resolve_fields("JobOrder", payload)
         unknown_error = _validate_job_fields_known(metadata, resolved)

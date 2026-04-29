@@ -797,6 +797,94 @@ class TestUpdateJob:
         assert result.startswith("ERROR:")
 
 
+class TestCreateJobReviewFixes:
+    """Regression tests for review M1 and M2 fixes."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = [
+            {"name": "clientCorporation"},
+            {"name": "clientContact"},
+            {"name": "title"},
+            {"name": "source"},
+            {"name": "grade"},
+            {"name": "fee"},
+            {"name": "salary"},
+            {"name": "website_sector_range"},
+            {"name": "website_salary_range"},
+            {"name": "website_location"},
+            {"name": "status"},
+            {"name": "isOpen"},
+            {"name": "customText12"},
+            {"name": "publicDescription"},
+            {"name": "description"},
+            {"name": "owner"},
+        ]
+        return meta
+
+    def _required_kwargs(self):
+        return {
+            "clientCorporation": {"id": 12345},
+            "clientContact": {"id": 67890},
+            "title": "Senior Software Engineer",
+            "source": "Email",
+            "grade": "Senior",
+            "fee": 25000,
+            "salary": 90000,
+            "website_sector_range": "Technology",
+            "website_salary_range": "80000-100000",
+            "website_location": "London",
+        }
+
+    def test_extra_fields_cannot_override_owner(self, mock_client, mock_metadata):
+        """M1: extra_fields with owner key must not override resolved caller owner."""
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            server.create_job(**self._required_kwargs(), extra_fields={"owner": {"id": 999}})
+
+        payload = mock_client.create.call_args.args[1]
+        assert payload["owner"] == {"id": 42}
+
+    def test_null_status_uses_default(self, mock_client, mock_metadata):
+        """M2: explicitly passing status=None must use the default, not send None."""
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            server.create_job(**self._required_kwargs(), status=None)
+
+        payload = mock_client.create.call_args.args[1]
+        assert payload["status"] == "Accepting Candidates"
+
+    def test_null_is_open_uses_default(self, mock_client, mock_metadata):
+        """M2: explicitly passing isOpen=None must use the default, not send None."""
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            server.create_job(**self._required_kwargs(), isOpen=None)
+
+        payload = mock_client.create.call_args.args[1]
+        assert payload["isOpen"] is True
+
+    def test_null_custom_text12_uses_default(self, mock_client, mock_metadata):
+        """M2: explicitly passing customText12=None must use the default 0, not send None."""
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {"id": 1}}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            server.create_job(**self._required_kwargs(), customText12=None)
+
+        payload = mock_client.create.call_args.args[1]
+        assert payload["customText12"] == 0
+
+
 class TestSprint21JobOrderE2E:
     """E2E-style tests for first-class JobOrder write tools."""
 
