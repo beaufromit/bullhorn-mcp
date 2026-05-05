@@ -286,6 +286,40 @@ class TestDefaultFields:
         """Test ClientCorporation default fields include dateAdded."""
         assert "dateAdded" in DEFAULT_FIELDS["ClientCorporation"]
 
+    def test_user_message_defaults_omit_comments(self):
+        """UserMessage default fields exclude `comments` (body) — added on demand."""
+        fields = DEFAULT_FIELDS["UserMessage"]
+        assert "id" in fields
+        assert "subject" in fields
+        assert "smtpSendDate" in fields
+        assert "messageFiles(" in fields
+        # Body is opt-in via include_body=True on the tool, not a default.
+        assert "comments" not in fields
+        # _subtype is auto-populated in responses; requesting it errors out.
+        assert "_subtype" not in fields
+
+
+class TestSearchExtraParams:
+    """Tests for the extra_params argument on BullhornClient.search()."""
+
+    @respx.mock
+    def test_search_with_extra_params(self, mock_auth, mock_session):
+        """extra_params dict values are merged into the outgoing query string."""
+        route = respx.get(f"{mock_session.rest_url}/search/UserMessage").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.search(
+            "UserMessage",
+            query="sender.id:1",
+            extra_params={"entityId": 42},
+        )
+
+        url = str(route.calls[0].request.url)
+        assert "entityId=42" in url
+        assert "query=sender.id%3A1" in url
+
 
 class TestCreateEntity:
     """Tests for BullhornClient.create() and _request() JSON body support."""

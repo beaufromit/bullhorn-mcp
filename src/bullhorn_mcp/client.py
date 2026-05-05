@@ -13,6 +13,15 @@ DEFAULT_FIELDS = {
     "Placement": "id,candidate,jobOrder,status,dateBegin,dateEnd,salary,payRate",
     "ClientCorporation": "id,name,status,phone,address,dateAdded",
     "ClientContact": "id,firstName,lastName,email,phone,status,dateAdded,clientCorporation,owner",
+    "UserMessage": (
+        "id,subject,smtpSendDate,smtpReceiveDate,dateAdded,"
+        "externalFrom,externalTo,externalCC,externalBCC,"
+        "sender(id,firstName,lastName,email),"
+        "toRecipients(id,firstName,lastName,email),"
+        "ccRecipients(id,firstName,lastName,email),"
+        "messageFiles(id,name,contentType,fileSize,fileExtension,isExternal),"
+        "threadID"
+    ),
 }
 
 
@@ -75,6 +84,7 @@ class BullhornClient:
         count: int = 20,
         start: int = 0,
         sort: str | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Search entities using Lucene query syntax.
 
@@ -85,6 +95,8 @@ class BullhornClient:
             count: Max results (1-500)
             start: Starting offset for pagination
             sort: Sort field with direction (e.g., "-dateAdded" for descending)
+            extra_params: Additional query-string params to merge in (e.g.,
+                ``{"entityId": 123}`` for UserMessage mailbox scoping).
 
         Returns:
             List of matching entities
@@ -92,7 +104,7 @@ class BullhornClient:
         if fields is None:
             fields = DEFAULT_FIELDS.get(entity, "id")
 
-        params = {
+        params: dict[str, Any] = {
             "query": query,
             "fields": fields,
             "count": min(count, 500),
@@ -101,6 +113,9 @@ class BullhornClient:
 
         if sort:
             params["sort"] = sort
+
+        if extra_params:
+            params.update(extra_params)
 
         result = self._request("GET", f"/search/{entity}", params)
         return result.get("data", [])

@@ -213,6 +213,150 @@ class TestQueryEntities:
         assert call_args.kwargs["order_by"] == "-dateAdded"
 
 
+class TestSearchEmails:
+    """Tests for search_emails tool."""
+
+    @pytest.fixture
+    def email_client(self):
+        """Mock client with empty UserMessage results by default."""
+        client = Mock()
+        client.search.return_value = []
+        client.resolve_owner.return_value = {"id": 0}
+        return client
+
+    def test_search_emails_basic(self, email_client):
+        """Only person_id set: query is the OR clause, entityId is passed, sort is -smtpSendDate."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        with patch.object(server, "get_client", return_value=email_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            server.search_emails(person_id=34389)
+
+        call_args = email_client.search.call_args
+        assert call_args.kwargs["entity"] == "UserMessage"
+        assert call_args.kwargs["query"] == "(sender.id:34389 OR recipients.id:34389)"
+        assert call_args.kwargs["sort"] == "-smtpSendDate"
+        assert call_args.kwargs["extra_params"] == {"entityId": 34389}
+        # Body should not be requested by default.
+        assert "comments" not in call_args.kwargs["fields"]
+
+    def test_search_emails_with_user_id(self, email_client):
+        """user={"id": N} adds an AND clause with user id and skips resolve_caller."""
+        with patch.object(server, "get_client", return_value=email_client), \
+             patch.object(server, "resolve_caller") as resolve_caller_mock:
+            email_client.resolve_owner.return_value = {"id": 24}
+            server.search_emails(person_id=34389, user={"id": 24})
+
+        resolve_caller_mock.assert_not_called()
+        query = email_client.search.call_args.kwargs["query"]
+        assert "(sender.id:34389 OR recipients.id:34389)" in query
+        assert "(sender.id:24 OR recipients.id:24)" in query
+        assert " AND " in query
+
+    def test_search_emails_with_user_name_unique(self, email_client):
+        """user as a name string is resolved to an id via resolve_owner."""
+        email_client.resolve_owner.return_value = {"id": 24}
+        with patch.object(server, "get_client", return_value=email_client):
+            server.search_emails(person_id=34389, user="Andrew Wynne")
+
+        email_client.resolve_owner.assert_called_once_with("Andrew Wynne")
+        query = email_client.search.call_args.kwargs["query"]
+        assert "(sender.id:24 OR recipients.id:24)" in query
+
+    def test_search_emails_user_name_ambiguous(self, email_client):
+        """Multiple matches returns user_ambiguous JSON; search is not called."""
+        email_client.resolve_owner.return_value = [
+            {"id": 10, "firstName": "John", "lastName": "Smith", "email": "j1@firm.com"},
+            {"id": 11, "firstName": "John", "lastName": "Smith", "email": "j2@firm.com"},
+        ]
+        with patch.object(server, "get_client", return_value=email_client):
+            result = server.search_emails(person_id=34389, user="John Smith")
+
+        data = json.loads(result)
+        assert data["error"] == "user_ambiguous"
+        assert len(data["matches"]) == 2
+        email_client.search.assert_not_called()
+
+    def test_search_emails_user_not_found(self, email_client):
+        """resolve_owner ValueError surfaces as user_not_found JSON; search not called."""
+        email_client.resolve_owner.side_effect = ValueError(
+            "No CorporateUser found matching 'Ghost'"
+        )
+        with patch.object(server, "get_client", return_value=email_client):
+            result = server.search_emails(person_id=34389, user="Ghost")
+
+        data = json.loads(result)
+        assert data["error"] == "user_not_found"
+        email_client.search.assert_not_called()
+
+    def test_search_emails_user_none_resolves_caller(self, email_client):
+        """user=None falls back to the authenticated CorporateUser."""
+        with patch.object(server, "get_client", return_value=email_client), \
+             patch.object(server, "resolve_caller", return_value={"id": 99, "email": "me@firm.com"}):
+            server.search_emails(person_id=34389)
+
+        query = email_client.search.call_args.kwargs["query"]
+        assert "(sender.id:99 OR recipients.id:99)" in query
+
+    def test_search_emails_user_none_no_caller_token(self, email_client):
+        """user=None + no JWT (stdio mode): search runs without a user clause."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        with patch.object(server, "get_client", return_value=email_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            server.search_emails(person_id=34389)
+
+        query = email_client.search.call_args.kwargs["query"]
+        assert query == "(sender.id:34389 OR recipients.id:34389)"
+
+    def test_search_emails_with_date_range(self, email_client):
+        """since/until produce a smtpSendDate Lucene range; either bound may be open."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        with patch.object(server, "get_client", return_value=email_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            server.search_emails(person_id=1, since="2024-01-01", until="2024-12-31")
+            full = email_client.search.call_args.kwargs["query"]
+
+            server.search_emails(person_id=1, since=None, until="2024-12-31")
+            open_lo = email_client.search.call_args.kwargs["query"]
+
+            server.search_emails(person_id=1, since="2024-01-01", until=None)
+            open_hi = email_client.search.call_args.kwargs["query"]
+
+        assert "smtpSendDate:[2024-01-01 TO 2024-12-31]" in full
+        assert "smtpSendDate:[* TO 2024-12-31]" in open_lo
+        assert "smtpSendDate:[2024-01-01 TO *]" in open_hi
+
+    def test_search_emails_subject_filter(self, email_client):
+        """subject_contains is appended as an AND subject:(…) clause."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        with patch.object(server, "get_client", return_value=email_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            server.search_emails(person_id=1, subject_contains="proposal")
+
+        query = email_client.search.call_args.kwargs["query"]
+        assert "subject:(proposal)" in query
+
+    def test_search_emails_include_body_appends_comments(self, email_client):
+        """include_body=True appends `comments` to the resolved fields argument."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        with patch.object(server, "get_client", return_value=email_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            server.search_emails(person_id=1, include_body=True)
+
+        fields = email_client.search.call_args.kwargs["fields"]
+        assert fields.endswith(",comments")
+
+    def test_search_emails_api_error(self, email_client):
+        """API errors surface with the existing ERROR: prefix."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        email_client.search.side_effect = BullhornAPIError("boom")
+        with patch.object(server, "get_client", return_value=email_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            result = server.search_emails(person_id=1)
+
+        assert result.startswith("ERROR:")
+        assert "boom" in result
+
+
 class TestFormatResponse:
     """Tests for response formatting."""
 

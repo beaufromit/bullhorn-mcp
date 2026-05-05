@@ -9,7 +9,7 @@ from fastmcp.server.auth.oidc_proxy import OIDCProxy
 
 from .config import BullhornConfig
 from .auth import BullhornAuth, AuthenticationError
-from .client import BullhornClient, BullhornAPIError
+from .client import BullhornClient, BullhornAPIError, DEFAULT_FIELDS
 from .metadata import BullhornMetadata
 from .joborder_config import get_joborder_defaults, get_joborder_required
 from .fuzzy import score_company_match, categorize_score, score_contact_match
@@ -441,6 +441,115 @@ def query_entities(
 
         return format_response(results)
 
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def search_emails(
+    person_id: int,
+    user: str | dict | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    subject_contains: str | None = None,
+    include_body: bool = False,
+    limit: int = 20,
+    fields: str | None = None,
+) -> str:
+    """Search Bullhorn email messages (UserMessage) for a person's mailbox.
+
+    Returns emails sent to or from a Candidate or ClientContact, optionally
+    filtered to those that also involve a specific recruiter (CorporateUser),
+    a date range, or a subject substring. Sorted most-recent-first by
+    smtpSendDate.
+
+    Args:
+        person_id: ID of the Candidate or ClientContact whose mailbox to
+            search. CorporateUser ids are not accepted here — to filter by
+            recruiter, put them on the ``user`` argument instead. Resolve
+            names to ids first via list_candidates / list_contacts /
+            search_entities.
+        user: Optional CorporateUser filter. Accepts {"id": N} or a name
+            string (resolved via /query/CorporateUser). If a name matches
+            multiple users, returns disambiguation JSON instead of running
+            the search. If omitted, defaults to the authenticated user when
+            running in HTTP/Entra mode; otherwise no user filter is applied.
+        since: ISO-8601 date lower bound on smtpSendDate (e.g., "2024-01-01").
+        until: ISO-8601 date upper bound on smtpSendDate.
+        subject_contains: Substring to match in subject. Caller is
+            responsible for any Lucene escaping.
+        include_body: If True, also returns the email body in the
+            ``comments`` field (HTML, can be large). Off by default to keep
+            responses small for bulk searches.
+        limit: Maximum number of results (1-500, default 20).
+        fields: Override the default field selection.
+
+    Returns:
+        JSON array of UserMessage records. Each record's nested sender and
+        recipients carry an auto-populated ``_subtype`` of "Candidate",
+        "ClientContact", or "CorporateUser". Attachments are listed in
+        ``messageFiles`` as metadata only — content download is not yet
+        supported (pending Bullhorn support resolution).
+
+    Examples:
+        - search_emails(person_id=34389, limit=10)
+        - search_emails(person_id=34389, user="Andrew Wynne", since="2020-01-01")
+        - search_emails(person_id=34389, user={"id": 24}, include_body=True, limit=5)
+    """
+    try:
+        client = get_client()
+
+        # Resolve user filter to a CorporateUser id (or skip).
+        user_id: int | None = None
+        if user is not None:
+            owner_result = client.resolve_owner(user)
+            if isinstance(owner_result, list):
+                return format_response({
+                    "error": "user_ambiguous",
+                    "matches": owner_result,
+                    "message": "Multiple users matched. Specify user by ID.",
+                })
+            user_id = owner_result["id"]
+        else:
+            try:
+                caller = resolve_caller(client)
+                user_id = caller["id"]
+            except IdentityResolutionError:
+                # No JWT (stdio mode) or no matching CorporateUser —
+                # search without a user filter rather than failing.
+                user_id = None
+
+        # Build Lucene query.
+        clauses = [f"(sender.id:{person_id} OR recipients.id:{person_id})"]
+        if user_id is not None:
+            clauses.append(f"(sender.id:{user_id} OR recipients.id:{user_id})")
+        if since or until:
+            lo = since if since else "*"
+            hi = until if until else "*"
+            clauses.append(f"smtpSendDate:[{lo} TO {hi}]")
+        if subject_contains:
+            clauses.append(f"subject:({subject_contains})")
+        query = " AND ".join(clauses)
+
+        # Append ``comments`` only when the caller wants the body.
+        resolved_fields = fields if fields is not None else DEFAULT_FIELDS["UserMessage"]
+        if include_body:
+            resolved_fields = f"{resolved_fields},comments"
+
+        results = client.search(
+            entity="UserMessage",
+            query=query,
+            fields=resolved_fields,
+            count=limit,
+            sort="-smtpSendDate",
+            extra_params={"entityId": person_id},
+        )
+
+        return format_response(results)
+
+    except ValueError as e:
+        # resolve_owner raises ValueError when no CorporateUser matches.
+        return format_response({"error": "user_not_found", "message": str(e)})
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
 
