@@ -2,11 +2,11 @@
 
 ## PRD Validation Notes
 
-PRD.md now contains 13 functional requirements (FR-1 through FR-13) and user stories US-1 through US-26, plus targeted addendum stories US-7A and US-15A for duplicate preflight and ClientContact title stripping. This includes the accepted change-request scope for hosted identity/owner stamping and first-class JobOrder writes. The implementation plan has been updated to cover the expanded PRD.
+PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user stories US-1 through US-28, plus targeted addendum stories US-7A and US-15A for duplicate preflight and ClientContact title stripping. This includes the accepted change-request scope for hosted identity/owner stamping, first-class JobOrder writes, and JobSubmission shortlist tools. The implementation plan has been updated to cover the expanded PRD.
 
 **Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
 
-**Current validation note:** Sprints 1-22 are implemented and tested, with 305 tests passing. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load. Sprint 21 completed CR13: first-class JobOrder create/update tools, JobOrder aliases, README docs, and unit/E2E coverage. Sprint 20 closed the PRD parity gaps found during replan review.
+**Current validation note:** Sprints 1-23 are implemented and tested, with 337 tests passing, tagged v0.0.23. Sprint 23 completed CR15: added `shortlist_candidate` and `shortlist_candidates` MCP tools backed by `JobSubmission` writes, `shortlist_config.py` for per-instance status config (`BULLHORN_SHORTLIST_STATUS`), `sendingUser` auto-stamp via `resolve_caller()`, idempotent duplicate pre-check, startup picklist validation, and optional `fields` dict. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
 
 **Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete for their original scope. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
 
@@ -41,7 +41,8 @@ PRD.md now contains 13 functional requirements (FR-1 through FR-13) and user sto
 | Sprint 19 | **COMPLETE** | CR12: Add offline_access scope + README Session Persistence docs — 248 tests passing, tagged v0.0.19 |
 | Sprint 20 | **COMPLETE** | PRD parity hardening: contact duplicate company-name support, bulk likely/possible contact flags, HTTP smoke test, stdio startup logging — 260 tests passing |
 | Sprint 21 | **COMPLETE** | CR13: First-class JobOrder create/update tools, JobOrder aliases, README updates, unit and E2E tests — 290 tests passing, tagged v0.0.21 |
-| Sprint 22 | **COMPLETE** | CR14: Refactor `create_job` to dict-based signature with per-instance env configuration — fixes broken CR13 implementation — 305 tests passing |
+| Sprint 22 | **COMPLETE** | CR14: Refactor `create_job` to dict-based signature with per-instance env configuration — fixes broken CR13 implementation — 306 tests passing, tagged v0.0.22 |
+| Sprint 23 | **COMPLETE** | CR15: Shortlist candidates to a job — `shortlist_candidate` / `shortlist_candidates` MCP tools, `JobSubmission` writes, `sendingUser` auto-stamp, duplicate pre-check, per-instance status config — 337 tests passing, tagged v0.0.23 |
 
 ### Sprint 15 post-tag regression note
 
@@ -64,14 +65,15 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/config.py` — `BullhornConfig` dataclass with env loading
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note()`
-- `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant extended at module load with env-defined JobOrder aliases via `joborder_config.get_joborder_aliases()`
-- `src/bullhorn_mcp/server.py` — MCP server with 18 implemented tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`. Includes `get_client()` and `get_metadata()` helpers.
+- `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant extended at module load with env-defined JobOrder aliases via `joborder_config.get_joborder_aliases()`; `FIELD_ALIASES["JobSubmission"] = {}` reserved slot.
+- `src/bullhorn_mcp/server.py` — MCP server with 20 implemented tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()` helpers.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
 - `src/bullhorn_mcp/bulk.py` — BulkImporter with process(), _process_single_company(), _process_single_contact(), _resolve_or_create_company(), _build_summary()
 - `src/bullhorn_mcp/identity.py` — Entra token claim extraction and per-user Bullhorn CorporateUser identity cache
 - `src/bullhorn_mcp/joborder_config.py` — Per-instance JobOrder env configuration: `get_joborder_aliases()`, `get_joborder_required()`, `get_joborder_defaults()` reading from `BULLHORN_JOBORDER_ALIASES/REQUIRED/DEFAULTS`
+- `src/bullhorn_mcp/shortlist_config.py` — Per-instance JobSubmission env configuration: `get_shortlist_status()` reading from `BULLHORN_SHORTLIST_STATUS` (default `"Shortlisted"`)
 
 ### Existing modules extended
 - `src/bullhorn_mcp/server.py` — Add `bulk_import` MCP tool (Sprint 7)
@@ -82,11 +84,12 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
 - `tests/test_metadata.py` — 28 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, Sprint 21 JobOrder aliases, CR14 env-alias tests, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 136 tests (all 18 implemented tools + server setup + E2E tests Sprints 1–22)
+- `tests/test_server.py` — 167 tests (all 20 implemented tools + server setup + E2E tests Sprints 1–23)
 - `tests/test_bulk.py` — 18 tests (company processing, contact processing, summary, E2E)
 - `tests/test_identity.py` — 13 tests (Entra token to CorporateUser resolution, per-user cache)
 - `tests/test_joborder_config.py` — 10 tests (env config loaders for aliases/required/defaults)
-- **Total: 305 tests, all passing**
+- `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
+- **Total: 337 tests, all passing**
 
 ---
 
@@ -1920,6 +1923,209 @@ Replace the existing `test_e2e_create_job` with:
 - `tests/test_server.py`: `TestCreateJob` replaced (17 new CR14 unit tests); `TestCreateJobReviewFixes` removed; `test_e2e_create_job` replaced with `test_e2e_create_job_minimal` + `test_e2e_create_job_with_defaults`; `test_joborder_no_legacy_validation` added.
 - **305 tests passing, 0 failing.** Net change: −18 old tests + 33 new tests = +15.
 
+### Review cycle findings
+
+- **M1 — `owner_ambiguous` path in `create_job` had no test.** The branch where `client.resolve_owner()` returns a list (caller supplies a name string resolving to multiple CorporateUsers) was untested. Added `test_create_job_owner_ambiguous` covering this path. Pattern to remember: whenever a new tool adopts the owner-resolution path from `create_contact`, check that `owner_ambiguous` is also covered in the new tool's tests.
+
 ### Expected test count after Sprint 22
 
 Previous: 290. Removed 18 (CR13 create_job unit + review-fix + E2E). Added 33 (17 unit + 10 joborder_config + 3 metadata + 2 E2E + 1 removal). **Actual: 305 passing, 0 failing.**
+
+---
+
+## Sprint 23: CR15 — Shortlist Candidates to a Job
+
+**User stories:** US-27, US-28
+**FR:** FR-14
+**Tag target:** v0.0.23
+
+**Goal:** Add `shortlist_candidate` and `shortlist_candidates` MCP tools that create `JobSubmission` records in Bullhorn, auto-stamp `sendingUser` from the authenticated MCP user, perform idempotent duplicate pre-checks, and read the target status from environment configuration.
+
+### Architecture additions
+
+- `src/bullhorn_mcp/shortlist_config.py` (new) — `get_shortlist_status()` reads `BULLHORN_SHORTLIST_STATUS`, defaults to `"Shortlisted"`.
+- `src/bullhorn_mcp/metadata.py` — `FIELD_ALIASES["JobSubmission"] = {}` slot reserved.
+- `src/bullhorn_mcp/server.py` — `_shortlist_one()` internal helper, `shortlist_candidate` MCP tool, `shortlist_candidates` MCP tool, startup status validation.
+- `tests/test_shortlist_config.py` (new) — env loader unit tests.
+
+### Tasks
+
+#### T23.1 — Add `shortlist_config.py`
+**File:** `src/bullhorn_mcp/shortlist_config.py` (new)
+
+```python
+"""Per-instance JobSubmission configuration loaded from environment variables."""
+
+import os
+
+DEFAULT_SHORTLIST_STATUS = "Shortlisted"
+
+
+def get_shortlist_status() -> str:
+    """Return the configured JobSubmission status for shortlisting.
+
+    Reads BULLHORN_SHORTLIST_STATUS; falls back to DEFAULT_SHORTLIST_STATUS.
+    """
+    return os.environ.get("BULLHORN_SHORTLIST_STATUS", DEFAULT_SHORTLIST_STATUS)
+```
+
+**Tests:** `tests/test_shortlist_config.py` — 3 tests (default, custom, env isolation).
+
+#### T23.2 — Reserve `FIELD_ALIASES["JobSubmission"]`
+**File:** `src/bullhorn_mcp/metadata.py`
+
+Add `"JobSubmission": {}` to `FIELD_ALIASES`. No loader wired in this sprint; the slot ensures `resolve_fields("JobSubmission", ...)` is safe and future env-alias support has a home.
+
+#### T23.3 — Implement `_shortlist_one` internal helper
+**File:** `src/bullhorn_mcp/server.py`
+
+```python
+def _shortlist_one(
+    job_id: int,
+    candidate_id: int,
+    resolved_status: str,
+    resolved_fields: dict,
+    resolved_sending_user: dict | None,
+    client,
+) -> dict:
+```
+
+Not decorated with `@mcp.tool()`. Called by both public tools. Returns a plain dict (not JSON string):
+
+1. **Duplicate check**: `client.query("JobSubmission", where=f"candidate.id={candidate_id} AND jobOrder.id={job_id}", fields=["id","status","dateAdded","sendingUser"])`. If non-empty: `{"duplicate": True, "existing": data[0]}`.
+2. **Build payload**: start with `{"candidate": {"id": candidate_id}, "jobOrder": {"id": job_id}, "status": resolved_status}`.
+3. **Merge `resolved_fields`**: update payload (caller wins on conflicts; `status` in `resolved_fields` is intentionally dropped since `status` is the dedicated parameter — handled by not putting it in `resolved_fields` in the callers).
+4. **Auto-stamp `dateWebResponse`**: if not in payload, set `int(time.time() * 1000)`.
+5. **Auto-stamp `sendingUser`**: if `resolved_sending_user` is not None and `"sendingUser"` not in payload, set `payload["sendingUser"] = resolved_sending_user`.
+6. **Create**: `client.create("JobSubmission", payload)`. Return `{"duplicate": False, **result}`.
+
+#### T23.4 — Implement `shortlist_candidate` MCP tool
+**File:** `src/bullhorn_mcp/server.py`
+
+```python
+@mcp.tool()
+def shortlist_candidate(
+    job_id: int,
+    candidate_id: int,
+    status: str | None = None,
+    fields: dict | None = None,
+) -> str:
+```
+
+Flow:
+1. Validate `job_id > 0` and `candidate_id > 0`; return structured error if not.
+2. Resolve status: `status or get_shortlist_status()`.
+3. Run startup validation once (see T23.6).
+4. `client = get_client()`, `metadata = get_metadata()`.
+5. Resolve fields: `metadata.resolve_fields("JobSubmission", fields or {})`.
+6. Attempt `resolve_caller(client)` for `sendingUser`; on `IdentityResolutionError` log WARNING and use `None`.
+7. Call `_shortlist_one(...)`. Return `format_response(result)`.
+
+#### T23.5 — Implement `shortlist_candidates` MCP tool
+**File:** `src/bullhorn_mcp/server.py`
+
+```python
+@mcp.tool()
+def shortlist_candidates(
+    job_id: int,
+    candidate_ids: list[int],
+    status: str | None = None,
+    fields: dict | None = None,
+) -> str:
+```
+
+Flow:
+1. Validate `job_id > 0`; return structured error if not.
+2. Resolve status, client, metadata once.
+3. Resolve fields once.
+4. Resolve `sendingUser` once via `resolve_caller()` (or None on failure).
+5. Loop over `candidate_ids`. For each: call `_shortlist_one`; catch all exceptions; map outcome to `{"candidate_id": ..., "status": "created"|"duplicate"|"error", ...}`.
+6. Return `format_response({"job_id": job_id, "results": results, "summary": {"created": N, "duplicates": N, "errors": N}})`.
+
+Empty `candidate_ids` returns zero-count summary immediately, no loop.
+
+#### T23.6 — Startup status validation
+**File:** `src/bullhorn_mcp/server.py`
+
+Module-level flag `_shortlist_status_validated: bool = False`.
+
+```python
+def _validate_shortlist_status_once(metadata, configured_status: str) -> None:
+    global _shortlist_status_validated
+    if _shortlist_status_validated:
+        return
+    _shortlist_status_validated = True
+    try:
+        fields_meta = metadata.get_fields("JobSubmission")
+        status_field = next((f for f in fields_meta.get("fields", []) if f.get("name") == "status"), None)
+        if status_field:
+            valid = [o.get("value") for o in status_field.get("options", [])]
+            if valid and configured_status not in valid:
+                _logger.warning(
+                    "BULLHORN_SHORTLIST_STATUS=%r is not in the JobSubmission status "
+                    "picklist for this instance. Valid values: %s",
+                    configured_status,
+                    valid,
+                )
+    except Exception:
+        pass
+```
+
+The `reset_client` autouse fixture in `tests/test_server.py` must also reset `_shortlist_status_validated = False`.
+
+#### T23.7 — Update `.env.example` and `README.md`
+
+**`.env.example`** — add at the end:
+
+```
+# === Shortlist (JobSubmission) per-instance configuration ===
+
+# Status string used when shortlisting candidates to a job via
+# shortlist_candidate / shortlist_candidates. Must match a configured
+# JobSubmission status in your Bullhorn instance. Default: "Shortlisted".
+# The server logs a warning at startup if this value isn't in the
+# JobSubmission status picklist for your instance.
+# BULLHORN_SHORTLIST_STATUS=Shortlisted
+```
+
+**`README.md`** — add "Shortlisting candidates to a job" subsection with example calls for `shortlist_candidate` and `shortlist_candidates`, and a note about `BULLHORN_SHORTLIST_STATUS`.
+
+#### T23.8 — Write tests
+
+**`tests/test_shortlist_config.py`** (new):
+- `test_default_status_when_env_unset`
+- `test_custom_status_when_env_set`
+- `test_whitespace_preserved`
+
+**`tests/test_server.py`** — add `TestShortlistCandidate` (14 tests), `TestShortlistCandidates` (7 tests), `TestShortlistStartupValidation` (4 tests), `TestSprint23ShortlistE2E` (2 tests). Full test list per CR15.md testing section.
+
+### Acceptance criteria
+
+1. `shortlist_candidate(job_id, candidate_id)` creates a `JobSubmission` with status defaulting to `BULLHORN_SHORTLIST_STATUS` (default `"Shortlisted"`).
+2. Caller-supplied `status=` parameter overrides the env default.
+3. Optional `fields` dict is merged after `metadata.resolve_fields("JobSubmission", fields)`.
+4. `sendingUser` is auto-stamped from `resolve_caller()` when not in `fields`.
+5. If `fields` contains `sendingUser`, caller wins.
+6. `dateWebResponse` is auto-stamped to current Unix ms when not in `fields`.
+7. Duplicate pre-check runs before `client.create`; existing submission returned with `duplicate: true`, no new record created.
+8. `shortlist_candidates` loops over `_shortlist_one`, resolves identity once, returns per-candidate results and summary.
+9. Startup logs WARNING if configured status is absent from the JobSubmission status picklist.
+10. Stdio mode works — `sendingUser` falls back to API user with a logged warning.
+11. All existing 306 tests pass.
+
+### What was delivered
+
+- `src/bullhorn_mcp/shortlist_config.py` (new): `get_shortlist_status()` — reads `BULLHORN_SHORTLIST_STATUS`, defaults to `"Shortlisted"`.
+- `src/bullhorn_mcp/metadata.py`: `FIELD_ALIASES["JobSubmission"] = {}` slot reserved for future env aliases.
+- `src/bullhorn_mcp/server.py`: `_validate_shortlist_status_once()`, `_shortlist_one()` internal helper, `shortlist_candidate` MCP tool, `shortlist_candidates` MCP tool. `import time` added.
+- `.env.example`: `BULLHORN_SHORTLIST_STATUS` documented under Shortlist section.
+- `README.md`: "Shortlist candidates to a job" section with single/batch examples and per-instance config table.
+- `tests/test_shortlist_config.py` (new): 3 env loader tests.
+- `tests/test_server.py`: `reset_client` fixture extended to reset `_shortlist_status_validated`. Added `TestShortlistCandidate` (14 tests), `TestShortlistCandidates` (7 tests), `TestShortlistStartupValidation` (4 tests), `TestSprint23ShortlistE2E` (2 tests).
+- `PRD.md`: FR-14 added; US-27 and US-28 added.
+- `IMPLEMENTATION-PLAN.md`: Sprint 23 row and section added.
+- **337 tests passing, 0 failing.** Net change: +31 new tests.
+
+### Expected test count after Sprint 23
+
+Previous: 306. Added 31 new tests. **Actual: 337 passing, 0 failing.** Tagged v0.0.23.

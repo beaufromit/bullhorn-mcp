@@ -156,6 +156,17 @@ The MCP shall provide first-class tools for creating and updating JobOrder recor
 - JobOrder aliases shall include `"published description"` and `"public description"` resolving to `publicDescription`, and `"publish on website"` resolving to `customText12`.
 - `update_job` shall not strip or block the `title` field; `title` is valid on JobOrder.
 
+### FR-14: JobSubmission (Shortlist) Create Tools
+
+The MCP shall provide tools for shortlisting candidates to jobs by creating `JobSubmission` records in Bullhorn:
+
+- `shortlist_candidate` shall create a `JobSubmission` linking a candidate to a job at a configured status (default: `"Shortlisted"`, overridable via `BULLHORN_SHORTLIST_STATUS` env var or per-call `status=` parameter).
+- `shortlist_candidate` shall auto-stamp `sendingUser` ("Added By") from the authenticated MCP user via the identity-resolution flow; if identity resolution is unavailable (stdio mode), fall through to the API service account with a logged warning.
+- `shortlist_candidate` shall query for an existing `JobSubmission` on the same `(candidate, job)` pair before creation. If one exists, it shall return the existing record with a `duplicate: true` flag and shall not create a second record.
+- `shortlist_candidates` shall accept a list of candidate IDs for the same job and apply the same logic per candidate, returning a structured response with per-candidate `status: "created" | "duplicate" | "error"` and a summary count.
+- Both tools shall accept an optional `fields` dict for additional `JobSubmission` fields, with labels resolved via the metadata module.
+- The server shall validate `BULLHORN_SHORTLIST_STATUS` against the JobSubmission status picklist on first use and log a warning (not error) if the configured value is absent.
+
 ## 7. Non-Functional Requirements
 
 ### NFR-1: No Destructive Operations
@@ -339,6 +350,16 @@ As a consultant, I want common JobOrder defaults to be applied when omitted, so 
 **US-26: Update a JobOrder**
 As a consultant or AI-assisted workflow, I want to update JobOrder fields through a dedicated tool, so that reviewed job descriptions and website settings can be written back to Bullhorn.
 - **Acceptance**: Calling `update_job(job_id, {"published description": "..."})` resolves the alias to `publicDescription`, updates the JobOrder, and returns the full updated record. Updating `title` on a JobOrder succeeds without ClientContact title stripping.
+
+### JobSubmission Writes
+
+**US-27: Shortlist a single candidate to a job**
+As a recruiter, I want to shortlist a single candidate to a job through the connector, with the submission attributed to me as the Added By, so that my activity is recorded correctly in Bullhorn.
+- **Acceptance**: Calling `shortlist_candidate(job_id=10, candidate_id=20)` creates a `JobSubmission` with `status="Shortlisted"` (or the configured default), `sendingUser` set to the authenticated caller's CorporateUser, and returns `changedEntityId`, `changeType`, and the created record. A second call with the same IDs returns `duplicate: true` with the existing record and does not create a second submission.
+
+**US-28: Shortlist multiple candidates to the same job**
+As a recruiter, I want to shortlist multiple candidates to the same job in one operation, with clear per-candidate success/duplicate/error reporting, so that I can efficiently process a search result set.
+- **Acceptance**: Calling `shortlist_candidates(job_id=10, candidate_ids=[20, 21, 22])` returns a response with a `results` list (one entry per candidate with `status: "created"|"duplicate"|"error"`) and a `summary` dict with counts. Identity resolution runs exactly once for the batch regardless of list size.
 
 ## 10. Input/Output Schemas
 

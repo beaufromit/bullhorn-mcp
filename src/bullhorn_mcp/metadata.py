@@ -29,6 +29,7 @@ FIELD_ALIASES: dict[str, dict[str, str]] = {
         "publish on website": "customText12",
         **get_joborder_aliases(),
     },
+    "JobSubmission": {},  # reserved for future per-instance aliases (BULLHORN_SHORTLIST_ALIASES)
 }
 
 

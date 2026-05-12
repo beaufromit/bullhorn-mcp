@@ -387,6 +387,37 @@ update_job(12345, {
 
 `publicDescription` is Bullhorn's published job description field. In this local Bullhorn configuration, `customText12` controls "Publish on website" and defaults to `0`, meaning not published. Existing generic `update_record` remains available for backward compatibility, but JobOrder callers should use `update_job`.
 
+### Shortlist candidates to a job
+
+Shortlist a single candidate:
+
+```text
+shortlist_candidate(job_id=10, candidate_id=20)
+```
+
+Shortlist multiple candidates in one call:
+
+```text
+shortlist_candidates(job_id=10, candidate_ids=[20, 21, 22])
+```
+
+Both tools:
+- Auto-stamp **Added By** (`sendingUser`) to the authenticated MCP user.
+- Pre-check for an existing `JobSubmission` on the same `(candidate, job)` pair. If one exists, it is returned with `duplicate: true` and no second record is created.
+- Accept an optional `fields` dict for additional `JobSubmission` fields (`source`, `comments`, custom fields, etc.).
+
+#### Shortlist Per-instance Configuration
+
+| Env var | Purpose | Default |
+|---|---|---|
+| `BULLHORN_SHORTLIST_STATUS` | `JobSubmission` status used when shortlisting | `"Shortlisted"` |
+
+The server logs a warning at startup if the configured status is not found in the JobSubmission status picklist for your instance.
+
+```bash
+BULLHORN_SHORTLIST_STATUS=Internal Review
+```
+
 ### Add a note
 
 ```text
