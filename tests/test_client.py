@@ -330,7 +330,7 @@ class TestSearchExtraParams:
 
         url = str(route.calls[0].request.url)
         assert "entityId=42" in url
-        assert "sender.id" in url
+        assert "sender.id%3A1" in url  # field + value present in query param (: encoded as %3A)
         assert "isDeleted" in url  # blanket deleted filter applied
 
 

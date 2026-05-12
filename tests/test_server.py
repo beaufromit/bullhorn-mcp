@@ -4062,3 +4062,30 @@ class TestCR16DeletedRecordFilter:
                 server.query_entities(entity="JobOrder", where="salary > 100000")
 
         assert "isDeleted" in captured["url"]
+
+    def test_find_duplicate_companies_empty_name_sends_isdeleted_filter(self, mock_auth, mock_session):
+        """find_duplicate_companies with empty name sends isDeleted:0 with no name: term.
+
+        After CR16, _company_broad_query("") returns "" and the client wraps the
+        empty query to isDeleted:0. This differs from the pre-CR16 behaviour
+        (name:*) but is documented here so regressions are caught.
+        """
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+
+        real_client = BullhornClient(mock_auth)
+        captured = {}
+
+        with respx.mock:
+            def capture(request):
+                captured["url"] = str(request.url)
+                return httpx.Response(200, json={"data": []})
+
+            respx.get(f"{mock_session.rest_url}/search/ClientCorporation").mock(side_effect=capture)
+
+            with patch.object(server, "get_client", return_value=real_client):
+                server.find_duplicate_companies(name="")
+
+        assert "isDeleted" in captured["url"]
+        assert "name%3A" not in captured["url"]  # no name: Lucene filter for empty input
