@@ -1,8 +1,8 @@
-# Review: CR16 blanket isDeleted filter + M1 fix (two-leg dedup test)
+# Review: fix M1 tighten extra_params assertion; fix M2 add empty-name test for find_duplicate_companies
 
-**Commit:** 58684ff
-**Date:** 2026-05-12
-**Files changed:** 6 (IMPLEMENTATION-PLAN.md, reviews/latest.md, src/bullhorn_mcp/client.py, src/bullhorn_mcp/server.py, tests/test_client.py, tests/test_server.py)
+**Commit:** cd4d014
+**Date:** 2026-05-13
+**Files changed:** 3 (reviews/latest.md, tests/test_client.py, tests/test_server.py)
 
 ## CRITICAL
 
@@ -14,11 +14,11 @@ None.
 
 ## MINOR
 
-- **m1: `test_search_with_extra_params` assertion weakened** — `tests/test_client.py:318`
-  The original assertion `assert "query=sender.id%3A1" in url` verified the exact encoded query string. The replacement `assert "sender.id" in url` is a loose substring check that would pass even if the URL structure changed significantly.
+- **m1: `test_search_with_extra_params` still doesn't anchor assertion to the `query=` parameter** — `tests/test_client.py:TestSearchExtraParams`
+  The fix changed `assert "sender.id" in url` to `assert "sender.id%3A1" in url`, adding the value `1` to the check. However, it still does not confirm that `sender.id%3A1` appeared specifically inside the `query=` parameter (vs any other parameter). In practice there is no other parameter that could contain this substring, so the test is sound. The original `"query=sender.id%3A1"` form is unachievable after CR16's wrapping adds a leading `(`, so this is an acceptable trade-off.
 
-- **m2: CR16.md acceptance criterion #7 divergence** — `src/bullhorn_mcp/server.py:38`
-  CR16.md acceptance criterion #7 states "`_company_name_search_query` is removed from server.py; its acronym/first-word logic is inlined at the two call sites." The implementation renamed the function to `_company_broad_query` and retained it as a shared helper. Functionally equivalent but diverges from the spec's stated approach.
+- **m2: `test_find_duplicate_companies_empty_name_sends_isdeleted_filter` uses `name%3A` as the negative assertion** — `tests/test_server.py:TestCR16DeletedRecordFilter`
+  The assertion `assert "name%3A" not in captured["url"]` checks that no URL-encoded `name:` term appears. If Bullhorn or httpx ever changed encoding (e.g., the colon appeared unencoded in some field value context), this guard could become vacuous. Low real-world risk but the assertion's precision depends on URL-encoding behaviour.
 
 ## Verdict
 

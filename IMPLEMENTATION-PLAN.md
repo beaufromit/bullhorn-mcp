@@ -6,7 +6,7 @@ PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user sto
 
 **Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
 
-**Current validation note:** Sprints 1-24 are implemented and tested, with 366 tests passing, tagged v0.0.24. Sprint 24 completed CR16: added `exclude_deleted=True` default to `BullhornClient.search()` and `BullhornClient.query()` to blanket-filter soft-deleted records from all searches; removed redundant `isDeleted:0` call-site filters in `list_*` tools and `_shortlist_one`; renamed `_company_name_search_query` to `_company_broad_query` (no longer leaks an `isDeleted:0` filter inconsistently); added regression tests confirming `find_duplicate_companies`, `find_duplicate_contacts`, `create_contact` dedup, `search_entities`, and `query_entities` all exclude deleted records. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
+**Current validation note:** Sprints 1-25 are implemented and tested, with 369 tests passing, tagged v0.0.25. Sprint 25 completed CR17: added `JobSubmission` to `DEFAULT_FIELDS` in `client.py` with a safe explicit field list (`id,status,dateAdded,candidate,jobOrder,sendingUser`) to fix `errors.allFieldsNotAllowed` errors that occurred when `shortlist_candidates` fetched `fields=*` after writing a JobSubmission. CR16 and CR17 code changes were bundled in one commit (5b269de) since they were interleaved in the same files. Sprint 24 completed CR16: added `exclude_deleted=True` default to `BullhornClient.search()` and `BullhornClient.query()` to blanket-filter soft-deleted records from all searches; removed redundant `isDeleted:0` call-site filters in `list_*` tools and `_shortlist_one`; renamed `_company_name_search_query` to `_company_broad_query` (no longer leaks an `isDeleted:0` filter inconsistently); added regression tests confirming `find_duplicate_companies`, `find_duplicate_contacts`, `create_contact` dedup, `search_entities`, and `query_entities` all exclude deleted records. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
 
 **Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete for their original scope. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
 
@@ -44,6 +44,7 @@ PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user sto
 | Sprint 22 | **COMPLETE** | CR14: Refactor `create_job` to dict-based signature with per-instance env configuration — fixes broken CR13 implementation — 306 tests passing, tagged v0.0.22 |
 | Sprint 23 | **COMPLETE** | CR15: Shortlist candidates to a job — `shortlist_candidate` / `shortlist_candidates` MCP tools, `JobSubmission` writes, `sendingUser` auto-stamp, duplicate pre-check, per-instance status config — 340 tests passing, tagged v0.0.23 |
 | Sprint 24 | **COMPLETE** | CR16: Blanket soft-delete filter — `exclude_deleted=True` default on `BullhornClient.search()` and `BullhornClient.query()`; clean up redundant `isDeleted:0` call-site filters; regression tests for dedup and pass-through tools — 366 tests passing, tagged v0.0.24 |
+| Sprint 25 | **COMPLETE** | CR17: Fix JobSubmission fields=* error — add JobSubmission to DEFAULT_FIELDS with safe field list; fix shortlist_candidates false-negative — 369 tests passing, tagged v0.0.25 |
 
 ### Sprint 15 post-tag regression note
 
@@ -2177,3 +2178,35 @@ The test mock returned empty data for the ClientCorporation search, causing `fin
 ### Expected test count after Sprint 24
 
 Previous: 340. Added 13 new tests + 1 review-cycle fix (renamed test, added guard). **Actual: 366 passing, 0 failing.** Tagged v0.0.24.
+
+---
+
+## Sprint 25 — CR17: Fix JobSubmission fields=* error
+
+### What was built
+
+Added `JobSubmission` to `DEFAULT_FIELDS` in `src/bullhorn_mcp/client.py` with a safe explicit field list: `id,status,dateAdded,candidate(id,firstName,lastName),jobOrder(id,title),sendingUser(id,firstName,lastName)`. This fixes the `errors.allFieldsNotAllowed` error that occurred when `BullhornClient.create("JobSubmission", …)` called `self.get("JobSubmission", id)` with the default `fields="*"` fallback. The Panel's Bullhorn tenant rejects `fields=*` on JobSubmission, causing the shortlist tools to report false errors even though the records were successfully created.
+
+Also bundled: CR16 code changes (exclude_deleted filter on search/query, _company_broad_query rename, list_* tool cleanup) that were committed in the same batch as CR17 since they were interleaved in the same files.
+
+### Files changed
+
+- `CR17.md`: spec document.
+- `src/bullhorn_mcp/client.py`: added `JobSubmission` to `DEFAULT_FIELDS`.
+- `tests/test_client.py`: `test_default_fields_jobsubmission`; `test_create_jobsubmission_does_not_request_all_fields`.
+
+### Review cycle findings
+
+Two moderate findings were identified and fixed during the Sprint 25 review cycle.
+
+**M1 — `test_search_with_extra_params` assertion too loose.**
+Changed `assert "sender.id" in url` to `assert "sender.id%3A1" in url` to verify both the field path and the value `1` are present in the URL-encoded query.
+
+**M2 — `_company_broad_query("")` behavior change undocumented.**
+After CR16, calling `find_duplicate_companies` with an empty name sends `isDeleted:0` (not `name:*` as before). Added `test_find_duplicate_companies_empty_name_sends_isdeleted_filter` to document and guard this behavior.
+
+**Final state: 369 tests passing, 0 failing. Tagged v0.0.25.**
+
+### Expected test count after Sprint 25
+
+Previous: 366. Added 2 CR17 tests (test_default_fields_jobsubmission, test_create_jobsubmission_does_not_request_all_fields) + 1 review-cycle test (test_find_duplicate_companies_empty_name_sends_isdeleted_filter). **Actual: 369 passing, 0 failing.** Tagged v0.0.25.
