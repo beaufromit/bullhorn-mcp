@@ -3884,3 +3884,181 @@ class TestSprint23ShortlistE2E:
         data = json.loads(result)
         assert data["duplicate"] is True
         assert data["existing"]["id"] == 888
+
+
+class TestCR16DeletedRecordFilter:
+    """Regression tests: all duplicate-detection and pass-through searches must exclude deleted records (CR16)."""
+
+    @pytest.fixture
+    def mock_auth(self, mock_session):
+        from unittest.mock import PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+        return auth
+
+    def test_find_duplicate_companies_excludes_deleted(self, mock_auth, mock_session):
+        """find_duplicate_companies search must include isDeleted:0 in query."""
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+
+        real_client = BullhornClient(mock_auth)
+        captured = {}
+
+        with respx.mock:
+            def capture(request):
+                captured["url"] = str(request.url)
+                return httpx.Response(200, json={"data": []})
+
+            respx.get(f"{mock_session.rest_url}/search/ClientCorporation").mock(side_effect=capture)
+
+            with patch.object(server, "get_client", return_value=real_client):
+                server.find_duplicate_companies(name="Acme Corp")
+
+        assert "isDeleted" in captured["url"]
+
+    def test_find_duplicate_contacts_company_and_contact_search_excludes_deleted(self, mock_auth, mock_session):
+        """Both the company-resolution and contact searches must include isDeleted:0.
+
+        Returns an exact-match company so find_duplicate_contacts proceeds past the
+        company lookup and also issues the ClientContact search — exercising both legs.
+        """
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+
+        real_client = BullhornClient(mock_auth)
+        captured_urls = []
+
+        with respx.mock:
+            def capture_company(request):
+                captured_urls.append(str(request.url))
+                # Return an exact match so the function proceeds to search contacts
+                return httpx.Response(200, json={"data": [{"id": 1, "name": "Acme Corp", "status": "Active", "phone": ""}]})
+
+            def capture_contact(request):
+                captured_urls.append(str(request.url))
+                return httpx.Response(200, json={"data": []})
+
+            respx.get(f"{mock_session.rest_url}/search/ClientCorporation").mock(side_effect=capture_company)
+            respx.get(f"{mock_session.rest_url}/search/ClientContact").mock(side_effect=capture_contact)
+
+            with patch.object(server, "get_client", return_value=real_client):
+                server.find_duplicate_contacts(
+                    first_name="Jane", last_name="Doe", company_name="Acme Corp"
+                )
+
+        assert len(captured_urls) == 2, f"Expected 2 searches (company + contact), got {len(captured_urls)}"
+        assert all("isDeleted" in url for url in captured_urls), (
+            "Not all search calls included isDeleted filter"
+        )
+
+    def test_find_duplicate_contacts_contact_search_excludes_deleted(self, mock_auth, mock_session):
+        """find_duplicate_contacts contact search must include isDeleted:0 when corp_id is supplied."""
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+
+        real_client = BullhornClient(mock_auth)
+        captured = {}
+
+        with respx.mock:
+            def capture(request):
+                captured["url"] = str(request.url)
+                return httpx.Response(200, json={"data": []})
+
+            respx.get(f"{mock_session.rest_url}/search/ClientContact").mock(side_effect=capture)
+
+            with patch.object(server, "get_client", return_value=real_client):
+                server.find_duplicate_contacts(
+                    first_name="Jane", last_name="Doe", client_corporation_id=123
+                )
+
+        assert "isDeleted" in captured["url"]
+
+    def test_create_contact_dedup_excludes_deleted(self, mock_auth, mock_session):
+        """create_contact dedup pre-check search must include isDeleted:0."""
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        real_client = BullhornClient(mock_auth)
+        meta = BullhornMetadata(real_client)
+        captured_urls = []
+
+        with respx.mock:
+            def capture_search(request):
+                captured_urls.append(str(request.url))
+                return httpx.Response(200, json={"data": []})
+
+            respx.get(f"{mock_session.rest_url}/search/ClientContact").mock(side_effect=capture_search)
+            # resolve_owner query
+            respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+                return_value=httpx.Response(200, json={"data": [{"id": 99}]})
+            )
+            respx.get(f"{mock_session.rest_url}/meta/ClientContact").mock(
+                return_value=httpx.Response(200, json={"fields": []})
+            )
+            # No duplicate found → create proceeds; mock the PUT and follow-up GET
+            respx.put(f"{mock_session.rest_url}/entity/ClientContact").mock(
+                return_value=httpx.Response(200, json={"changedEntityId": 500, "changeType": "INSERT"})
+            )
+            respx.get(f"{mock_session.rest_url}/entity/ClientContact/500").mock(
+                return_value=httpx.Response(200, json={"data": {"id": 500}})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta), \
+                 patch.object(server, "resolve_caller", side_effect=Exception("no caller")):
+                server.create_contact({
+                    "firstName": "Jane", "lastName": "Doe",
+                    "clientCorporation": {"id": 123},
+                    "owner": {"id": 99},
+                })
+
+        assert captured_urls, "Expected at least one ClientContact search"
+        assert all("isDeleted" in url for url in captured_urls)
+
+    def test_search_entities_excludes_deleted_by_default(self, mock_auth, mock_session):
+        """search_entities pass-through tool inherits the blanket isDeleted filter."""
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+
+        real_client = BullhornClient(mock_auth)
+        captured = {}
+
+        with respx.mock:
+            def capture(request):
+                captured["url"] = str(request.url)
+                return httpx.Response(200, json={"data": []})
+
+            respx.get(f"{mock_session.rest_url}/search/Placement").mock(side_effect=capture)
+
+            with patch.object(server, "get_client", return_value=real_client):
+                server.search_entities(entity="Placement", query="status:Approved")
+
+        assert "isDeleted" in captured["url"]
+
+    def test_query_entities_excludes_deleted_by_default(self, mock_auth, mock_session):
+        """query_entities pass-through tool inherits the blanket isDeleted filter."""
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+
+        real_client = BullhornClient(mock_auth)
+        captured = {}
+
+        with respx.mock:
+            def capture(request):
+                captured["url"] = str(request.url)
+                return httpx.Response(200, json={"data": []})
+
+            respx.get(f"{mock_session.rest_url}/query/JobOrder").mock(side_effect=capture)
+
+            with patch.object(server, "get_client", return_value=real_client):
+                server.query_entities(entity="JobOrder", where="salary > 100000")
+
+        assert "isDeleted" in captured["url"]
