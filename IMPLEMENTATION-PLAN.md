@@ -6,7 +6,7 @@ PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user sto
 
 **Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
 
-**Current validation note:** Sprints 1-23 are implemented and tested, with 340 tests passing, tagged v0.0.23. Sprint 23 completed CR15: added `shortlist_candidate` and `shortlist_candidates` MCP tools backed by `JobSubmission` writes, `shortlist_config.py` for per-instance status config (`BULLHORN_SHORTLIST_STATUS`), `sendingUser` auto-stamp via `resolve_caller()`, idempotent duplicate pre-check, startup picklist validation, and optional `fields` dict. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
+**Current validation note:** Sprints 1-24 are implemented and tested, with 366 tests passing, tagged v0.0.24. Sprint 24 completed CR16: added `exclude_deleted=True` default to `BullhornClient.search()` and `BullhornClient.query()` to blanket-filter soft-deleted records from all searches; removed redundant `isDeleted:0` call-site filters in `list_*` tools and `_shortlist_one`; renamed `_company_name_search_query` to `_company_broad_query` (no longer leaks an `isDeleted:0` filter inconsistently); added regression tests confirming `find_duplicate_companies`, `find_duplicate_contacts`, `create_contact` dedup, `search_entities`, and `query_entities` all exclude deleted records. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
 
 **Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete for their original scope. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
 
@@ -43,6 +43,7 @@ PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user sto
 | Sprint 21 | **COMPLETE** | CR13: First-class JobOrder create/update tools, JobOrder aliases, README updates, unit and E2E tests — 290 tests passing, tagged v0.0.21 |
 | Sprint 22 | **COMPLETE** | CR14: Refactor `create_job` to dict-based signature with per-instance env configuration — fixes broken CR13 implementation — 306 tests passing, tagged v0.0.22 |
 | Sprint 23 | **COMPLETE** | CR15: Shortlist candidates to a job — `shortlist_candidate` / `shortlist_candidates` MCP tools, `JobSubmission` writes, `sendingUser` auto-stamp, duplicate pre-check, per-instance status config — 340 tests passing, tagged v0.0.23 |
+| Sprint 24 | **COMPLETE** | CR16: Blanket soft-delete filter — `exclude_deleted=True` default on `BullhornClient.search()` and `BullhornClient.query()`; clean up redundant `isDeleted:0` call-site filters; regression tests for dedup and pass-through tools — 366 tests passing, tagged v0.0.24 |
 
 ### Sprint 15 post-tag regression note
 
@@ -2144,3 +2145,35 @@ The batch tool's behaviour when `resolve_caller()` raises `IdentityResolutionErr
 ### Expected test count after Sprint 23
 
 Previous: 306. Added 31 new tests + 3 review-cycle tests. **Actual: 340 passing, 0 failing.** Tagged v0.0.23.
+
+---
+
+## Sprint 24 — CR16: Blanket soft-delete filter
+
+### What was built
+
+Added `exclude_deleted: bool = True` default parameter to `BullhornClient.search()` and `BullhornClient.query()`. When true, the client automatically appends `AND isDeleted:0` (Lucene) or `AND isDeleted=false` (SQL) to every query, wrapping the caller expression in parentheses to preserve boolean precedence. This fixes false-positive duplicate detection (soft-deleted records appearing as potential duplicates) and protects all current and future callers without requiring per-call-site filter discipline.
+
+Cleaned up now-redundant explicit `isDeleted:0` fallbacks in `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`. Removed the `AND isDeleted=false` clause from `_shortlist_one`'s duplicate pre-check. Renamed `_company_name_search_query` → `_company_broad_query` (the function no longer carries the isDeleted responsibility). Added 13 new tests; updated 1 existing test whose URL assertion changed shape due to the new wrapping.
+
+### Files changed
+
+- `CR16.md`: spec document.
+- `src/bullhorn_mcp/client.py`: `exclude_deleted` parameter on `search()` and `query()`.
+- `src/bullhorn_mcp/server.py`: cleanup of call-site filters, helper rename, docstring updates.
+- `tests/test_client.py`: `TestExcludeDeletedFilter` class (7 tests); updated `test_search_with_extra_params`.
+- `tests/test_server.py`: `TestCR16DeletedRecordFilter` class (6 tests).
+- `IMPLEMENTATION-PLAN.md`: Sprint 24 row and section added.
+
+### Review cycle findings
+
+One moderate finding was identified and fixed during the Sprint 24 review cycle.
+
+**M1 — `test_find_duplicate_contacts_company_search_excludes_deleted` only exercised the company-search leg.**
+The test mock returned empty data for the ClientCorporation search, causing `find_duplicate_contacts` to exit early with `company_not_found` before ever issuing the ClientContact search. The contact-search isDeleted filter was untested. Fixed by returning an exact-match company from the mock so the function proceeds to the ClientContact search, and adding `assert len(captured_urls) == 2` to confirm both searches run.
+
+**Final state: 366 tests passing, 0 failing. Tagged v0.0.24.**
+
+### Expected test count after Sprint 24
+
+Previous: 340. Added 13 new tests + 1 review-cycle fix (renamed test, added guard). **Actual: 366 passing, 0 failing.** Tagged v0.0.24.

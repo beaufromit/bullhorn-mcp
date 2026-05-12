@@ -1,8 +1,8 @@
-# Review: Sprint 23 / CR15 — shortlist_candidate and shortlist_candidates tools (post-fix)
+# Review: CR16 blanket isDeleted filter + M1 fix (two-leg dedup test)
 
-**Commit:** 0850269
+**Commit:** 58684ff
 **Date:** 2026-05-12
-**Files changed:** 11
+**Files changed:** 6 (IMPLEMENTATION-PLAN.md, reviews/latest.md, src/bullhorn_mcp/client.py, src/bullhorn_mcp/server.py, tests/test_client.py, tests/test_server.py)
 
 ## CRITICAL
 
@@ -14,11 +14,11 @@ None.
 
 ## MINOR
 
-- **m1: `status or get_shortlist_status()` silently swallows empty-string status** — `server.py:1190`, `server.py:1253`
-  A caller that explicitly passes `status=""` gets the env-var default instead with no warning or error. Unlikely in practice but inconsistent with the integer validation style.
+- **m1: `test_search_with_extra_params` assertion weakened** — `tests/test_client.py:318`
+  The original assertion `assert "query=sender.id%3A1" in url` verified the exact encoded query string. The replacement `assert "sender.id" in url` is a loose substring check that would pass even if the URL structure changed significantly.
 
-- **m2: CR15.md documents the duplicate-check `fields` argument as a Python list; implementation uses a comma string** — `CR15.md` vs `server.py:1119`
-  The spec shows `fields=["id", "status", ...]` but `_shortlist_one` calls `client.query(..., fields="id,status,dateAdded,sendingUser")`. Implementation is correct; the spec example is misleading.
+- **m2: CR16.md acceptance criterion #7 divergence** — `src/bullhorn_mcp/server.py:38`
+  CR16.md acceptance criterion #7 states "`_company_name_search_query` is removed from server.py; its acronym/first-word logic is inlined at the two call sites." The implementation renamed the function to `_company_broad_query` and retained it as a shared helper. Functionally equivalent but diverges from the spec's stated approach.
 
 ## Verdict
 
