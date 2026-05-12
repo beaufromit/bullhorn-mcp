@@ -22,12 +22,14 @@ def mock_client(sample_job, sample_candidate):
 
 @pytest.fixture(autouse=True)
 def reset_client():
-    """Reset the global client and metadata cache before each test."""
+    """Reset the global client, metadata cache, and one-shot flags before each test."""
     server._client = None
     server._metadata = None
+    server._shortlist_status_validated = False
     yield
     server._client = None
     server._metadata = None
+    server._shortlist_status_validated = False
 
 
 class TestListJobs:
@@ -3293,3 +3295,592 @@ class TestSprint17E2E:
         assert data["changedEntityId"] == 8001
         assert "body" in captured, "PUT was not called"
         assert captured["body"]["owner"] == {"id": 7}
+
+
+class TestShortlistCandidate:
+    """Tests for shortlist_candidate tool (CR15)."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = []
+        return meta
+
+    def _no_duplicate(self, mock_client):
+        mock_client.query.return_value = []
+
+    def _with_duplicate(self, mock_client, existing_id=9999):
+        mock_client.query.return_value = [{"id": existing_id, "status": "Shortlisted"}]
+
+    def test_minimal_success(self, mock_client, mock_metadata):
+        """shortlist_candidate creates a JobSubmission with auto-stamped sendingUser and dateWebResponse."""
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {
+            "changedEntityId": 501,
+            "changeType": "INSERT",
+            "data": {"id": 501},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            result = server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 501
+        assert data["duplicate"] is False
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert call_payload["candidate"] == {"id": 20}
+        assert call_payload["jobOrder"] == {"id": 10}
+        assert call_payload["status"] == "Shortlisted"
+        assert call_payload["sendingUser"] == {"id": 42}
+        assert "dateWebResponse" in call_payload
+        assert isinstance(call_payload["dateWebResponse"], int)
+
+    def test_status_override(self, mock_client, mock_metadata, monkeypatch):
+        """Caller-supplied status overrides the configured default."""
+        monkeypatch.setenv("BULLHORN_SHORTLIST_STATUS", "Internal Review")
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20, status="Long-listed")
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert call_payload["status"] == "Long-listed"
+
+    def test_status_env_default(self, mock_client, mock_metadata, monkeypatch):
+        """Configured BULLHORN_SHORTLIST_STATUS is used when no status passed."""
+        monkeypatch.setenv("BULLHORN_SHORTLIST_STATUS", "Pre-screen")
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert call_payload["status"] == "Pre-screen"
+
+    def test_fields_dict_merged(self, mock_client, mock_metadata):
+        """Extra fields are merged into the payload."""
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20, fields={"source": "Web", "comments": "Strong match"})
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert call_payload["source"] == "Web"
+        assert call_payload["comments"] == "Strong match"
+
+    def test_fields_status_does_not_override_status_param(self, mock_client, mock_metadata):
+        """status key in fields dict must not override the dedicated status parameter."""
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(
+                job_id=10, candidate_id=20, status="Shortlisted",
+                fields={"status": "Rejected", "source": "Web"},
+            )
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert call_payload["status"] == "Shortlisted"
+        assert call_payload["source"] == "Web"
+
+    def test_fields_alias_resolution(self, mock_client, mock_metadata):
+        """resolve_fields is called before building the payload."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.get_fields.return_value = []
+        # Simulate alias resolution: "Source" → "source"
+        meta.resolve_fields.side_effect = lambda entity, fields: {
+            k.lower(): v for k, v in fields.items()
+        }
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20, fields={"Source": "Web"})
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert "source" in call_payload
+
+    def test_sending_user_autostamp(self, mock_client, mock_metadata):
+        """sendingUser is auto-stamped from resolve_caller when not in fields."""
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 77}):
+            server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert call_payload["sendingUser"] == {"id": 77}
+
+    def test_sending_user_override(self, mock_client, mock_metadata):
+        """Caller-supplied sendingUser wins over auto-stamp."""
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 77}):
+            server.shortlist_candidate(job_id=10, candidate_id=20, fields={"sendingUser": {"id": 99}})
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert call_payload["sendingUser"] == {"id": 99}
+
+    def test_sending_user_identity_failure(self, mock_client, mock_metadata):
+        """On IdentityResolutionError, sendingUser is omitted and create still proceeds."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            result = server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        mock_client.create.assert_called_once()
+        call_payload = mock_client.create.call_args[0][1]
+        assert "sendingUser" not in call_payload
+        data = json.loads(result)
+        assert data["changedEntityId"] == 1
+
+    def test_date_web_response_autostamp(self, mock_client, mock_metadata):
+        """dateWebResponse is auto-stamped to a current Unix ms timestamp."""
+        import time
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        before = int(time.time() * 1000)
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20)
+        after = int(time.time() * 1000)
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert before <= call_payload["dateWebResponse"] <= after
+
+    def test_date_web_response_override(self, mock_client, mock_metadata):
+        """Caller-supplied dateWebResponse wins over auto-stamp."""
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20, fields={"dateWebResponse": 1234567890})
+
+        call_payload = mock_client.create.call_args[0][1]
+        assert call_payload["dateWebResponse"] == 1234567890
+
+    def test_duplicate_existing_returned(self, mock_client, mock_metadata):
+        """If a JobSubmission exists, it is returned with duplicate=true and no create called."""
+        self._with_duplicate(mock_client, existing_id=888)
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        mock_client.create.assert_not_called()
+        data = json.loads(result)
+        assert data["duplicate"] is True
+        assert data["existing"]["id"] == 888
+
+    def test_duplicate_none_creates(self, mock_client, mock_metadata):
+        """When no existing submission is found, create is called."""
+        self._no_duplicate(mock_client)
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        mock_client.create.assert_called_once()
+
+    def test_invalid_job_id(self, mock_client, mock_metadata):
+        """Non-positive job_id returns structured error without API calls."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.shortlist_candidate(job_id=0, candidate_id=20)
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_argument"
+        mock_client.create.assert_not_called()
+        mock_client.query.assert_not_called()
+
+    def test_invalid_candidate_id(self, mock_client, mock_metadata):
+        """Non-positive candidate_id returns structured error without API calls."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.shortlist_candidate(job_id=10, candidate_id=-5)
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_argument"
+        mock_client.create.assert_not_called()
+
+    def test_api_error_propagates(self, mock_client, mock_metadata):
+        """BullhornAPIError during create returns ERROR: string."""
+        self._no_duplicate(mock_client)
+        mock_client.create.side_effect = BullhornAPIError("invalid status")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        assert result.startswith("ERROR:")
+        assert "invalid status" in result
+
+
+class TestShortlistCandidates:
+    """Tests for shortlist_candidates batch tool (CR15)."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = []
+        return meta
+
+    def test_batch_all_created(self, mock_client, mock_metadata):
+        """Three new candidates — all created, summary counts correct."""
+        mock_client.query.return_value = []
+        mock_client.create.side_effect = [
+            {"changedEntityId": 101, "changeType": "INSERT", "data": {}},
+            {"changedEntityId": 102, "changeType": "INSERT", "data": {}},
+            {"changedEntityId": 103, "changeType": "INSERT", "data": {}},
+        ]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.shortlist_candidates(job_id=10, candidate_ids=[20, 21, 22])
+
+        data = json.loads(result)
+        assert data["job_id"] == 10
+        assert data["summary"] == {"created": 3, "duplicates": 0, "errors": 0}
+        assert all(r["status"] == "created" for r in data["results"])
+
+    def test_batch_mixed_results(self, mock_client, mock_metadata):
+        """First created, second duplicate, third API error."""
+        from bullhorn_mcp.client import BullhornAPIError as _BullhornAPIError
+
+        def query_side_effect(*args, **kwargs):
+            where = kwargs.get("where", "")
+            if "candidate.id=21" in where:
+                return [{"id": 999}]
+            return []
+
+        mock_client.query.side_effect = query_side_effect
+        mock_client.create.side_effect = [
+            {"changedEntityId": 101, "changeType": "INSERT", "data": {}},
+            _BullhornAPIError("not found"),
+        ]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.shortlist_candidates(job_id=10, candidate_ids=[20, 21, 22])
+
+        data = json.loads(result)
+        assert data["summary"]["created"] == 1
+        assert data["summary"]["duplicates"] == 1
+        assert data["summary"]["errors"] == 1
+        statuses = [r["status"] for r in data["results"]]
+        assert statuses == ["created", "duplicate", "error"]
+
+    def test_batch_empty_list(self, mock_client, mock_metadata):
+        """Empty candidate_ids returns zero summary without any API calls."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.shortlist_candidates(job_id=10, candidate_ids=[])
+
+        data = json.loads(result)
+        assert data["results"] == []
+        assert data["summary"] == {"created": 0, "duplicates": 0, "errors": 0}
+        mock_client.create.assert_not_called()
+        mock_client.query.assert_not_called()
+
+    def test_batch_single_element(self, mock_client, mock_metadata):
+        """Single-element list behaves identically to shortlist_candidate."""
+        mock_client.query.return_value = []
+        mock_client.create.return_value = {"changedEntityId": 55, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.shortlist_candidates(job_id=10, candidate_ids=[20])
+
+        data = json.loads(result)
+        assert data["summary"]["created"] == 1
+        assert data["results"][0]["submission_id"] == 55
+
+    def test_batch_identity_resolved_once(self, mock_client, mock_metadata):
+        """resolve_caller is called exactly once regardless of how many candidates."""
+        mock_client.query.return_value = []
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        resolve_mock = Mock(return_value={"id": 1})
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", resolve_mock):
+            server.shortlist_candidates(job_id=10, candidate_ids=[20, 21, 22, 23, 24])
+
+        resolve_mock.assert_called_once()
+
+    def test_batch_status_override(self, mock_client, mock_metadata):
+        """Caller-supplied status is used for every candidate in the batch."""
+        mock_client.query.return_value = []
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidates(job_id=10, candidate_ids=[20, 21], status="Long-listed")
+
+        for call in mock_client.create.call_args_list:
+            assert call[0][1]["status"] == "Long-listed"
+
+    def test_batch_invalid_job_id(self, mock_client, mock_metadata):
+        """Non-positive job_id returns structured error without iteration."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.shortlist_candidates(job_id=0, candidate_ids=[20, 21])
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_argument"
+        mock_client.query.assert_not_called()
+        mock_client.create.assert_not_called()
+
+    def test_batch_invalid_candidate_id(self, mock_client, mock_metadata):
+        """Non-positive candidate_id in list is recorded as error without API call."""
+        mock_client.query.return_value = []
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.shortlist_candidates(job_id=10, candidate_ids=[20, 0, 21])
+
+        data = json.loads(result)
+        assert data["summary"] == {"created": 2, "duplicates": 0, "errors": 1}
+        statuses = [r["status"] for r in data["results"]]
+        assert statuses == ["created", "error", "created"]
+        assert data["results"][1]["error"] == "candidate_id must be a positive integer."
+        mock_client.create.assert_called()
+        assert mock_client.create.call_count == 2
+
+    def test_batch_sending_user_identity_failure(self, mock_client, mock_metadata):
+        """IdentityResolutionError falls through to sendingUser=None; batch still completes."""
+        from bullhorn_mcp.identity import IdentityResolutionError as _IRE
+        mock_client.query.return_value = []
+        mock_client.create.return_value = {"changedEntityId": 55, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", side_effect=_IRE("unavailable")):
+            result = server.shortlist_candidates(job_id=10, candidate_ids=[20, 21])
+
+        data = json.loads(result)
+        assert data["summary"] == {"created": 2, "duplicates": 0, "errors": 0}
+        for call in mock_client.create.call_args_list:
+            assert "sendingUser" not in call[0][1]
+
+
+class TestShortlistStartupValidation:
+    """Tests for one-shot startup status picklist validation (CR15)."""
+
+    @pytest.fixture
+    def mock_metadata_with_picklist(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = [
+            {
+                "name": "status",
+                "options": [
+                    {"value": "New Lead"},
+                    {"value": "Shortlisted"},
+                    {"value": "Submitted"},
+                ],
+            }
+        ]
+        return meta
+
+    def test_warning_when_status_missing(self, mock_client, mock_metadata_with_picklist, caplog, monkeypatch):
+        """WARNING is emitted when configured status is not in the picklist."""
+        import logging
+        monkeypatch.setenv("BULLHORN_SHORTLIST_STATUS", "Not A Real Status")
+        mock_client.query.return_value = []
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with caplog.at_level(logging.WARNING, logger="bullhorn_mcp.server"), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata_with_picklist), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        assert any("Not A Real Status" in r.message for r in caplog.records)
+
+    def test_no_warning_when_status_present(self, mock_client, mock_metadata_with_picklist, caplog, monkeypatch):
+        """No WARNING emitted when configured status is valid."""
+        import logging
+        monkeypatch.setenv("BULLHORN_SHORTLIST_STATUS", "Shortlisted")
+        mock_client.query.return_value = []
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with caplog.at_level(logging.WARNING, logger="bullhorn_mcp.server"), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata_with_picklist), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        status_warnings = [r for r in caplog.records if "BULLHORN_SHORTLIST_STATUS" in r.message]
+        assert len(status_warnings) == 0
+
+    def test_validation_failure_does_not_raise(self, mock_client, caplog):
+        """If get_fields raises, shortlist_candidate still succeeds."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.side_effect = Exception("metadata unavailable")
+        mock_client.query.return_value = []
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 1
+
+    def test_validation_runs_once(self, mock_client, mock_metadata_with_picklist, monkeypatch):
+        """get_fields for JobSubmission is called at most once across multiple shortlist calls."""
+        monkeypatch.setenv("BULLHORN_SHORTLIST_STATUS", "Shortlisted")
+        mock_client.query.return_value = []
+        mock_client.create.return_value = {"changedEntityId": 1, "changeType": "INSERT", "data": {}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata_with_picklist), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.shortlist_candidate(job_id=10, candidate_id=20)
+            server.shortlist_candidate(job_id=10, candidate_id=21)
+
+        assert mock_metadata_with_picklist.get_fields.call_count == 1
+
+
+class TestSprint23ShortlistE2E:
+    """End-to-end HTTP-mocked tests for shortlist tools (CR15)."""
+
+    @pytest.fixture
+    def mock_auth(self, mock_session):
+        from unittest.mock import PropertyMock
+        from bullhorn_mcp.auth import BullhornAuth
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(return_value=mock_session)
+        return auth
+
+    def test_e2e_shortlist_single_success(self, mock_auth, mock_session):
+        """Full HTTP round trip: duplicate query empty, PUT creates JobSubmission."""
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        real_client = BullhornClient(mock_auth)
+        new_submission = {"id": 701, "status": "Shortlisted"}
+        captured = {}
+
+        def capture_put(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"changedEntityType": "JobSubmission", "changedEntityId": 701, "changeType": "INSERT"})
+
+        meta = BullhornMetadata(real_client)
+
+        with respx.mock:
+            # Duplicate check query
+            respx.get(f"{mock_session.rest_url}/query/JobSubmission").mock(
+                return_value=httpx.Response(200, json={"data": [], "total": 0})
+            )
+            # JobSubmission PUT
+            respx.put(f"{mock_session.rest_url}/entity/JobSubmission").mock(
+                side_effect=capture_put
+            )
+            # JobSubmission GET (post-create fetch)
+            respx.get(f"{mock_session.rest_url}/entity/JobSubmission/701").mock(
+                return_value=httpx.Response(200, json={"data": new_submission})
+            )
+            # JobSubmission metadata (for startup validation)
+            respx.get(f"{mock_session.rest_url}/meta/JobSubmission").mock(
+                return_value=httpx.Response(200, json={"fields": []})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta), \
+                 patch.object(server, "resolve_caller", return_value={"id": 5}):
+                result = server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 701
+        assert data["duplicate"] is False
+        assert "body" in captured
+        assert captured["body"]["candidate"] == {"id": 20}
+        assert captured["body"]["jobOrder"] == {"id": 10}
+        assert captured["body"]["sendingUser"] == {"id": 5}
+        assert "dateWebResponse" in captured["body"]
+
+    def test_e2e_shortlist_duplicate_path(self, mock_auth, mock_session):
+        """If JobSubmission already exists, PUT is never issued."""
+        import httpx
+        import respx
+        from bullhorn_mcp.client import BullhornClient
+        from bullhorn_mcp.metadata import BullhornMetadata
+
+        real_client = BullhornClient(mock_auth)
+        existing = [{"id": 888, "status": "Shortlisted"}]
+        meta = BullhornMetadata(real_client)
+
+        with respx.mock:
+            respx.get(f"{mock_session.rest_url}/query/JobSubmission").mock(
+                return_value=httpx.Response(200, json={"data": existing, "total": 1})
+            )
+            respx.get(f"{mock_session.rest_url}/meta/JobSubmission").mock(
+                return_value=httpx.Response(200, json={"fields": []})
+            )
+
+            with patch.object(server, "get_client", return_value=real_client), \
+                 patch.object(server, "get_metadata", return_value=meta), \
+                 patch.object(server, "resolve_caller", return_value={"id": 5}):
+                result = server.shortlist_candidate(job_id=10, candidate_id=20)
+
+        data = json.loads(result)
+        assert data["duplicate"] is True
+        assert data["existing"]["id"] == 888

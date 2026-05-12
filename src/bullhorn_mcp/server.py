@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import time
 from typing import Any
 from fastmcp import FastMCP
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
@@ -12,6 +13,7 @@ from .auth import BullhornAuth, AuthenticationError
 from .client import BullhornClient, BullhornAPIError, DEFAULT_FIELDS
 from .metadata import BullhornMetadata
 from .joborder_config import get_joborder_defaults, get_joborder_required
+from .shortlist_config import get_shortlist_status
 from .fuzzy import score_company_match, categorize_score, score_contact_match
 from .bulk import BulkImporter
 from .identity import resolve_caller, IdentityResolutionError
@@ -117,6 +119,7 @@ mcp = FastMCP(
 # Global instances (initialized on first use)
 _client: BullhornClient | None = None
 _metadata: BullhornMetadata | None = None
+_shortlist_status_validated: bool = False
 
 
 def get_client() -> BullhornClient:
@@ -1178,6 +1181,244 @@ def bulk_import(companies: list, contacts: list) -> str:
         importer = BulkImporter(get_client(), get_metadata())
         result = importer.process(companies, contacts)
         return format_response(result)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+def _validate_shortlist_status_once(metadata: BullhornMetadata, configured_status: str) -> None:
+    """Warn once per process if the configured shortlist status is not in the picklist."""
+    global _shortlist_status_validated
+    if _shortlist_status_validated:
+        return
+    _shortlist_status_validated = True
+    try:
+        fields_meta = metadata.get_fields("JobSubmission")
+        status_field = next(
+            (f for f in fields_meta if f.get("name") == "status"), None
+        )
+        if status_field:
+            valid = [o.get("value") for o in status_field.get("options", [])]
+            if valid and configured_status not in valid:
+                _logger.warning(
+                    "BULLHORN_SHORTLIST_STATUS=%r is not in the JobSubmission status "
+                    "picklist for this instance. Valid values: %s",
+                    configured_status,
+                    valid,
+                )
+    except Exception:
+        pass
+
+
+def _shortlist_one(
+    job_id: int,
+    candidate_id: int,
+    resolved_status: str,
+    resolved_fields: dict,
+    resolved_sending_user: dict | None,
+    client: BullhornClient,
+) -> dict:
+    """Create one JobSubmission, checking for an existing record first.
+
+    Returns a plain dict (not JSON string). Callers wrap with format_response.
+    """
+    existing = client.query(
+        "JobSubmission",
+        where=f"candidate.id={candidate_id} AND jobOrder.id={job_id} AND isDeleted=false",
+        fields="id,status,dateAdded,sendingUser",
+    )
+    if existing:
+        return {"duplicate": True, "existing": existing[0]}
+
+    payload: dict[str, Any] = {
+        "candidate": {"id": candidate_id},
+        "jobOrder": {"id": job_id},
+        "status": resolved_status,
+    }
+    payload.update({k: v for k, v in resolved_fields.items() if k != "status"})
+
+    if "dateWebResponse" not in payload:
+        payload["dateWebResponse"] = int(time.time() * 1000)
+
+    if resolved_sending_user is not None and "sendingUser" not in payload:
+        payload["sendingUser"] = resolved_sending_user
+
+    result = client.create("JobSubmission", payload)
+    return {"duplicate": False, **result}
+
+
+@mcp.tool()
+def shortlist_candidate(
+    job_id: int,
+    candidate_id: int,
+    status: str | None = None,
+    fields: dict | None = None,
+) -> str:
+    """Shortlist a candidate to a job by creating a JobSubmission record in Bullhorn.
+
+    Performs a duplicate pre-check: if a JobSubmission already exists for this
+    (candidate, job) pair, returns the existing record with duplicate=true and
+    does not create a second submission.
+
+    The 'Added By' (sendingUser) is auto-stamped to the authenticated MCP user.
+    In stdio mode where identity resolution is unavailable, it falls back to the
+    API service account.
+
+    Args:
+        job_id: Bullhorn JobOrder ID.
+        candidate_id: Bullhorn Candidate ID.
+        status: JobSubmission status string. Defaults to BULLHORN_SHORTLIST_STATUS
+                env var (default "Shortlisted"). Must match a configured status
+                in your Bullhorn instance.
+        fields: Optional dict of additional JobSubmission field names or labels.
+                Accepts API names and metadata labels. Caller values win on conflict
+                with auto-stamped fields (sendingUser, dateWebResponse).
+
+    Returns:
+        JSON object with changedEntityId, changeType, data, and duplicate flag.
+        If duplicate=true, the existing record is returned under "existing" and
+        no new record is created.
+
+    Examples:
+        - shortlist_candidate(job_id=10, candidate_id=20)
+        - shortlist_candidate(job_id=10, candidate_id=20, status="Internal Review")
+        - shortlist_candidate(job_id=10, candidate_id=20, fields={"source": "Web"})
+    """
+    if not isinstance(job_id, int) or job_id <= 0:
+        return format_response({
+            "error": "invalid_argument",
+            "message": "job_id must be a positive integer.",
+        })
+    if not isinstance(candidate_id, int) or candidate_id <= 0:
+        return format_response({
+            "error": "invalid_argument",
+            "message": "candidate_id must be a positive integer.",
+        })
+
+    try:
+        resolved_status = status or get_shortlist_status()
+        client = get_client()
+        metadata = get_metadata()
+
+        _validate_shortlist_status_once(metadata, resolved_status)
+
+        resolved_fields = metadata.resolve_fields("JobSubmission", fields or {})
+
+        sending_user: dict | None = None
+        try:
+            caller = resolve_caller(client)
+            sending_user = {"id": caller["id"]}
+        except IdentityResolutionError:
+            _logger.warning(
+                "Identity resolution unavailable; sendingUser will default to API service account."
+            )
+
+        result = _shortlist_one(
+            job_id, candidate_id, resolved_status, resolved_fields, sending_user, client
+        )
+        return format_response(result)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def shortlist_candidates(
+    job_id: int,
+    candidate_ids: list[int],
+    status: str | None = None,
+    fields: dict | None = None,
+) -> str:
+    """Shortlist multiple candidates to the same job in one operation.
+
+    Calls the same logic as shortlist_candidate for each candidate_id. Identity
+    resolution runs once for the batch, not per candidate.
+
+    Returns a structured response with per-candidate status ("created",
+    "duplicate", or "error") and a summary count.
+
+    Args:
+        job_id: Bullhorn JobOrder ID.
+        candidate_ids: List of Bullhorn Candidate IDs to shortlist.
+        status: JobSubmission status string. Defaults to BULLHORN_SHORTLIST_STATUS
+                env var (default "Shortlisted").
+        fields: Optional dict of additional JobSubmission fields applied to
+                every candidate in the batch.
+
+    Returns:
+        JSON object with job_id, results list, and summary counts.
+
+    Examples:
+        - shortlist_candidates(job_id=10, candidate_ids=[20, 21, 22])
+        - shortlist_candidates(job_id=10, candidate_ids=[20, 21], status="Internal Review")
+    """
+    if not isinstance(job_id, int) or job_id <= 0:
+        return format_response({
+            "error": "invalid_argument",
+            "message": "job_id must be a positive integer.",
+        })
+
+    try:
+        resolved_status = status or get_shortlist_status()
+        client = get_client()
+        metadata = get_metadata()
+
+        _validate_shortlist_status_once(metadata, resolved_status)
+
+        resolved_fields = metadata.resolve_fields("JobSubmission", fields or {})
+
+        sending_user: dict | None = None
+        try:
+            caller = resolve_caller(client)
+            sending_user = {"id": caller["id"]}
+        except IdentityResolutionError:
+            _logger.warning(
+                "Identity resolution unavailable; sendingUser will default to API service account."
+            )
+
+        results = []
+        created = duplicates = errors = 0
+
+        for cid in candidate_ids:
+            try:
+                if not isinstance(cid, int) or cid <= 0:
+                    errors += 1
+                    results.append({
+                        "candidate_id": cid,
+                        "status": "error",
+                        "error": "candidate_id must be a positive integer.",
+                    })
+                    continue
+                outcome = _shortlist_one(
+                    job_id, cid, resolved_status, resolved_fields, sending_user, client
+                )
+                if outcome.get("duplicate"):
+                    duplicates += 1
+                    results.append({
+                        "candidate_id": cid,
+                        "status": "duplicate",
+                        "submission_id": outcome["existing"]["id"],
+                    })
+                else:
+                    created += 1
+                    results.append({
+                        "candidate_id": cid,
+                        "status": "created",
+                        "submission_id": outcome["changedEntityId"],
+                    })
+            except (AuthenticationError, BullhornAPIError) as e:
+                errors += 1
+                results.append({
+                    "candidate_id": cid,
+                    "status": "error",
+                    "error": str(e),
+                })
+
+        return format_response({
+            "job_id": job_id,
+            "results": results,
+            "summary": {"created": created, "duplicates": duplicates, "errors": errors},
+        })
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
