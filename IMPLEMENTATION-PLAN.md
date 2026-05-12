@@ -6,7 +6,7 @@ PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user sto
 
 **Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
 
-**Current validation note:** Sprints 1-23 are implemented and tested, with 337 tests passing, tagged v0.0.23. Sprint 23 completed CR15: added `shortlist_candidate` and `shortlist_candidates` MCP tools backed by `JobSubmission` writes, `shortlist_config.py` for per-instance status config (`BULLHORN_SHORTLIST_STATUS`), `sendingUser` auto-stamp via `resolve_caller()`, idempotent duplicate pre-check, startup picklist validation, and optional `fields` dict. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
+**Current validation note:** Sprints 1-23 are implemented and tested, with 340 tests passing, tagged v0.0.23. Sprint 23 completed CR15: added `shortlist_candidate` and `shortlist_candidates` MCP tools backed by `JobSubmission` writes, `shortlist_config.py` for per-instance status config (`BULLHORN_SHORTLIST_STATUS`), `sendingUser` auto-stamp via `resolve_caller()`, idempotent duplicate pre-check, startup picklist validation, and optional `fields` dict. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
 
 **Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete for their original scope. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
 
@@ -42,7 +42,7 @@ PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user sto
 | Sprint 20 | **COMPLETE** | PRD parity hardening: contact duplicate company-name support, bulk likely/possible contact flags, HTTP smoke test, stdio startup logging — 260 tests passing |
 | Sprint 21 | **COMPLETE** | CR13: First-class JobOrder create/update tools, JobOrder aliases, README updates, unit and E2E tests — 290 tests passing, tagged v0.0.21 |
 | Sprint 22 | **COMPLETE** | CR14: Refactor `create_job` to dict-based signature with per-instance env configuration — fixes broken CR13 implementation — 306 tests passing, tagged v0.0.22 |
-| Sprint 23 | **COMPLETE** | CR15: Shortlist candidates to a job — `shortlist_candidate` / `shortlist_candidates` MCP tools, `JobSubmission` writes, `sendingUser` auto-stamp, duplicate pre-check, per-instance status config — 337 tests passing, tagged v0.0.23 |
+| Sprint 23 | **COMPLETE** | CR15: Shortlist candidates to a job — `shortlist_candidate` / `shortlist_candidates` MCP tools, `JobSubmission` writes, `sendingUser` auto-stamp, duplicate pre-check, per-instance status config — 340 tests passing, tagged v0.0.23 |
 
 ### Sprint 15 post-tag regression note
 
@@ -84,12 +84,12 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_client.py` — 41 tests (search, query, get, pagination, create, update, add_note, resolve_owner, edge cases)
 - `tests/test_metadata.py` — 28 tests (get_fields, label resolution, resolve_fields, FIELD_ALIASES, Sprint 8 alias, Sprint 9 payload audit, Sprint 21 JobOrder aliases, CR14 env-alias tests, e2e)
 - `tests/test_fuzzy.py` — 29 tests (normalize, score_company_match, score_contact_match, categorize_score, E2E)
-- `tests/test_server.py` — 167 tests (all 20 implemented tools + server setup + E2E tests Sprints 1–23)
+- `tests/test_server.py` — 170 tests (all 20 implemented tools + server setup + E2E tests Sprints 1–23)
 - `tests/test_bulk.py` — 18 tests (company processing, contact processing, summary, E2E)
 - `tests/test_identity.py` — 13 tests (Entra token to CorporateUser resolution, per-user cache)
 - `tests/test_joborder_config.py` — 10 tests (env config loaders for aliases/required/defaults)
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
-- **Total: 337 tests, all passing**
+- **Total: 340 tests, all passing**
 
 ---
 
@@ -2126,6 +2126,21 @@ The `reset_client` autouse fixture in `tests/test_server.py` must also reset `_s
 - `IMPLEMENTATION-PLAN.md`: Sprint 23 row and section added.
 - **337 tests passing, 0 failing.** Net change: +31 new tests.
 
+### Review cycle findings
+
+Three moderate findings were identified and fixed during the Sprint 23 review cycle.
+
+**M1 — `status` override via `fields` dict bypassed the env-default path.**
+A caller who passed `status` inside the optional `fields` dict would silently overwrite the env-default (and any explicit `status=` parameter) because `payload.update(resolved_fields)` executed after status was set. Fixed by removing `status` from the resolved fields before the merge and re-applying the explicit/default status after, so the precedence chain (`status=` param > env default) is preserved.
+
+**M2 — Missing `candidate_id` validation in `shortlist_candidates`.**
+The batch helper `_shortlist_one()` assumed `candidate_id` was always a valid integer but `shortlist_candidates` did not validate the type of each element in the `candidate_ids` list. A non-integer value would propagate to the Bullhorn API and produce an opaque error. Fixed by adding an early type-check in `_shortlist_one()` that returns a structured error result for non-integer candidate IDs, matching the pattern used for duplicate-detection failures.
+
+**M3 — No identity-failure test in `TestShortlistCandidates`.**
+The batch tool's behaviour when `resolve_caller()` raises `IdentityResolutionError` (identity unavailable for all candidates) was not covered. Fixed by adding a test that mocks the identity call to raise and asserts all results carry `identity_error: true` and the summary shows 0 successes.
+
+**Final state: 340 tests passing, 0 failing. Tagged v0.0.23.**
+
 ### Expected test count after Sprint 23
 
-Previous: 306. Added 31 new tests. **Actual: 337 passing, 0 failing.** Tagged v0.0.23.
+Previous: 306. Added 31 new tests + 3 review-cycle tests. **Actual: 340 passing, 0 failing.** Tagged v0.0.23.
