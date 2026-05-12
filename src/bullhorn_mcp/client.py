@@ -13,6 +13,12 @@ DEFAULT_FIELDS = {
     "Placement": "id,candidate,jobOrder,status,dateBegin,dateEnd,salary,payRate",
     "ClientCorporation": "id,name,status,phone,address,dateAdded",
     "ClientContact": "id,firstName,lastName,email,phone,status,dateAdded,clientCorporation,owner",
+    "JobSubmission": (
+        "id,status,dateAdded,"
+        "candidate(id,firstName,lastName),"
+        "jobOrder(id,title),"
+        "sendingUser(id,firstName,lastName)"
+    ),
     "UserMessage": (
         "id,subject,smtpSendDate,smtpReceiveDate,dateAdded,"
         "externalFrom,externalTo,externalCC,externalBCC,"
@@ -85,6 +91,7 @@ class BullhornClient:
         start: int = 0,
         sort: str | None = None,
         extra_params: dict[str, Any] | None = None,
+        exclude_deleted: bool = True,
     ) -> list[dict[str, Any]]:
         """Search entities using Lucene query syntax.
 
@@ -97,10 +104,16 @@ class BullhornClient:
             sort: Sort field with direction (e.g., "-dateAdded" for descending)
             extra_params: Additional query-string params to merge in (e.g.,
                 ``{"entityId": 123}`` for UserMessage mailbox scoping).
+            exclude_deleted: When True (default), appends ``AND isDeleted:0`` to
+                filter out soft-deleted records. Pass False only when deleted
+                records are explicitly needed.
 
         Returns:
             List of matching entities
         """
+        if exclude_deleted:
+            query = f"({query}) AND isDeleted:0" if query else "isDeleted:0"
+
         if fields is None:
             fields = DEFAULT_FIELDS.get(entity, "id")
 
@@ -128,6 +141,7 @@ class BullhornClient:
         count: int = 20,
         start: int = 0,
         order_by: str | None = None,
+        exclude_deleted: bool = True,
     ) -> list[dict[str, Any]]:
         """Query entities using JPQL-like syntax.
 
@@ -138,10 +152,16 @@ class BullhornClient:
             count: Max results (1-500)
             start: Starting offset for pagination
             order_by: Order by clause (e.g., "-dateAdded")
+            exclude_deleted: When True (default), appends ``AND isDeleted=false``
+                to filter out soft-deleted records. Pass False only when deleted
+                records are explicitly needed.
 
         Returns:
             List of matching entities
         """
+        if exclude_deleted:
+            where = f"({where}) AND isDeleted=false" if where else "isDeleted=false"
+
         if fields is None:
             fields = DEFAULT_FIELDS.get(entity, "id")
 

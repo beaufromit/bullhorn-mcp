@@ -298,6 +298,18 @@ class TestDefaultFields:
         # _subtype is auto-populated in responses; requesting it errors out.
         assert "_subtype" not in fields
 
+    def test_default_fields_jobsubmission(self):
+        """JobSubmission has an explicit safe field list — never falls back to *."""
+        assert "JobSubmission" in DEFAULT_FIELDS
+        fields = DEFAULT_FIELDS["JobSubmission"]
+        assert "id" in fields
+        assert "status" in fields
+        assert "dateAdded" in fields
+        assert "candidate" in fields
+        assert "jobOrder" in fields
+        assert "sendingUser" in fields
+        assert "*" not in fields
+
 
 class TestSearchExtraParams:
     """Tests for the extra_params argument on BullhornClient.search()."""
@@ -318,7 +330,8 @@ class TestSearchExtraParams:
 
         url = str(route.calls[0].request.url)
         assert "entityId=42" in url
-        assert "query=sender.id%3A1" in url
+        assert "sender.id" in url
+        assert "isDeleted" in url  # blanket deleted filter applied
 
 
 class TestCreateEntity:
@@ -387,6 +400,32 @@ class TestCreateEntity:
         assert result["changeType"] == "INSERT"
         assert result["data"]["id"] == 123
         assert result["data"]["name"] == "Acme Corp"
+
+    @respx.mock
+    def test_create_jobsubmission_does_not_request_all_fields(self, mock_auth, mock_session):
+        """create('JobSubmission') enrichment GET uses DEFAULT_FIELDS, never fields=*."""
+        respx.put(f"{mock_session.rest_url}/entity/JobSubmission").mock(
+            return_value=httpx.Response(
+                200,
+                json={"changedEntityId": 501, "changeType": "INSERT"},
+            )
+        )
+        get_route = respx.get(f"{mock_session.rest_url}/entity/JobSubmission/501").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"id": 501, "status": "Shortlisted"}},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.create("JobSubmission", {"candidate": {"id": 20}, "jobOrder": {"id": 10}})
+
+        assert result["changedEntityId"] == 501
+        get_url = str(get_route.calls[0].request.url)
+        assert "fields=%2A" not in get_url      # URL-encoded *
+        assert "fields=*" not in get_url         # raw *
+        assert "fields=" in get_url              # fields param was sent
+        assert "candidate" in get_url            # safe field list used
 
     @respx.mock
     def test_create_raises_on_api_error(self, mock_auth, mock_session):
@@ -649,3 +688,91 @@ class TestEdgeCases:
         client.search("UnknownEntity", "someField:value")
 
         assert "fields=id" in str(route.calls[0].request.url)
+
+
+class TestExcludeDeletedFilter:
+    """Tests for the blanket isDeleted filter on search() and query()."""
+
+    @respx.mock
+    def test_search_appends_is_deleted_by_default(self, mock_auth, mock_session):
+        """search() wraps the query and appends AND isDeleted:0 by default."""
+        route = respx.get(f"{mock_session.rest_url}/search/Candidate").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.search("Candidate", "name:Smith")
+        url = str(route.calls[0].request.url)
+        assert "name%3ASmith" in url        # original term present (URL-encoded :)
+        assert "isDeleted%3A0" in url       # filter appended (URL-encoded :)
+
+    @respx.mock
+    def test_search_no_filter_when_exclude_deleted_false(self, mock_auth, mock_session):
+        """search() passes query verbatim when exclude_deleted=False."""
+        route = respx.get(f"{mock_session.rest_url}/search/Candidate").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.search("Candidate", "name:Smith", exclude_deleted=False)
+        url = str(route.calls[0].request.url)
+        assert "isDeleted" not in url
+
+    @respx.mock
+    def test_search_empty_query_uses_filter_alone(self, mock_auth, mock_session):
+        """search() with empty query sends just isDeleted:0 (no extra parens)."""
+        route = respx.get(f"{mock_session.rest_url}/search/Candidate").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.search("Candidate", "")
+        url = str(route.calls[0].request.url)
+        # Should be exactly isDeleted:0, not () AND isDeleted:0
+        assert "isDeleted%3A0" in url
+        assert "%28%29" not in url  # no empty parens
+
+    @respx.mock
+    def test_search_preserves_or_disjunction(self, mock_auth, mock_session):
+        """search() wraps OR disjunctions in parens so AND binds correctly."""
+        route = respx.get(f"{mock_session.rest_url}/search/Candidate").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.search("Candidate", "name:A OR name:B")
+        url = str(route.calls[0].request.url)
+        # Parens must surround the OR expression before the AND isDeleted
+        assert "%28name%3AA+OR+name%3AB%29" in url
+        assert "isDeleted%3A0" in url
+
+    @respx.mock
+    def test_query_appends_is_deleted_by_default(self, mock_auth, mock_session):
+        """query() wraps the WHERE clause and appends AND isDeleted=false by default."""
+        route = respx.get(f"{mock_session.rest_url}/query/JobSubmission").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.query("JobSubmission", "candidate.id=1")
+        url = str(route.calls[0].request.url)
+        assert "candidate.id%3D1" in url
+        assert "isDeleted%3Dfalse" in url
+
+    @respx.mock
+    def test_query_no_filter_when_exclude_deleted_false(self, mock_auth, mock_session):
+        """query() passes WHERE verbatim when exclude_deleted=False."""
+        route = respx.get(f"{mock_session.rest_url}/query/JobSubmission").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.query("JobSubmission", "candidate.id=1", exclude_deleted=False)
+        url = str(route.calls[0].request.url)
+        assert "isDeleted" not in url
+
+    @respx.mock
+    def test_query_empty_where_uses_filter_alone(self, mock_auth, mock_session):
+        """query() with empty WHERE sends just isDeleted=false (no extra parens)."""
+        route = respx.get(f"{mock_session.rest_url}/query/JobOrder").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.query("JobOrder", "")
+        url = str(route.calls[0].request.url)
+        assert "isDeleted%3Dfalse" in url
+        assert "%28%29" not in url  # no empty parens

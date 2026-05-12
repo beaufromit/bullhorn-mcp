@@ -35,18 +35,16 @@ def _strip_contact_title(fields: dict, entity: str) -> tuple[dict, list[str]]:
     return fields, warnings
 
 
-def _company_name_search_query(company_name: str) -> str:
-    """Build a company search query broad enough for local fuzzy matching."""
+def _company_broad_query(company_name: str) -> str:
+    """Build a broad Lucene name query for fuzzy company matching."""
     stripped = company_name.strip()
     if not stripped:
-        return "isDeleted:0"
-
+        return ""
     first_term = stripped.split()[0]
     # Acronyms like BNY need candidates such as "Bank of New York Mellon" to be
     # returned before local fuzzy scoring can identify the abbreviation match.
     if first_term.isupper() and first_term.isalpha() and 2 <= len(first_term) <= 6:
         return f"name:{first_term[0]}*"
-
     return f"name:{first_term}*"
 
 
@@ -173,9 +171,9 @@ def list_jobs(
         client = get_client()
 
         # Build search query
-        search_query = query or "isDeleted:0"
+        search_query = query or ""
         if status:
-            search_query = f"({search_query}) AND status:\"{status}\""
+            search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
 
         results = client.search(
             entity="JobOrder",
@@ -219,9 +217,9 @@ def list_candidates(
         client = get_client()
 
         # Build search query
-        search_query = query or "isDeleted:0"
+        search_query = query or ""
         if status:
-            search_query = f"({search_query}) AND status:\"{status}\""
+            search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
 
         results = client.search(
             entity="Candidate",
@@ -265,9 +263,9 @@ def list_contacts(
         client = get_client()
 
         # Build search query
-        search_query = query or "isDeleted:0"
+        search_query = query or ""
         if status:
-            search_query = f"({search_query}) AND status:\"{status}\""
+            search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
 
         results = client.search(
             entity="ClientContact",
@@ -310,9 +308,9 @@ def list_companies(
         client = get_client()
 
         # Build search query
-        search_query = query or "isDeleted:0"
+        search_query = query or ""
         if status:
-            search_query = f"({search_query}) AND status:\"{status}\""
+            search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
 
         results = client.search(
             entity="ClientCorporation",
@@ -377,6 +375,8 @@ def search_entities(
 ) -> str:
     """Search any Bullhorn entity type using Lucene query syntax.
 
+    Soft-deleted records (isDeleted=true) are excluded by default.
+
     Args:
         entity: Entity type (JobOrder, Candidate, Placement, ClientCorporation, ClientContact, etc.)
         query: Lucene search query
@@ -416,6 +416,8 @@ def query_entities(
     order_by: str | None = None,
 ) -> str:
     """Query Bullhorn entities using SQL-like WHERE syntax.
+
+    Soft-deleted records (isDeleted=true) are excluded by default.
 
     Args:
         entity: Entity type (JobOrder, Candidate, etc.)
@@ -949,11 +951,9 @@ def find_duplicate_companies(
     """
     try:
         client = get_client()
-        # Use first word of name as broad search term to cast a wide net
-        broad_term = name.split()[0] if name.strip() else name
         results = client.search(
             "ClientCorporation",
-            query=f"name:{broad_term}*",
+            query=_company_broad_query(name),
             fields="id,name,status,phone",
             count=50,
         )
@@ -1016,7 +1016,7 @@ def find_duplicate_contacts(
 
             companies = client.search(
                 "ClientCorporation",
-                query=_company_name_search_query(company_name),
+                query=_company_broad_query(company_name),
                 fields="id,name,status,phone",
                 count=50,
             )
@@ -1224,7 +1224,7 @@ def _shortlist_one(
     """
     existing = client.query(
         "JobSubmission",
-        where=f"candidate.id={candidate_id} AND jobOrder.id={job_id} AND isDeleted=false",
+        where=f"candidate.id={candidate_id} AND jobOrder.id={job_id}",
         fields="id,status,dateAdded,sendingUser",
     )
     if existing:
