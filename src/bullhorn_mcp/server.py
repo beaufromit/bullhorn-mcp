@@ -1247,7 +1247,8 @@ def create_candidate(fields: dict, force: bool = False) -> str:
 
         metadata = get_metadata()
         defaults = get_candidate_defaults()
-        merged = {**metadata.resolve_fields("Candidate", defaults), **fields}
+        resolved_input = metadata.resolve_fields("Candidate", fields)
+        merged = {**metadata.resolve_fields("Candidate", defaults), **resolved_input}
 
         owner_result = client.resolve_owner(merged["owner"])
         if isinstance(owner_result, list):
@@ -1271,6 +1272,14 @@ def create_candidate(fields: dict, force: bool = False) -> str:
                 })
 
         resolved = metadata.resolve_fields("Candidate", merged)
+
+        # Guard after resolution so label bypass is blocked (mirrors update_record pattern)
+        if "clientCorporation" in resolved:
+            return format_response({
+                "error": "clientCorporation_not_valid",
+                "message": "Candidate does not have a clientCorporation field. Use 'companyName' (free text) for the current employer.",
+            })
+
         resolved, warnings = _strip_contact_title(resolved, "Candidate")
 
         if not force:
@@ -1584,6 +1593,17 @@ def create_candidate_from_cv(
         resolved, strip_warnings = _strip_contact_title(resolved, "Candidate")
         resolved = _truncate_against_meta(metadata, "Candidate", resolved)
 
+        env_required = get_candidate_required()
+        if env_required:
+            required_resolved = metadata.resolve_fields("Candidate", {k: None for k in env_required})
+            missing = [k for k in required_resolved if k not in resolved or resolved[k] is None or resolved[k] == ""]
+            if missing:
+                return format_response({
+                    "error": "required_fields_missing",
+                    "message": "Missing required Candidate fields configured for this instance.",
+                    "fields": missing,
+                })
+
         create_result = client.create("Candidate", resolved)
         candidate_id = create_result["changedEntityId"]
 
@@ -1747,7 +1767,7 @@ def attach_cv(
         # --- DIFF scalar fields ---
         proposed_changes = []
         for field, proposed_val in parsed_candidate.items():
-            if field in ("id", "name") or not isinstance(proposed_val, (str, int, float, bool)):
+            if field in ("id", "name", "title") or not isinstance(proposed_val, (str, int, float, bool)):
                 continue
             current_val = existing.get(field)
             if proposed_val != current_val:
@@ -1842,6 +1862,8 @@ def attach_cv(
                     update_payload[change["field"]] = change["proposed"]
             if update_payload:
                 update_payload = _truncate_against_meta(metadata, "Candidate", update_payload)
+                update_payload, strip_warns = _strip_contact_title(update_payload, "Candidate")
+                warnings.extend(strip_warns)
                 client.update("Candidate", candidate_id, update_payload)
                 fields_updated = list(update_payload.keys())
 

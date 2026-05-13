@@ -4583,6 +4583,18 @@ class TestCreateCandidateFromCv:
         assert len(data["education_ids"]) == 1
         assert data["file_attachment"] is not None
 
+        # Verify the Candidate write payload — the full derivation chain must be tested
+        candidate_call = mock_client.create.call_args_list[0]
+        assert candidate_call[0][0] == "Candidate"
+        payload = candidate_call[0][1]
+        assert payload["firstName"] == "Jane"
+        assert payload["lastName"] == "Doe"
+        assert payload["email"] == "jane.doe@example.com"
+        assert payload["occupation"] == "Senior Software Engineer"
+        assert "title" not in payload  # stripped by _strip_contact_title
+        assert "name" not in payload   # stripped by _strip_contact_title
+        assert "owner" in payload      # auto-stamped from resolve_caller
+
     def test_create_from_cv_text_success(self, mock_client, mock_metadata, sample_parsed_resume):
         """create_candidate_from_cv text path creates candidate without file attach."""
         mock_client.parse_resume_text.return_value = sample_parsed_resume
@@ -4605,6 +4617,16 @@ class TestCreateCandidateFromCv:
         assert data["created"] is True
         assert data["file_attachment"] is None  # text-only skips attach
         mock_client.attach_file.assert_not_called()
+
+        # Verify the Candidate write payload for the text path
+        candidate_call = mock_client.create.call_args_list[0]
+        assert candidate_call[0][0] == "Candidate"
+        payload = candidate_call[0][1]
+        assert payload["firstName"] == "Jane"
+        assert payload["lastName"] == "Doe"
+        assert "title" not in payload  # stripped by _strip_contact_title
+        assert "name" not in payload   # stripped by _strip_contact_title
+        assert "owner" in payload      # auto-stamped from resolve_caller
 
     def test_create_from_cv_duplicate_found(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """create_candidate_from_cv returns duplicate_found when match detected."""
