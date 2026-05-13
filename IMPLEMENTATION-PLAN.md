@@ -2211,3 +2211,78 @@ After CR16, calling `find_duplicate_companies` with an empty name sends `isDelet
 ### Expected test count after Sprint 25
 
 Previous: 366. Added 2 CR17 tests (test_default_fields_jobsubmission, test_create_jobsubmission_does_not_request_all_fields) + 1 review-cycle test (test_find_duplicate_companies_empty_name_sends_isdeleted_filter). **Actual: 369 passing, 0 failing.** Tagged v0.0.25.
+
+---
+
+## Sprint 26 — CR18: Dynamic tool descriptions from Bullhorn /meta at startup
+
+### What was built
+
+New `src/bullhorn_mcp/descriptions.py` module. `enrich_tool_descriptions(mcp, client)` (async) is called once in `main()` via `asyncio.run()` before `mcp.run()`. Fetches `/meta/{entity}` for 9 entities (Candidate, ClientContact, ClientCorporation, JobOrder, JobSubmission, Note, Placement, UserMessage, CorporateUser) and appends a compact `## Field reference` section to each relevant tool description. Picklist values are inlined for fields named `status`, `employmentType`, `category`, `type`, `source`. `BullhornMetadata.get_fields()` extended to retain picklist `options` in its projection. The entire enrichment block is wrapped in try/except — failure logs a warning and keeps static docstrings intact.
+
+### Files changed
+
+- `CR18.md`: spec document.
+- `src/bullhorn_mcp/descriptions.py`: new module (`SUPPORTED_ENTITIES`, `TOOL_ENTITY_MAP`, `build_entity_section()`, `enrich_tool_descriptions()`).
+- `src/bullhorn_mcp/metadata.py`: `get_fields()` retains `options` in projection.
+- `src/bullhorn_mcp/server.py`: `main()` calls `enrich_tool_descriptions(mcp, client)` and stores result as `_metadata`.
+- `tests/test_descriptions.py`: async tests for enrichment logic.
+
+### Review cycle findings
+
+Two moderate findings were identified and fixed during the Sprint 26 review cycle.
+
+**M1 — `enrich_tool_descriptions` discarded its `BullhornMetadata` instance.**
+The function originally returned `None`; `main()` had no reference to the metadata object. Fixed by returning the `BullhornMetadata` instance from `enrich_tool_descriptions` and storing it as `_metadata` in `main()`, preventing a second round of `/meta` calls at runtime.
+
+**M2 — `get_entity_fields` missing from `TOOL_ENTITY_MAP`.**
+The tool was not listed in `TOOL_ENTITY_MAP`, so it received no field-reference section in its description. Fixed by adding `get_entity_fields` mapped to all 9 supported entities.
+
+**Final state: 389 tests passing, 0 failing. Tagged v0.0.26.**
+
+### Expected test count after Sprint 26
+
+Previous: 369. Added Sprint 26 async tests for descriptions module. **Actual: 389 passing, 0 failing.** Tagged v0.0.26.
+
+---
+
+## Sprint 27 — CR19: Candidate creation and CV parsing
+
+### What was built
+
+Six new MCP tools: `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`. New module `src/bullhorn_mcp/candidate_config.py` (mirrors `joborder_config.py`) for per-instance env configuration (`BULLHORN_CANDIDATE_ALIASES`, `BULLHORN_CANDIDATE_REQUIRED`, `BULLHORN_CANDIDATE_DEFAULTS`). `FIELD_ALIASES["Candidate"]` added with `"job title" → occupation` and env aliases. Multipart client methods use `_request_multipart` with 60 s timeout. `create_candidate_from_cv` child-record failures are best-effort with warnings. `attach_cv` is a two-call commit pattern: Call 1 = preview (nothing written), Call 2 = commit (using `fields_to_update` list or `force_all=True`). `_strip_contact_title()` extended to also strip `title` + `name` from Candidate payloads.
+
+### Files changed
+
+- `CR19.md`: spec document.
+- `src/bullhorn_mcp/candidate_config.py`: new module.
+- `src/bullhorn_mcp/server.py`: 6 new tool handlers; `_strip_contact_title` updated; `_check_candidate_duplicates` private helper.
+- `src/bullhorn_mcp/client.py`: `_request_multipart`, `parse_resume_file`, `parse_resume_text`, `attach_file` methods.
+- `tests/test_candidate_tools.py`: new test file covering all 6 tools.
+
+### Review cycle findings
+
+Six findings were identified and fixed during the CR19 review cycle (2026-05-13).
+
+**C1 — `create_candidate_from_cv` Candidate write payload never verified.**
+No test asserted the actual fields POSTed when creating a Candidate from a parsed CV. Fixed by adding payload-assertion checks to `test_create_from_cv_binary_success` and `test_create_from_cv_text_success`.
+
+**M1 — `create_candidate` required-fields check fired against unresolved caller fields.**
+The required-fields validation ran before `metadata.resolve_fields("Candidate", fields)` was called, so field aliases and label names could bypass or incorrectly fail the check. Fixed by resolving `fields` via `metadata.resolve_fields("Candidate", fields)` before merging with defaults, matching the `create_job` pattern.
+
+**M2 — `attach_cv` commit path did not strip invalid `title` field.**
+`_strip_contact_title` was not called on the update payload in the commit path, and `"title"` was not excluded from the diff loop. Fixed by adding `"title"` to the diff exclusion set and calling `_strip_contact_title` before `client.update`.
+
+**M3 — `create_candidate` `clientCorporation` guard fired before label resolution.**
+The guard that prevents setting `clientCorporation` ran before `metadata.resolve_fields("Candidate", merged)`, allowing a label name to bypass the restriction. Fixed by adding a second post-resolution guard after label resolution, matching the `update_record` pattern.
+
+**M4 — `create_candidate_from_cv` skipped `BULLHORN_CANDIDATE_REQUIRED` validation.**
+The required-fields check from `get_candidate_required()` was never applied in the CV-to-candidate path. Fixed by adding the check after `_truncate_against_meta`.
+
+**New tests added:** `test_create_candidate_rejects_client_corporation_via_label` (covers M3 post-resolution guard) and `test_create_from_cv_required_fields_missing` (covers M4 required-fields path).
+
+**Final state: 450 tests passing, 0 failing.**
+
+### Expected test count after Sprint 27
+
+Previous: 389. Added 6-tool test suite in `test_candidate_tools.py` + 2 review-cycle regression tests. **Actual: 450 passing, 0 failing.**
