@@ -1038,7 +1038,7 @@ def add_note(entity: str, entity_id: int, action: str, comments: str) -> str:
         result = client.add_note(entity, entity_id, action, comments, commenting_person_id=commenting_person_id)
         return format_response(result)
 
-    except (AuthenticationError, BullhornAPIError) as e:
+    except (AuthenticationError, BullhornAPIError, ValueError) as e:
         return f"ERROR: {e}"
 
 

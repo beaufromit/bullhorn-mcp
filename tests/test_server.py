@@ -1374,6 +1374,15 @@ class TestAddNote:
             result = server.add_note("ClientContact", 1, "Bad Action", "note")
         assert result.startswith("ERROR:")
 
+    def test_add_note_value_error_returns_error_prefix(self, mock_client):
+        """add_note returns ERROR prefix when client raises ValueError (e.g. entity/dispatch divergence)."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        mock_client.add_note.side_effect = ValueError("add_note does not support entity 'NewEntity'")
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            result = server.add_note("ClientContact", 1, "General Note", "note")
+        assert result.startswith("ERROR:")
+
 
 class TestSprint6E2E:
     """End-to-end tests for Sprint 6."""
