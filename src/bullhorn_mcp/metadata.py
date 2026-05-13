@@ -52,21 +52,29 @@ class BullhornMetadata:
             entity: Entity type (e.g. ClientContact, ClientCorporation)
 
         Returns:
-            List of dicts with keys: name, label, type, required
+            List of dicts with keys: name, label, type, required, and
+            optionally options (list of {value, label} dicts for picklist
+            fields, present only when the Bullhorn /meta response includes
+            options for that field).
         """
         if entity not in self._cache:
             meta = self._client.get_meta(entity)
             raw_fields = meta.get("fields", [])
-            self._cache[entity] = [
-                {
+            projected: list[dict] = []
+            for f in raw_fields:
+                if not f.get("name"):
+                    continue
+                entry = {
                     "name": f.get("name", ""),
                     "label": f.get("label", ""),
                     "type": f.get("type", ""),
                     "required": bool(f.get("required", False)),
                 }
-                for f in raw_fields
-                if f.get("name")
-            ]
+                options = f.get("options")
+                if options:
+                    entry["options"] = options
+                projected.append(entry)
+            self._cache[entity] = projected
         return self._cache[entity]
 
     def resolve_label_to_api(self, entity: str, label: str) -> str | None:

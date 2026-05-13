@@ -77,6 +77,37 @@ class TestGetFields:
         assert len(fields) == 1
         assert fields[0]["name"] == "id"
 
+    def test_get_fields_includes_options_when_present(self, mock_client):
+        """Picklist options are retained in the projection when present."""
+        mock_client.get_meta.return_value = {
+            "fields": [
+                {
+                    "name": "status",
+                    "label": "Status",
+                    "type": "STRING",
+                    "required": False,
+                    "options": [
+                        {"value": "Active", "label": "Active"},
+                        {"value": "Inactive", "label": "Inactive"},
+                    ],
+                },
+                {"name": "firstName", "label": "First Name", "type": "STRING", "required": True},
+            ]
+        }
+        metadata = BullhornMetadata(mock_client)
+        fields = metadata.get_fields("Candidate")
+
+        status_field = next(f for f in fields if f["name"] == "status")
+        assert "options" in status_field
+        assert len(status_field["options"]) == 2
+        assert status_field["options"][0]["value"] == "Active"
+
+    def test_get_fields_omits_options_key_when_absent(self, mock_client):
+        """Fields without options do not have an options key in the projection."""
+        fields = BullhornMetadata(mock_client).get_fields("ClientContact")
+        for f in fields:
+            assert "options" not in f
+
 
 class TestResolveLabelToApi:
     def test_resolve_label_to_api(self, metadata):

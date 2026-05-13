@@ -1,5 +1,6 @@
 """Bullhorn CRM MCP Server - Query and manage CRM data via AI assistants."""
 
+import asyncio
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ from .shortlist_config import get_shortlist_status
 from .fuzzy import score_company_match, categorize_score, score_contact_match
 from .bulk import BulkImporter
 from .identity import resolve_caller, IdentityResolutionError
+from .descriptions import enrich_tool_descriptions
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -1437,6 +1439,11 @@ def main():
     HTTP host is controlled by HOST (default 0.0.0.0 in http mode, 127.0.0.1 in stdio mode).
     All env vars are read at module import time — transport, host, and port are consistent.
     """
+    try:
+        asyncio.run(enrich_tool_descriptions(mcp, get_client()))
+    except Exception as exc:
+        _logger.warning("Could not enrich tool descriptions at startup: %s", exc)
+
     if _transport_mode == "http":
         _logger.info(
             "Starting Bullhorn MCP server in HTTP mode on %s:%s", _host, _port
