@@ -1,8 +1,8 @@
-# Review: fix M1 tighten extra_params assertion; fix M2 add empty-name test for find_duplicate_companies
+# Review: Fix M1 startup metadata cache discarded; fix M2 get_entity_fields missing from TOOL_ENTITY_MAP
 
-**Commit:** cd4d014
+**Commit:** d806940
 **Date:** 2026-05-13
-**Files changed:** 3 (reviews/latest.md, tests/test_client.py, tests/test_server.py)
+**Files changed:** 2
 
 ## CRITICAL
 
@@ -14,11 +14,14 @@ None.
 
 ## MINOR
 
-- **m1: `test_search_with_extra_params` still doesn't anchor assertion to the `query=` parameter** — `tests/test_client.py:TestSearchExtraParams`
-  The fix changed `assert "sender.id" in url` to `assert "sender.id%3A1" in url`, adding the value `1` to the check. However, it still does not confirm that `sender.id%3A1` appeared specifically inside the `query=` parameter (vs any other parameter). In practice there is no other parameter that could contain this substring, so the test is sound. The original `"query=sender.id%3A1"` form is unachievable after CR16's wrapping adds a leading `(`, so this is an acceptable trade-off.
+- **m1: `patch` imported but unused** — `tests/test_descriptions.py:6`
+  `from unittest.mock import AsyncMock, Mock, patch` — `patch` is not referenced anywhere in the file. Pre-existing from CR18 build; not introduced by this fix.
 
-- **m2: `test_find_duplicate_companies_empty_name_sends_isdeleted_filter` uses `name%3A` as the negative assertion** — `tests/test_server.py:TestCR16DeletedRecordFilter`
-  The assertion `assert "name%3A" not in captured["url"]` checks that no URL-encoded `name:` term appears. If Bullhorn or httpx ever changed encoding (e.g., the colon appeared unencoded in some field value context), this guard could become vacuous. Low real-world risk but the assertion's precision depends on URL-encoding behaviour.
+- **m2: `_make_mock_mcp` return type annotation is wrong** — `tests/test_descriptions.py:TestEnrichToolDescriptions._make_mock_mcp`
+  Method signature declares `-> Mock` but returns `tuple[Mock, dict]`. Pre-existing from CR18 build; not introduced by this fix.
+
+- **m3: `main()` stores `_metadata` only on success; exception path leaves `_metadata = None` silently** — `server.py:main()`
+  If `asyncio.run(enrich_tool_descriptions(...))` raises an unhandled exception (caught by the outer `except`), the assignment `_metadata = ...` never executes and `_metadata` stays `None`. `get_metadata()` then lazily creates a fresh instance on first tool call, which is the correct fallback. However, the intent (`global _metadata` declared, assignment inside try) is not obvious to a future reader — it reads as though `_metadata` is always set, but the except path silently leaves it None. Not a bug, but worth noting.
 
 ## Verdict
 
