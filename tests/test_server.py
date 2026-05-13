@@ -4165,6 +4165,31 @@ class TestCreateCandidate:
         assert "companyName" in data["message"]
         mock_client.create.assert_not_called()
 
+    def test_create_candidate_rejects_client_corporation_via_label(self, mock_client, mock_metadata):
+        """Post-resolution guard blocks clientCorporation smuggled via display label."""
+        # Simulate a label that resolves to "clientCorporation" after metadata resolution
+        def resolve_with_label(entity, fields):
+            result = dict(fields)
+            if "Company" in result:
+                result["clientCorporation"] = result.pop("Company")
+            return result
+
+        mock_metadata.resolve_fields.side_effect = resolve_with_label
+        mock_client.resolve_owner.return_value = {"id": 1}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe",
+                "Company": {"id": 1}, "owner": {"id": 1},
+            })
+
+        data = json.loads(result)
+        assert data["error"] == "clientCorporation_not_valid"
+        assert "companyName" in data["message"]
+        mock_client.create.assert_not_called()
+
     def test_create_candidate_strips_title_field(self, mock_client, mock_metadata):
         """create_candidate strips 'title' field and includes warning in response."""
         mock_client.resolve_owner.return_value = {"id": 1}
@@ -4680,6 +4705,30 @@ class TestCreateCandidateFromCv:
         data = json.loads(result)
         assert data["created"] is True
         mock_client.search.assert_not_called()
+
+    def test_create_from_cv_required_fields_missing(self, mock_client, mock_metadata, sample_parsed_resume):
+        """create_candidate_from_cv returns required_fields_missing when env-required field absent."""
+        import base64
+        # Remove email from parsed data so the required field is absent
+        resume = dict(sample_parsed_resume)
+        resume["candidate"] = {k: v for k, v in resume["candidate"].items() if k != "email"}
+        mock_client.parse_resume_file.return_value = resume
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}), \
+             patch("bullhorn_mcp.server.get_candidate_required", return_value=["email"]):
+            result = server.create_candidate_from_cv(
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+                force=True,
+            )
+
+        data = json.loads(result)
+        assert data["error"] == "required_fields_missing"
+        assert "email" in data["fields"]
+        mock_client.create.assert_not_called()
 
     def test_create_from_cv_no_input_error(self, mock_client, mock_metadata):
         """create_candidate_from_cv returns error when neither binary nor text provided."""
