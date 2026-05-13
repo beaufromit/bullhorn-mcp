@@ -1439,8 +1439,9 @@ def main():
     HTTP host is controlled by HOST (default 0.0.0.0 in http mode, 127.0.0.1 in stdio mode).
     All env vars are read at module import time — transport, host, and port are consistent.
     """
+    global _metadata
     try:
-        asyncio.run(enrich_tool_descriptions(mcp, get_client()))
+        _metadata = asyncio.run(enrich_tool_descriptions(mcp, get_client()))
     except Exception as exc:
         _logger.warning("Could not enrich tool descriptions at startup: %s", exc)
 

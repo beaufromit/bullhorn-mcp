@@ -58,6 +58,7 @@ TOOL_ENTITY_MAP: dict[str, list[str]] = {
     "shortlist_candidate": ["JobSubmission"],
     "shortlist_candidates": ["JobSubmission"],
     "search_emails": ["UserMessage"],
+    "get_entity_fields": SUPPORTED_ENTITIES,
 }
 
 
@@ -94,11 +95,14 @@ def build_entity_section(entity: str, fields: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def enrich_tool_descriptions(mcp, client: BullhornClient) -> None:
+async def enrich_tool_descriptions(mcp, client: BullhornClient) -> BullhornMetadata:
     """Fetch /meta for each supported entity and append field summaries to tools.
 
     Runs once inside main() before mcp.run(). Per-entity and per-tool failures
     are caught and logged so one bad entity or tool name never blocks the rest.
+
+    Returns the BullhornMetadata instance so main() can store it as the server's
+    runtime metadata cache, avoiding a second round of /meta fetches.
 
     Args:
         mcp: The FastMCP server instance (tools already registered).
@@ -117,7 +121,7 @@ async def enrich_tool_descriptions(mcp, client: BullhornClient) -> None:
 
     if not entity_sections:
         logger.warning("No entity metadata loaded — tool descriptions will use static fallbacks")
-        return
+        return metadata
 
     for tool_name, entities in TOOL_ENTITY_MAP.items():
         sections = [entity_sections[e] for e in entities if e in entity_sections]
@@ -129,3 +133,5 @@ async def enrich_tool_descriptions(mcp, client: BullhornClient) -> None:
             tool.description = (tool.description or "") + appended
         except Exception as exc:
             logger.warning("Could not enrich description for tool %s: %s", tool_name, exc)
+
+    return metadata
