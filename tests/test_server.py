@@ -4089,3 +4089,738 @@ class TestCR16DeletedRecordFilter:
 
         assert "isDeleted" in captured["url"]
         assert "name%3A" not in captured["url"]  # no name: Lucene filter for empty input
+
+
+# ---------------------------------------------------------------------------
+# CR19 — Candidate Creation and CV Parsing
+# ---------------------------------------------------------------------------
+
+class TestCreateCandidate:
+    """Tests for create_candidate tool."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = []
+        return meta
+
+    def test_create_candidate_success(self, mock_client, mock_metadata):
+        """create_candidate with minimal required fields creates record."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 111,
+            "changeType": "INSERT",
+            "data": {"id": 111, "firstName": "Jane", "lastName": "Doe", "owner": {"id": 99}},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe", "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 111
+        assert data["changeType"] == "INSERT"
+        mock_client.create.assert_called_once()
+
+    def test_create_candidate_missing_first_name(self, mock_client, mock_metadata):
+        """create_candidate returns error when firstName is absent."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({"lastName": "Doe", "owner": {"id": 1}})
+
+        data = json.loads(result)
+        assert data["error"] == "firstName_required"
+        mock_client.create.assert_not_called()
+
+    def test_create_candidate_missing_last_name(self, mock_client, mock_metadata):
+        """create_candidate returns error when lastName is absent."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({"firstName": "Jane", "owner": {"id": 1}})
+
+        data = json.loads(result)
+        assert data["error"] == "lastName_required"
+        mock_client.create.assert_not_called()
+
+    def test_create_candidate_rejects_client_corporation(self, mock_client, mock_metadata):
+        """create_candidate rejects clientCorporation field and points to companyName."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": {"id": 1},
+            })
+
+        data = json.loads(result)
+        assert data["error"] == "clientCorporation_not_valid"
+        assert "companyName" in data["message"]
+        mock_client.create.assert_not_called()
+
+    def test_create_candidate_strips_title_field(self, mock_client, mock_metadata):
+        """create_candidate strips 'title' field and includes warning in response."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 112, "changeType": "INSERT",
+            "data": {"id": 112, "firstName": "Jane", "lastName": "Doe"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe",
+                "title": "Dr.", "owner": {"id": 1},
+            })
+
+        data = json.loads(result)
+        assert "warnings" in data
+        assert any("title" in w for w in data["warnings"])
+        # title must not be in the create payload
+        call_kwargs = mock_client.create.call_args[0][1]
+        assert "title" not in call_kwargs
+
+    def test_create_candidate_strips_name_field(self, mock_client, mock_metadata):
+        """create_candidate strips read-only 'name' and includes warning."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 113, "changeType": "INSERT",
+            "data": {"id": 113, "firstName": "Jane", "lastName": "Doe"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe",
+                "name": "Jane Doe", "owner": {"id": 1},
+            })
+
+        data = json.loads(result)
+        assert "warnings" in data
+        assert any("name" in w for w in data["warnings"])
+        call_kwargs = mock_client.create.call_args[0][1]
+        assert "name" not in call_kwargs
+
+    def test_create_candidate_dup_found_no_force(self, mock_client, mock_metadata):
+        """create_candidate returns duplicate_found when a match is detected."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.search.return_value = [
+            {"id": 50, "firstName": "Jane", "lastName": "Doe",
+             "email": "jane@example.com", "phone": "", "occupation": "", "companyName": "", "dateAdded": 0},
+        ]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe", "owner": {"id": 1},
+            })
+
+        data = json.loads(result)
+        assert data["duplicate_found"] is True
+        assert "match" in data
+        mock_client.create.assert_not_called()
+
+    def test_create_candidate_force_bypasses_dup_check(self, mock_client, mock_metadata):
+        """create_candidate with force=True skips duplicate check."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.create.return_value = {
+            "changedEntityId": 114, "changeType": "INSERT",
+            "data": {"id": 114, "firstName": "Jane", "lastName": "Doe"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate(
+                {"firstName": "Jane", "lastName": "Doe", "owner": {"id": 1}},
+                force=True,
+            )
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 114
+        # search should NOT be called since force=True skips dup check
+        mock_client.search.assert_not_called()
+
+    def test_create_candidate_owner_auto_stamp(self, mock_client, mock_metadata):
+        """create_candidate auto-stamps owner from resolve_caller when absent."""
+        mock_client.resolve_owner.return_value = {"id": 42}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 115, "changeType": "INSERT",
+            "data": {"id": 115, "firstName": "Jane", "lastName": "Doe", "owner": {"id": 42}},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}) as mock_caller:
+            server.create_candidate({"firstName": "Jane", "lastName": "Doe"})
+
+        mock_caller.assert_called_once()
+        call_kwargs = mock_client.create.call_args[0][1]
+        assert call_kwargs.get("owner") == {"id": 42}
+
+    def test_create_candidate_identity_resolution_failed(self, mock_client, mock_metadata):
+        """create_candidate returns identity_resolution_failed when resolve_caller raises."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            result = server.create_candidate({"firstName": "Jane", "lastName": "Doe"})
+
+        data = json.loads(result)
+        assert data["error"] == "identity_resolution_failed"
+        mock_client.create.assert_not_called()
+
+    def test_create_candidate_owner_ambiguous(self, mock_client, mock_metadata):
+        """create_candidate returns disambiguation JSON when owner matches multiple users."""
+        mock_client.resolve_owner.return_value = [
+            {"id": 10, "firstName": "John", "lastName": "Smith"},
+            {"id": 11, "firstName": "John", "lastName": "Smith"},
+        ]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe", "owner": "John Smith",
+            })
+
+        data = json.loads(result)
+        assert data["error"] == "owner_ambiguous"
+        mock_client.create.assert_not_called()
+
+    def test_create_candidate_owner_not_found(self, mock_client, mock_metadata):
+        """create_candidate returns owner_not_found error when name resolves to nobody."""
+        mock_client.resolve_owner.side_effect = ValueError("No CorporateUser found matching 'Ghost'")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe", "owner": "Ghost",
+            })
+
+        data = json.loads(result)
+        assert data["error"] == "owner_not_found"
+        mock_client.create.assert_not_called()
+
+    def test_create_candidate_api_error(self, mock_client, mock_metadata):
+        """create_candidate returns ERROR: prefix on BullhornAPIError."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.search.return_value = []
+        mock_client.create.side_effect = BullhornAPIError("500 Internal Server Error")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe", "owner": {"id": 1},
+            })
+
+        assert result.startswith("ERROR:")
+
+    def test_create_candidate_label_resolution(self, mock_client, mock_metadata):
+        """create_candidate calls resolve_fields with Candidate entity."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 116, "changeType": "INSERT",
+            "data": {"id": 116, "firstName": "Jane", "lastName": "Doe"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.create_candidate({"firstName": "Jane", "lastName": "Doe", "owner": {"id": 1}})
+
+        # resolve_fields is called with "Candidate" at least once
+        calls = mock_metadata.resolve_fields.call_args_list
+        assert any(c.args[0] == "Candidate" for c in calls)
+
+
+class TestFindDuplicateCandidates:
+    """Tests for find_duplicate_candidates tool."""
+
+    def test_find_dup_candidates_email_exact_match(self, mock_client, sample_candidate):
+        """find_duplicate_candidates detects email exact match as 'exact' category."""
+        sample_candidate["email"] = "jane@example.com"
+        sample_candidate["firstName"] = "Jane"
+        sample_candidate["lastName"] = "Doe"
+        sample_candidate["occupation"] = "Engineer"
+        sample_candidate["companyName"] = "Acme"
+        sample_candidate["dateAdded"] = 0
+        mock_client.search.return_value = [sample_candidate]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_candidates("Jane", "Doe", email="jane@example.com")
+
+        data = json.loads(result)
+        assert data["exact_match"] is True
+        assert len(data["matches"]) == 1
+        assert data["matches"][0]["category"] == "exact"
+
+    def test_find_dup_candidates_name_fuzzy_match(self, mock_client, sample_candidate):
+        """find_duplicate_candidates scores name-only match correctly."""
+        sample_candidate["firstName"] = "Jane"
+        sample_candidate["lastName"] = "Doe"
+        sample_candidate["email"] = "other@example.com"
+        sample_candidate["occupation"] = ""
+        sample_candidate["companyName"] = ""
+        sample_candidate["dateAdded"] = 0
+        mock_client.search.return_value = [sample_candidate]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_candidates("Jane", "Doe")
+
+        data = json.loads(result)
+        assert len(data["matches"]) == 1
+        assert data["matches"][0]["confidence"] >= 0.50
+
+    def test_find_dup_candidates_no_match(self, mock_client):
+        """find_duplicate_candidates returns empty matches when no records found."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_candidates("Completely", "Unknown")
+
+        data = json.loads(result)
+        assert data["matches"] == []
+        assert data["exact_match"] is False
+
+    def test_find_dup_candidates_api_error(self, mock_client):
+        """find_duplicate_candidates returns ERROR: prefix on BullhornAPIError."""
+        mock_client.search.side_effect = BullhornAPIError("Search failed")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_candidates("Jane", "Doe")
+
+        assert result.startswith("ERROR:")
+
+
+class TestParseCv:
+    """Tests for parse_cv tool."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = []
+        return meta
+
+    def test_parse_cv_returns_parsed_and_dup_check(self, mock_client, mock_metadata, sample_parsed_resume):
+        """parse_cv returns parsed data and duplicate_check result without writing."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.parse_cv(
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+            )
+
+        data = json.loads(result)
+        assert "parsed" in data
+        assert data["parsed"]["candidate"]["firstName"] == "Jane"
+        assert "duplicate_check" in data
+        mock_client.create.assert_not_called()
+
+    def test_parse_cv_invalid_base64(self, mock_client, mock_metadata):
+        """parse_cv returns error on malformed base64 input."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.parse_cv(
+                file_b64="!not-valid-base64!",
+                filename="cv.pdf",
+            )
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_base64"
+        mock_client.parse_resume_file.assert_not_called()
+
+    def test_parse_cv_dup_found_in_preview(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """parse_cv includes duplicate_check result when a matching Candidate is found."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        sample_candidate["firstName"] = "Jane"
+        sample_candidate["lastName"] = "Doe"
+        sample_candidate["email"] = "jane.doe@example.com"
+        sample_candidate["occupation"] = ""
+        sample_candidate["companyName"] = ""
+        sample_candidate["dateAdded"] = 0
+        mock_client.search.return_value = [sample_candidate]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.parse_cv(
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+            )
+
+        data = json.loads(result)
+        assert data["duplicate_check"] is not None
+        assert data["duplicate_check"]["category"] == "exact"
+
+    def test_parse_cv_api_error(self, mock_client, mock_metadata):
+        """parse_cv returns ERROR: prefix on BullhornAPIError from parse_resume_file."""
+        import base64
+        mock_client.parse_resume_file.side_effect = BullhornAPIError("Parse failed")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.parse_cv(
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+            )
+
+        assert result.startswith("ERROR:")
+
+
+class TestParseCvText:
+    """Tests for parse_cv_text tool."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = []
+        return meta
+
+    def test_parse_cv_text_returns_parsed_and_dup_check(self, mock_client, mock_metadata, sample_parsed_resume):
+        """parse_cv_text returns parsed data without writing anything."""
+        mock_client.parse_resume_text.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.parse_cv_text(content="Jane Doe\nEngineer\njane@example.com")
+
+        data = json.loads(result)
+        assert "parsed" in data
+        assert data["parsed"]["candidate"]["firstName"] == "Jane"
+        assert "duplicate_check" in data
+        mock_client.create.assert_not_called()
+
+    def test_parse_cv_text_html_content_type(self, mock_client, mock_metadata, sample_parsed_resume):
+        """parse_cv_text passes content_type through to client.parse_resume_text."""
+        mock_client.parse_resume_text.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.parse_cv_text(content="<html>Jane Doe</html>", content_type="text/html")
+
+        mock_client.parse_resume_text.assert_called_once_with("<html>Jane Doe</html>", "text/html")
+
+    def test_parse_cv_text_api_error(self, mock_client, mock_metadata):
+        """parse_cv_text returns ERROR: prefix on BullhornAPIError."""
+        mock_client.parse_resume_text.side_effect = BullhornAPIError("Parser unavailable")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.parse_cv_text(content="some text")
+
+        assert result.startswith("ERROR:")
+
+
+class TestCreateCandidateFromCv:
+    """Tests for create_candidate_from_cv tool."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = []
+        return meta
+
+    def test_create_from_cv_binary_success(self, mock_client, mock_metadata, sample_parsed_resume):
+        """create_candidate_from_cv binary path creates candidate and child records."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+        mock_client.create.side_effect = [
+            {"changedEntityId": 200, "changeType": "INSERT", "data": {"id": 200}},  # Candidate
+            {"changedEntityId": 201, "changeType": "INSERT", "data": {"id": 201}},  # work history 1
+            {"changedEntityId": 202, "changeType": "INSERT", "data": {"id": 202}},  # work history 2
+            {"changedEntityId": 203, "changeType": "INSERT", "data": {"id": 203}},  # education
+        ]
+        mock_client.update.return_value = {"changedEntityId": 200, "changeType": "UPDATE", "data": {"id": 200}}
+        mock_client.get.return_value = {"id": 200, "skillSet": ""}
+        mock_client.attach_file.return_value = {"fileId": 55, "name": "cv.pdf"}
+        mock_client._guess_content_type.return_value = "application/pdf"
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate_from_cv(
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+            )
+
+        data = json.loads(result)
+        assert data["created"] is True
+        assert data["candidate_id"] == 200
+        assert len(data["work_history_ids"]) == 2
+        assert len(data["education_ids"]) == 1
+        assert data["file_attachment"] is not None
+
+    def test_create_from_cv_text_success(self, mock_client, mock_metadata, sample_parsed_resume):
+        """create_candidate_from_cv text path creates candidate without file attach."""
+        mock_client.parse_resume_text.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+        mock_client.create.side_effect = [
+            {"changedEntityId": 210, "changeType": "INSERT", "data": {"id": 210}},
+            {"changedEntityId": 211, "changeType": "INSERT", "data": {"id": 211}},
+            {"changedEntityId": 212, "changeType": "INSERT", "data": {"id": 212}},
+            {"changedEntityId": 213, "changeType": "INSERT", "data": {"id": 213}},
+        ]
+        mock_client.update.return_value = {"changedEntityId": 210, "changeType": "UPDATE", "data": {"id": 210}}
+        mock_client.get.return_value = {"id": 210, "skillSet": ""}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate_from_cv(content="Jane Doe\nEngineer")
+
+        data = json.loads(result)
+        assert data["created"] is True
+        assert data["file_attachment"] is None  # text-only skips attach
+        mock_client.attach_file.assert_not_called()
+
+    def test_create_from_cv_duplicate_found(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """create_candidate_from_cv returns duplicate_found when match detected."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        sample_candidate["firstName"] = "Jane"
+        sample_candidate["lastName"] = "Doe"
+        sample_candidate["email"] = "jane.doe@example.com"
+        sample_candidate["occupation"] = ""
+        sample_candidate["companyName"] = ""
+        sample_candidate["dateAdded"] = 0
+        mock_client.search.return_value = [sample_candidate]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate_from_cv(
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+            )
+
+        data = json.loads(result)
+        assert data["duplicate_found"] is True
+        assert "hint" in data
+        mock_client.create.assert_not_called()
+
+    def test_create_from_cv_force_bypasses_dup(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """create_candidate_from_cv force=True skips dup check and creates."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.create.side_effect = [
+            {"changedEntityId": 220, "changeType": "INSERT", "data": {"id": 220}},
+            {"changedEntityId": 221, "changeType": "INSERT", "data": {"id": 221}},
+            {"changedEntityId": 222, "changeType": "INSERT", "data": {"id": 222}},
+            {"changedEntityId": 223, "changeType": "INSERT", "data": {"id": 223}},
+        ]
+        mock_client.update.return_value = {"changedEntityId": 220, "changeType": "UPDATE", "data": {"id": 220}}
+        mock_client.get.return_value = {"id": 220, "skillSet": ""}
+        mock_client.attach_file.return_value = {"fileId": 60}
+        mock_client._guess_content_type.return_value = "application/pdf"
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate_from_cv(
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+                force=True,
+            )
+
+        data = json.loads(result)
+        assert data["created"] is True
+        mock_client.search.assert_not_called()
+
+    def test_create_from_cv_no_input_error(self, mock_client, mock_metadata):
+        """create_candidate_from_cv returns error when neither binary nor text provided."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_candidate_from_cv()
+
+        data = json.loads(result)
+        assert data["error"] == "input_required"
+
+    def test_create_from_cv_child_record_failure_best_effort(self, mock_client, mock_metadata, sample_parsed_resume):
+        """create_candidate_from_cv includes warnings when child records fail."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+
+        def create_side_effect(entity, data):
+            if entity == "Candidate":
+                return {"changedEntityId": 230, "changeType": "INSERT", "data": {"id": 230}}
+            raise BullhornAPIError("Child record failed")
+
+        mock_client.create.side_effect = create_side_effect
+        mock_client.update.side_effect = BullhornAPIError("update failed")
+        mock_client.get.return_value = {"id": 230, "skillSet": ""}
+        mock_client._guess_content_type.return_value = "application/pdf"
+        mock_client.attach_file.return_value = {"fileId": 70}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            result = server.create_candidate_from_cv(
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+            )
+
+        data = json.loads(result)
+        # Candidate was created despite child failures
+        assert data["created"] is True
+        assert data["candidate_id"] == 230
+        # Warnings surfaced for child failures
+        assert "warnings" in data
+        assert len(data["warnings"]) > 0
+
+
+class TestAttachCv:
+    """Tests for attach_cv tool (two-call confirmation flow)."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = []
+        return meta
+
+    def test_attach_cv_preview_returns_diff(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """attach_cv without fields_to_update returns preview diff without writing."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.get.return_value = {
+            **sample_candidate,
+            "occupation": "Junior Developer",
+            "mobile": None,
+        }
+        mock_client.query.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(
+                candidate_id=sample_candidate["id"],
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+            )
+
+        data = json.loads(result)
+        assert data["preview"] is True
+        assert data["candidate_id"] == sample_candidate["id"]
+        assert "proposed_field_changes" in data
+        assert "message" in data
+        # Nothing written
+        mock_client.update.assert_not_called()
+        mock_client.attach_file.assert_not_called()
+
+    def test_attach_cv_commit_applies_selected_fields(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """attach_cv commit applies only fields_to_update and attaches CV."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
+        mock_client.query.return_value = []
+        mock_client.update.return_value = {
+            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE",
+            "data": {**sample_candidate, "occupation": "Senior Software Engineer"},
+        }
+        mock_client.attach_file.return_value = {"fileId": 80, "name": "cv.pdf"}
+        mock_client._guess_content_type.return_value = "application/pdf"
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(
+                candidate_id=sample_candidate["id"],
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+                fields_to_update=["occupation"],
+            )
+
+        data = json.loads(result)
+        assert data["committed"] is True
+        assert "occupation" in data["fields_updated"]
+        assert data["file_attachment"] is not None
+        mock_client.attach_file.assert_called_once()
+
+    def test_attach_cv_force_all_applies_everything(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """attach_cv with force_all=True applies all proposed changes."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
+        mock_client.query.return_value = []
+        mock_client.update.return_value = {
+            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE",
+            "data": {**sample_candidate, "occupation": "Senior Software Engineer"},
+        }
+        mock_client.attach_file.return_value = {"fileId": 81}
+        mock_client._guess_content_type.return_value = "application/pdf"
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(
+                candidate_id=sample_candidate["id"],
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+                force_all=True,
+            )
+
+        data = json.loads(result)
+        assert data["committed"] is True
+        mock_client.attach_file.assert_called_once()
+
+    def test_attach_cv_invalid_base64(self, mock_client, mock_metadata):
+        """attach_cv returns error on malformed base64."""
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(
+                candidate_id=123,
+                file_b64="!not-base64!",
+                filename="cv.pdf",
+            )
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_base64"
+        mock_client.attach_file.assert_not_called()
+
+    def test_attach_cv_api_error(self, mock_client, mock_metadata):
+        """attach_cv returns ERROR: prefix on BullhornAPIError from parse."""
+        import base64
+        mock_client.parse_resume_file.side_effect = BullhornAPIError("Parse failed")
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(
+                candidate_id=123,
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+            )
+
+        assert result.startswith("ERROR:")

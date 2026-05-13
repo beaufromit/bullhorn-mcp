@@ -16,6 +16,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Touch only what you're asked to touch.** No unsolicited refactoring, no removing code you don't understand, no "cleaning up" adjacent systems.
 
+**Always write plans as a CRx.md file** Whenever you write a plan and prompt me to execute, write it as a CRx.md file in the project folder, if i make edits, write those edits to the file before proceeding.
+
 ## Before You Start
 
 For non-trivial tasks, emit a brief plan and your assumptions. Wait for confirmation before proceeding.

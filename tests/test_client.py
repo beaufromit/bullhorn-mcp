@@ -776,3 +776,198 @@ class TestExcludeDeletedFilter:
         url = str(route.calls[0].request.url)
         assert "isDeleted%3Dfalse" in url
         assert "%28%29" not in url  # no empty parens
+
+
+class TestMultipartRequest:
+    """Tests for BullhornClient._request_multipart()."""
+
+    @respx.mock
+    def test_multipart_sends_file(self, mock_auth, mock_session, sample_parsed_resume):
+        """_request_multipart() sends a multipart/form-data request."""
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidate").mock(
+            return_value=httpx.Response(200, json=sample_parsed_resume)
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client._request_multipart(
+            "POST",
+            "/resume/parseToCandidate",
+            files={"resume": ("cv.pdf", b"%PDF-fake", "application/pdf")},
+        )
+
+        assert route.called
+        # Response body is returned
+        assert result["candidate"]["firstName"] == "Jane"
+
+    @respx.mock
+    def test_multipart_refresh_on_401(self, mock_auth, mock_session, sample_parsed_resume):
+        """_request_multipart() retries after 401 and calls _refresh_session."""
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidate")
+        route.side_effect = [
+            httpx.Response(401, text="Unauthorized"),
+            httpx.Response(200, json=sample_parsed_resume),
+        ]
+
+        client = BullhornClient(mock_auth)
+        result = client._request_multipart(
+            "POST",
+            "/resume/parseToCandidate",
+            files={"resume": ("cv.pdf", b"%PDF-fake", "application/pdf")},
+        )
+
+        assert mock_auth._refresh_session.called
+        assert result["candidate"]["firstName"] == "Jane"
+
+    @respx.mock
+    def test_multipart_raises_on_api_error(self, mock_auth, mock_session):
+        """_request_multipart() raises BullhornAPIError on non-200/201 response."""
+        respx.post(f"{mock_session.rest_url}/resume/parseToCandidate").mock(
+            return_value=httpx.Response(400, text="Bad Request")
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError) as exc_info:
+            client._request_multipart(
+                "POST",
+                "/resume/parseToCandidate",
+                files={"resume": ("cv.pdf", b"fake", "application/pdf")},
+            )
+
+        assert "400" in str(exc_info.value)
+
+
+class TestParseResume:
+    """Tests for BullhornClient.parse_resume_file() and parse_resume_text()."""
+
+    @respx.mock
+    def test_parse_resume_file_calls_endpoint(self, mock_auth, mock_session, sample_parsed_resume):
+        """parse_resume_file() sends to /resume/parseToCandidate with correct params."""
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidate").mock(
+            return_value=httpx.Response(200, json=sample_parsed_resume)
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.parse_resume_file(b"%PDF-fake", "resume.pdf", "pdf")
+
+        assert route.called
+        url = str(route.calls[0].request.url)
+        assert "format=pdf" in url
+        assert "populateDescription=true" in url
+        assert result["candidate"]["email"] == "jane.doe@example.com"
+
+    @respx.mock
+    def test_parse_resume_file_infers_content_type(self, mock_auth, mock_session, sample_parsed_resume):
+        """parse_resume_file() uses the correct MIME type for known formats."""
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidate").mock(
+            return_value=httpx.Response(200, json=sample_parsed_resume)
+        )
+
+        client = BullhornClient(mock_auth)
+        client.parse_resume_file(b"fake-docx-bytes", "resume.docx", "docx")
+
+        # Content-type header in multipart boundary — check that request was sent
+        assert route.called
+
+    @respx.mock
+    def test_parse_resume_text_uses_json_body(self, mock_auth, mock_session, sample_parsed_resume):
+        """parse_resume_text() POSTs JSON to /resume/parseToCandidateViaJson."""
+        import json as _json
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidateViaJson").mock(
+            return_value=httpx.Response(200, json=sample_parsed_resume)
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.parse_resume_text("Jane Doe\nEngineer\njane@example.com", "text/plain")
+
+        assert route.called
+        body = _json.loads(route.calls[0].request.content)
+        assert body["resume"] == "Jane Doe\nEngineer\njane@example.com"
+        assert body["type"] == "text/plain"
+        assert body["format"] == "text"
+        assert result["candidate"]["firstName"] == "Jane"
+
+    @respx.mock
+    def test_parse_resume_text_html_type(self, mock_auth, mock_session, sample_parsed_resume):
+        """parse_resume_text() passes content_type through to the JSON body."""
+        import json as _json
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidateViaJson").mock(
+            return_value=httpx.Response(200, json=sample_parsed_resume)
+        )
+
+        client = BullhornClient(mock_auth)
+        client.parse_resume_text("<html><body>Jane Doe</body></html>", "text/html")
+
+        body = _json.loads(route.calls[0].request.content)
+        assert body["type"] == "text/html"
+
+    def test_guess_content_type_known_formats(self, mock_auth):
+        """_guess_content_type returns correct MIME type for known formats."""
+        client = BullhornClient(mock_auth)
+        assert client._guess_content_type("pdf") == "application/pdf"
+        assert client._guess_content_type("doc") == "application/msword"
+        assert client._guess_content_type("html") == "text/html"
+        assert client._guess_content_type("text") == "text/plain"
+
+    def test_guess_content_type_unknown_falls_back(self, mock_auth):
+        """_guess_content_type returns application/octet-stream for unknown format."""
+        client = BullhornClient(mock_auth)
+        assert client._guess_content_type("xyz") == "application/octet-stream"
+
+
+class TestAttachFile:
+    """Tests for BullhornClient.attach_file()."""
+
+    @respx.mock
+    def test_attach_file_puts_to_raw_endpoint(self, mock_auth, mock_session):
+        """attach_file() PUTs to /file/{entity}/{id}/raw."""
+        route = respx.put(f"{mock_session.rest_url}/file/Candidate/123/raw").mock(
+            return_value=httpx.Response(200, json={"fileId": 55, "name": "cv.pdf"})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.attach_file("Candidate", 123, b"%PDF-fake", "cv.pdf", "application/pdf")
+
+        assert route.called
+        assert result["fileId"] == 55
+
+    @respx.mock
+    def test_attach_file_sends_query_params(self, mock_auth, mock_session):
+        """attach_file() passes externalID and fileType as query parameters."""
+        route = respx.put(f"{mock_session.rest_url}/file/Candidate/123/raw").mock(
+            return_value=httpx.Response(200, json={"fileId": 66})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.attach_file(
+            "Candidate", 123, b"%PDF-fake", "cv.pdf", "application/pdf",
+            external_id="EXT-001", file_type="CV",
+        )
+
+        url = str(route.calls[0].request.url)
+        assert "externalID=EXT-001" in url
+        assert "fileType=CV" in url
+
+    @respx.mock
+    def test_attach_file_no_optional_params(self, mock_auth, mock_session):
+        """attach_file() omits externalID and fileType query params when not provided."""
+        route = respx.put(f"{mock_session.rest_url}/file/Candidate/456/raw").mock(
+            return_value=httpx.Response(200, json={"fileId": 77})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.attach_file("Candidate", 456, b"data", "resume.pdf", "application/pdf")
+
+        url = str(route.calls[0].request.url)
+        assert "externalID" not in url
+        assert "fileType" not in url
+
+    @respx.mock
+    def test_attach_file_raises_on_api_error(self, mock_auth, mock_session):
+        """attach_file() raises BullhornAPIError on non-200/201 response."""
+        respx.put(f"{mock_session.rest_url}/file/Candidate/123/raw").mock(
+            return_value=httpx.Response(400, text="Bad Request")
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError):
+            client.attach_file("Candidate", 123, b"data", "cv.pdf", "application/pdf")

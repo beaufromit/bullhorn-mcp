@@ -59,3 +59,50 @@ def sample_candidate():
         "dateAdded": 1704067200000,
         "occupation": "Software Developer",
     }
+
+
+@pytest.fixture
+def sample_parsed_resume():
+    """Realistic Bullhorn /resume/parseToCandidate response fixture."""
+    return {
+        "candidate": {
+            "firstName": "Jane",
+            "lastName": "Doe",
+            "email": "jane.doe@example.com",
+            "phone": "555-0001",
+            "occupation": "Senior Software Engineer",
+            "companyName": "Acme Corp",
+            "skillSet": "",
+            "address": {"city": "New York", "state": "NY", "zip": "10001"},
+        },
+        "candidateEducation": [
+            {
+                "school": "MIT",
+                "degree": "Bachelor of Science",
+                "major": "Computer Science",
+                "startDate": 1072915200000,
+                "endDate": 1199145600000,
+            }
+        ],
+        "candidateWorkHistory": [
+            {
+                "companyName": "Acme Corp",
+                "title": "Senior Software Engineer",
+                "startDate": 1514764800000,
+                "endDate": None,
+                "comments": "Led platform team.",
+            },
+            {
+                "companyName": "Beta Systems",
+                "title": "Software Engineer",
+                "startDate": 1388534400000,
+                "endDate": 1514764800000,
+                "comments": "Built internal tooling.",
+            },
+        ],
+        "skillList": [
+            {"id": 100, "name": "Python"},
+            {"id": 101, "name": "PostgreSQL"},
+            {"id": None, "name": "Obscure Framework"},
+        ],
+    }

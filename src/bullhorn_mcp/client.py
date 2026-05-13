@@ -67,6 +67,117 @@ class BullhornClient:
 
             return response.json()
 
+    def _guess_content_type(self, format: str) -> str:
+        """Return a MIME type for a known CV file format."""
+        return {
+            "pdf": "application/pdf",
+            "doc": "application/msword",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "html": "text/html",
+            "text": "text/plain",
+            "txt": "text/plain",
+        }.get(format.lower(), "application/octet-stream")
+
+    def _request_multipart(
+        self,
+        method: str,
+        endpoint: str,
+        files: dict,
+        params: dict[str, Any] | None = None,
+        timeout: float = 60.0,
+    ) -> dict[str, Any]:
+        """Make an authenticated multipart request to Bullhorn API."""
+        session = self.auth.session
+
+        url = f"{session.rest_url}{endpoint}"
+        headers = {"BhRestToken": session.bh_rest_token}
+
+        with httpx.Client(timeout=httpx.Timeout(timeout)) as client:
+            response = client.request(method, url, files=files, params=params, headers=headers)
+
+            if response.status_code == 401:
+                self.auth._refresh_session()
+                session = self.auth.session
+                headers = {"BhRestToken": session.bh_rest_token}
+                response = client.request(method, url, files=files, params=params, headers=headers)
+
+            if response.status_code not in (200, 201):
+                raise BullhornAPIError(
+                    f"API request failed: {response.status_code} - {response.text}"
+                )
+
+            return response.json()
+
+    def parse_resume_file(
+        self, file_bytes: bytes, filename: str, format: str = "pdf"
+    ) -> dict[str, Any]:
+        """Parse a binary CV file via Bullhorn's resume parser.
+
+        Args:
+            file_bytes: Raw file bytes (PDF, DOC, DOCX, HTML, text)
+            filename: Original filename (used in the multipart upload)
+            format: File format hint (pdf, doc, docx, html, text)
+
+        Returns:
+            Parsed resume data: candidate, candidateEducation, candidateWorkHistory, skillList
+        """
+        content_type = self._guess_content_type(format)
+        files = {"resume": (filename, file_bytes, content_type)}
+        params = {"format": format, "populateDescription": "true"}
+        return self._request_multipart("POST", "/resume/parseToCandidate", files=files, params=params)
+
+    def parse_resume_text(
+        self, content: str, content_type: str = "text/plain"
+    ) -> dict[str, Any]:
+        """Parse pasted CV text via Bullhorn's JSON resume parser.
+
+        Args:
+            content: Plain text or HTML CV content
+            content_type: MIME type of the content (text/plain or text/html)
+
+        Returns:
+            Parsed resume data: candidate, candidateEducation, candidateWorkHistory, skillList
+        """
+        body = {"resume": content, "type": content_type, "format": "text"}
+        return self._request("POST", "/resume/parseToCandidateViaJson", json=body)
+
+    def attach_file(
+        self,
+        entity: str,
+        entity_id: int,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str,
+        external_id: str | None = None,
+        file_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Attach a file to an entity record via Bullhorn's raw file upload.
+
+        Args:
+            entity: Entity type (e.g. Candidate)
+            entity_id: Entity ID
+            file_bytes: Raw file bytes
+            filename: Filename used in Bullhorn
+            content_type: MIME type of the file
+            external_id: Optional externalID for the file attachment
+            file_type: Optional fileType (e.g. "CV")
+
+        Returns:
+            File attachment metadata from Bullhorn
+        """
+        files = {"file": (filename, file_bytes, content_type)}
+        params: dict[str, Any] = {}
+        if external_id is not None:
+            params["externalID"] = external_id
+        if file_type is not None:
+            params["fileType"] = file_type
+        return self._request_multipart(
+            "PUT",
+            f"/file/{entity}/{entity_id}/raw",
+            files=files,
+            params=params or None,
+        )
+
     def create(self, entity: str, data: dict[str, Any]) -> dict[str, Any]:
         """Create a new entity in Bullhorn.
 

@@ -231,6 +231,28 @@ With these set, callers can use `"sector"`, `"salary range"`, and `"location"` a
 
 Invalid JSON in any of these variables logs a warning and falls back to the empty default. The server starts normally.
 
+### Candidate Per-instance Configuration
+
+Bullhorn custom field names vary between instances. Three optional environment variables allow operators to configure `create_candidate` and `create_candidate_from_cv` for their specific setup without code changes.
+
+| Variable | Format | Purpose |
+|----------|--------|---------|
+| `BULLHORN_CANDIDATE_ALIASES` | JSON object | Map friendly names to API field names. Keys are lowercased. Env entries override hardcoded aliases on conflict. |
+| `BULLHORN_CANDIDATE_REQUIRED` | JSON array | Additional fields required beyond `firstName` and `lastName`. Entries may be aliases. |
+| `BULLHORN_CANDIDATE_DEFAULTS` | JSON object | Default values applied when caller omits a field. Caller values always win. |
+
+Example (set in `.env` or environment):
+
+```
+BULLHORN_CANDIDATE_ALIASES='{"vertical": "customText1", "notice period": "customText2"}'
+BULLHORN_CANDIDATE_REQUIRED='["source"]'
+BULLHORN_CANDIDATE_DEFAULTS='{"status": "Active", "source": "Internal"}'
+```
+
+With these set, callers can use `"vertical"` and `"notice period"` as keys in `fields` and they resolve to the correct custom fields. Use `get_entity_fields("Candidate")` to discover the API field names for your instance.
+
+Invalid JSON in any of these variables logs a warning and falls back to the empty default. The server starts normally.
+
 ## Hosted Authentication Model
 
 When running in HTTP mode, the server requires Microsoft Entra authentication and resolves the authenticated caller to a Bullhorn `CorporateUser` by email.

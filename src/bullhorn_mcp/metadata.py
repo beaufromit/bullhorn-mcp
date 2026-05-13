@@ -1,6 +1,7 @@
 """Bullhorn entity field metadata and label resolution."""
 
 from .client import BullhornClient
+from .candidate_config import get_candidate_aliases
 from .joborder_config import get_joborder_aliases
 
 # Hardcoded aliases for known cases where Bullhorn's metadata labels do not
@@ -20,6 +21,10 @@ from .joborder_config import get_joborder_aliases
 # load. Env entries override hardcoded ones on conflict so operators can correct
 # instance-specific mappings without code changes (BULLHORN_JOBORDER_ALIASES).
 FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "Candidate": {
+        "job title": "occupation",
+        **get_candidate_aliases(),
+    },
     "ClientContact": {
         "job title": "occupation",
     },
