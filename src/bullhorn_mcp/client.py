@@ -324,25 +324,51 @@ class BullhornClient:
         record = self.get(entity, entity_id)
         return {"changedEntityId": entity_id, "changeType": "UPDATE", "data": record}
 
-    def add_note(self, entity: str, entity_id: int, action: str, comments: str) -> dict[str, Any]:
-        """Add a Note entity linked to a ClientContact or ClientCorporation.
+    def add_note(
+        self,
+        entity: str,
+        entity_id: int,
+        action: str,
+        comments: str,
+        commenting_person_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Add a Note entity linked to a Bullhorn record.
 
         Args:
-            entity: "ClientContact" or "ClientCorporation"
+            entity: One of "Candidate", "ClientContact", "ClientCorporation",
+                "JobOrder", "Placement", "Lead", or "Opportunity"
             entity_id: ID of the entity to attach the note to
             action: Note action type (e.g. "General Note")
             comments: Note body text
+            commenting_person_id: CorporateUser ID of the note author.
+                When provided, sets commentingPerson on the Note.
 
         Returns:
             Dict with changedEntityId, changeType, and full Note record data
-        """
-        payload: dict[str, Any] = {"action": action, "comments": comments}
 
-        if entity == "ClientContact":
-            payload["personReference"] = {"id": entity_id}
-            payload["commentingPerson"] = {"id": entity_id}
-        elif entity == "ClientCorporation":
-            payload["clientCorporation"] = {"id": entity_id}
+        Raises:
+            ValueError: If entity is not one of the supported types
+        """
+        _ENTITY_FIELD: dict[str, tuple[str, Any]] = {
+            "Candidate": ("personReference", {"id": entity_id}),
+            "ClientContact": ("personReference", {"id": entity_id}),
+            "ClientCorporation": ("clientCorporation", {"id": entity_id}),
+            "JobOrder": ("jobOrder", {"id": entity_id}),
+            "Placement": ("placements", [{"id": entity_id}]),
+            "Lead": ("leads", [{"id": entity_id}]),
+            "Opportunity": ("opportunities", [{"id": entity_id}]),
+        }
+
+        if entity not in _ENTITY_FIELD:
+            supported = ", ".join(sorted(_ENTITY_FIELD))
+            raise ValueError(f"add_note does not support entity '{entity}'. Supported: {supported}")
+
+        payload: dict[str, Any] = {"action": action, "comments": comments}
+        field_name, field_value = _ENTITY_FIELD[entity]
+        payload[field_name] = field_value
+
+        if commenting_person_id is not None:
+            payload["commentingPerson"] = {"id": commenting_person_id}
 
         result = self._request("PUT", "/entity/Note", json=payload)
         note_id = result["changedEntityId"]

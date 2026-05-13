@@ -984,12 +984,24 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
         return f"ERROR: {e}"
 
 
+_NOTE_TARGET_ENTITIES = {
+    "Candidate",
+    "ClientContact",
+    "ClientCorporation",
+    "JobOrder",
+    "Placement",
+    "Lead",
+    "Opportunity",
+}
+
+
 @mcp.tool()
 def add_note(entity: str, entity_id: int, action: str, comments: str) -> str:
-    """Add a Note to a ClientContact or ClientCorporation record.
+    """Add a Note to a Bullhorn record.
 
     Args:
-        entity: "ClientContact" or "ClientCorporation"
+        entity: One of "Candidate", "ClientContact", "ClientCorporation",
+            "JobOrder", "Placement", "Lead", or "Opportunity"
         entity_id: Bullhorn ID of the record to attach the note to
         action: Note action type — must match a valid action in your Bullhorn instance (e.g. "General Note")
         comments: Note body text
@@ -998,19 +1010,32 @@ def add_note(entity: str, entity_id: int, action: str, comments: str) -> str:
         JSON object with changedEntityId, changeType, and full Note record data.
 
     Examples:
+        - add_note("Candidate", 11111, "General Note", "Strong fit for senior roles")
         - add_note("ClientContact", 54321, "General Note", "Discovered via weekly scan")
         - add_note("ClientCorporation", 98765, "General Note", "PE-backed, growing headcount")
+        - add_note("JobOrder", 22222, "General Note", "Role put on hold pending budget approval")
+        - add_note("Placement", 33333, "General Note", "Candidate started — all good")
     """
     try:
         client = get_client()
 
-        if entity not in ("ClientContact", "ClientCorporation"):
+        if entity not in _NOTE_TARGET_ENTITIES:
             return format_response({
                 "error": "invalid_entity",
-                "message": f"add_note only supports ClientContact or ClientCorporation, got '{entity}'.",
+                "message": (
+                    f"add_note does not support entity '{entity}'. "
+                    f"Supported: {', '.join(sorted(_NOTE_TARGET_ENTITIES))}."
+                ),
             })
 
-        result = client.add_note(entity, entity_id, action, comments)
+        commenting_person_id = None
+        try:
+            caller = resolve_caller(client)
+            commenting_person_id = caller["id"]
+        except IdentityResolutionError:
+            pass
+
+        result = client.add_note(entity, entity_id, action, comments, commenting_person_id=commenting_person_id)
         return format_response(result)
 
     except (AuthenticationError, BullhornAPIError) as e:

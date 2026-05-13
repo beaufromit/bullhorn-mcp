@@ -479,17 +479,27 @@ class TestUpdateEntity:
 class TestAddNote:
     """Tests for BullhornClient.add_note()."""
 
+    def _mock_note_put_get(self, rest_url: str, note_id: int, extra_fields: dict | None = None):
+        """Register respx mocks for PUT /entity/Note and GET /entity/Note/{id}."""
+        import json as _json
+        respx.put(f"{rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": note_id, "changeType": "INSERT"})
+        )
+        data = {"id": note_id, "action": "General Note", **(extra_fields or {})}
+        respx.get(f"{rest_url}/entity/Note/{note_id}").mock(
+            return_value=httpx.Response(200, json={"data": data})
+        )
+
     @respx.mock
     def test_add_note_to_contact(self, mock_auth, mock_session):
-        """add_note() for ClientContact sets personReference and commentingPerson."""
+        """add_note() for ClientContact sets personReference; no commentingPerson without commenting_person_id."""
         route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
             return_value=httpx.Response(200, json={"changedEntityId": 88901, "changeType": "INSERT"})
         )
         respx.get(f"{mock_session.rest_url}/entity/Note/88901").mock(
             return_value=httpx.Response(
                 200,
-                json={"data": {"id": 88901, "action": "General Note",
-                               "personReference": {"id": 54321}}},
+                json={"data": {"id": 88901, "action": "General Note", "personReference": {"id": 54321}}},
             )
         )
 
@@ -498,12 +508,28 @@ class TestAddNote:
 
         assert result["changedEntityId"] == 88901
         assert result["changeType"] == "INSERT"
-        import json as _json
-        body = _json.loads(route.calls[0].request.content)
+        body = __import__("json").loads(route.calls[0].request.content)
         assert body["personReference"] == {"id": 54321}
-        assert body["commentingPerson"] == {"id": 54321}
+        assert "commentingPerson" not in body
         assert body["action"] == "General Note"
         assert body["comments"] == "Test note"
+
+    @respx.mock
+    def test_add_note_with_commenting_person(self, mock_auth, mock_session):
+        """add_note() sets commentingPerson when commenting_person_id is passed."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88910, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88910").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88910}})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.add_note("ClientContact", 54321, "General Note", "note", commenting_person_id=42)
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["commentingPerson"] == {"id": 42}
+        assert body["personReference"] == {"id": 54321}
 
     @respx.mock
     def test_add_note_to_company(self, mock_auth, mock_session):
@@ -526,6 +552,99 @@ class TestAddNote:
         assert body["clientCorporation"] == {"id": 98765}
         assert "personReference" not in body
         assert result["changedEntityId"] == 88902
+
+    @respx.mock
+    def test_add_note_to_candidate(self, mock_auth, mock_session):
+        """add_note() for Candidate sets personReference."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88903, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88903").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88903}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note("Candidate", 11111, "General Note", "Strong fit")
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["personReference"] == {"id": 11111}
+        assert "clientCorporation" not in body
+        assert result["changedEntityId"] == 88903
+
+    @respx.mock
+    def test_add_note_to_job_order(self, mock_auth, mock_session):
+        """add_note() for JobOrder sets jobOrder field."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88904, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88904").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88904}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note("JobOrder", 22222, "General Note", "On hold")
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["jobOrder"] == {"id": 22222}
+        assert "personReference" not in body
+        assert result["changedEntityId"] == 88904
+
+    @respx.mock
+    def test_add_note_to_placement(self, mock_auth, mock_session):
+        """add_note() for Placement sets placements as a list."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88905, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88905").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88905}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note("Placement", 33333, "General Note", "Candidate started")
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["placements"] == [{"id": 33333}]
+        assert result["changedEntityId"] == 88905
+
+    @respx.mock
+    def test_add_note_to_lead(self, mock_auth, mock_session):
+        """add_note() for Lead sets leads as a list."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88906, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88906").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88906}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note("Lead", 44444, "General Note", "Promising lead")
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["leads"] == [{"id": 44444}]
+        assert result["changedEntityId"] == 88906
+
+    @respx.mock
+    def test_add_note_to_opportunity(self, mock_auth, mock_session):
+        """add_note() for Opportunity sets opportunities as a list."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88907, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88907").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88907}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note("Opportunity", 55555, "General Note", "In negotiation")
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["opportunities"] == [{"id": 55555}]
+        assert result["changedEntityId"] == 88907
+
+    def test_add_note_unsupported_entity_raises(self, mock_auth, mock_session):
+        """add_note() raises ValueError for an unsupported entity type."""
+        client = BullhornClient(mock_auth)
+        with pytest.raises(ValueError, match="add_note does not support entity 'FooBar'"):
+            client.add_note("FooBar", 1, "x", "y")
 
     @respx.mock
     def test_add_note_raises_on_api_error(self, mock_auth, mock_session):

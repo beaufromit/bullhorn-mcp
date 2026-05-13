@@ -1291,31 +1291,86 @@ class TestAddNote:
 
     def test_add_note_to_contact_success(self, mock_client):
         """add_note returns Note ID on success."""
+        from bullhorn_mcp.identity import IdentityResolutionError
         mock_client.add_note.return_value = {
             "changedEntityId": 88901,
             "changeType": "INSERT",
             "data": {"id": 88901, "action": "General Note", "comments": "Test"},
         }
-        with patch.object(server, "get_client", return_value=mock_client):
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
             result = server.add_note("ClientContact", 54321, "General Note", "Test")
 
         data = json.loads(result)
         assert data["changedEntityId"] == 88901
         assert data["changeType"] == "INSERT"
 
+    def test_add_note_to_candidate_success(self, mock_client):
+        """add_note works for Candidate entity."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        mock_client.add_note.return_value = {
+            "changedEntityId": 88903,
+            "changeType": "INSERT",
+            "data": {"id": 88903, "action": "General Note"},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            result = server.add_note("Candidate", 11111, "General Note", "Strong fit")
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 88903
+        mock_client.add_note.assert_called_once_with(
+            "Candidate", 11111, "General Note", "Strong fit", commenting_person_id=None
+        )
+
     def test_add_note_invalid_entity(self, mock_client):
         """add_note returns error for unsupported entity type."""
         with patch.object(server, "get_client", return_value=mock_client):
-            result = server.add_note("JobOrder", 1, "General Note", "Test")
+            result = server.add_note("FooBar", 1, "General Note", "Test")
 
         data = json.loads(result)
         assert data["error"] == "invalid_entity"
         mock_client.add_note.assert_not_called()
 
+    def test_add_note_resolves_caller_for_commenting_person(self, mock_client):
+        """add_note passes caller id as commenting_person_id when identity resolves."""
+        mock_client.add_note.return_value = {
+            "changedEntityId": 88904,
+            "changeType": "INSERT",
+            "data": {"id": 88904},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", return_value={"id": 99, "email": "me@firm.com"}):
+            server.add_note("JobOrder", 22222, "General Note", "On hold")
+
+        mock_client.add_note.assert_called_once_with(
+            "JobOrder", 22222, "General Note", "On hold", commenting_person_id=99
+        )
+
+    def test_add_note_handles_identity_resolution_error(self, mock_client):
+        """add_note falls back to commenting_person_id=None when identity resolution fails."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        mock_client.add_note.return_value = {
+            "changedEntityId": 88905,
+            "changeType": "INSERT",
+            "data": {"id": 88905},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            result = server.add_note("Placement", 33333, "General Note", "Started")
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 88905
+        mock_client.add_note.assert_called_once_with(
+            "Placement", 33333, "General Note", "Started", commenting_person_id=None
+        )
+
     def test_add_note_api_error(self, mock_client):
         """add_note returns ERROR prefix on API failure."""
+        from bullhorn_mcp.identity import IdentityResolutionError
         mock_client.add_note.side_effect = BullhornAPIError("invalid action type")
-        with patch.object(server, "get_client", return_value=mock_client):
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
             result = server.add_note("ClientContact", 1, "Bad Action", "note")
         assert result.startswith("ERROR:")
 
