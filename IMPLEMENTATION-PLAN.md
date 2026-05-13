@@ -6,7 +6,7 @@ PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user sto
 
 **Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
 
-**Current validation note:** Sprints 1-26 are implemented and tested, with 389 tests passing, tagged v0.0.26. Sprint 26 completed CR18: new `descriptions.py` module with `enrich_tool_descriptions()` called in `main()` before `mcp.run()`; fetches `/meta/{entity}` at startup for 9 entity types and appends compact field summaries to all relevant tool descriptions; `BullhornMetadata.get_fields()` extended to retain picklist `options` in its projection; picklist values inlined for `status`, `employmentType`, `category`, `type`, `source` fields; graceful fallback to static docstrings if Bullhorn is unreachable at boot. Review cycle fixes: `enrich_tool_descriptions` now returns its `BullhornMetadata` instance which is stored as `_metadata` in `main()` (avoids double /meta round-trips at runtime); `get_entity_fields` added to `TOOL_ENTITY_MAP` with all supported entities. Sprint 25 completed CR17: added `JobSubmission` to `DEFAULT_FIELDS` in `client.py` with a safe explicit field list (`id,status,dateAdded,candidate,jobOrder,sendingUser`) to fix `errors.allFieldsNotAllowed` errors that occurred when `shortlist_candidates` fetched `fields=*` after writing a JobSubmission. CR16 and CR17 code changes were bundled in one commit (5b269de) since they were interleaved in the same files. Sprint 24 completed CR16: added `exclude_deleted=True` default to `BullhornClient.search()` and `BullhornClient.query()` to blanket-filter soft-deleted records from all searches; removed redundant `isDeleted:0` call-site filters in `list_*` tools and `_shortlist_one`; renamed `_company_name_search_query` to `_company_broad_query` (no longer leaks an `isDeleted:0` filter inconsistently); added regression tests confirming `find_duplicate_companies`, `find_duplicate_contacts`, `create_contact` dedup, `search_entities`, and `query_entities` all exclude deleted records. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
+**Current validation note:** Sprints 1-28 are implemented and tested, with 461 tests passing, tagged v0.0.28. Sprint 26 completed CR18: new `descriptions.py` module with `enrich_tool_descriptions()` called in `main()` before `mcp.run()`; fetches `/meta/{entity}` at startup for 9 entity types and appends compact field summaries to all relevant tool descriptions; `BullhornMetadata.get_fields()` extended to retain picklist `options` in its projection; picklist values inlined for `status`, `employmentType`, `category`, `type`, `source` fields; graceful fallback to static docstrings if Bullhorn is unreachable at boot. Review cycle fixes: `enrich_tool_descriptions` now returns its `BullhornMetadata` instance which is stored as `_metadata` in `main()` (avoids double /meta round-trips at runtime); `get_entity_fields` added to `TOOL_ENTITY_MAP` with all supported entities. Sprint 25 completed CR17: added `JobSubmission` to `DEFAULT_FIELDS` in `client.py` with a safe explicit field list (`id,status,dateAdded,candidate,jobOrder,sendingUser`) to fix `errors.allFieldsNotAllowed` errors that occurred when `shortlist_candidates` fetched `fields=*` after writing a JobSubmission. CR16 and CR17 code changes were bundled in one commit (5b269de) since they were interleaved in the same files. Sprint 24 completed CR16: added `exclude_deleted=True` default to `BullhornClient.search()` and `BullhornClient.query()` to blanket-filter soft-deleted records from all searches; removed redundant `isDeleted:0` call-site filters in `list_*` tools and `_shortlist_one`; renamed `_company_name_search_query` to `_company_broad_query` (no longer leaks an `isDeleted:0` filter inconsistently); added regression tests confirming `find_duplicate_companies`, `find_duplicate_contacts`, `create_contact` dedup, `search_entities`, and `query_entities` all exclude deleted records. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
 
 **Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete for their original scope. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
 
@@ -46,6 +46,8 @@ PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user sto
 | Sprint 24 | **COMPLETE** | CR16: Blanket soft-delete filter — `exclude_deleted=True` default on `BullhornClient.search()` and `BullhornClient.query()`; clean up redundant `isDeleted:0` call-site filters; regression tests for dedup and pass-through tools — 366 tests passing, tagged v0.0.24 |
 | Sprint 25 | **COMPLETE** | CR17: Fix JobSubmission fields=* error — add JobSubmission to DEFAULT_FIELDS with safe field list; fix shortlist_candidates false-negative — 369 tests passing, tagged v0.0.25 |
 | Sprint 26 | **COMPLETE** | CR18: Dynamic tool descriptions from Bullhorn /meta at startup — new `descriptions.py` module; `enrich_tool_descriptions()` runs in `main()` before `mcp.run()`; `BullhornMetadata.get_fields()` extended to retain picklist options; all 9 entity types covered; graceful fallback on auth/network failure; startup metadata reused as runtime cache; `get_entity_fields` added to TOOL_ENTITY_MAP — 389 tests passing, tagged v0.0.26 |
+| Sprint 27 | **COMPLETE** | CR19: Candidate creation and CV parsing — 6 new tools (`create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`); new `candidate_config.py`; multipart CV upload; two-call commit pattern for `attach_cv` — 450 tests passing, tagged v0.0.27 |
+| Sprint 28 | **COMPLETE** | CR20: Extend `add_note` to 7 entity types; fix `commentingPerson` bug; `commenting_person_id` param resolved via `resolve_caller()` — 461 tests passing, tagged v0.0.28 |
 
 ### Sprint 15 post-tag regression note
 
@@ -67,9 +69,9 @@ These are fixed as the first tasks in Sprint 16.
 ### Existing modules (implemented)
 - `src/bullhorn_mcp/config.py` — `BullhornConfig` dataclass with env loading
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
-- `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note()`
+- `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note(commenting_person_id)`, `_request_multipart`, `parse_resume_file`, `parse_resume_text`, `attach_file`; `_ENTITY_FIELD` dispatch dict in `add_note` maps each of 7 entity types to its Note association field name
 - `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant extended at module load with env-defined JobOrder aliases via `joborder_config.get_joborder_aliases()`; `FIELD_ALIASES["JobSubmission"] = {}` reserved slot.
-- `src/bullhorn_mcp/server.py` — MCP server with 20 implemented tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()` helpers.
+- `src/bullhorn_mcp/server.py` — MCP server with 27 implemented tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()` helpers; `_NOTE_TARGET_ENTITIES` set (Candidate, ClientContact, ClientCorporation, JobOrder, Placement, Lead, Opportunity); `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()` private helpers.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
@@ -92,7 +94,8 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_identity.py` — 13 tests (Entra token to CorporateUser resolution, per-user cache)
 - `tests/test_joborder_config.py` — 10 tests (env config loaders for aliases/required/defaults)
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
-- **Total: 340 tests, all passing**
+- `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
+- **Total: 461 tests, all passing**
 
 ---
 
@@ -2286,3 +2289,41 @@ The required-fields check from `get_candidate_required()` was never applied in t
 ### Expected test count after Sprint 27
 
 Previous: 389. Added 6-tool test suite in `test_candidate_tools.py` + 2 review-cycle regression tests. **Actual: 450 passing, 0 failing.**
+
+---
+
+## Sprint 28 — CR20: Extend `add_note` to 7 entity types
+
+### What was built
+
+Extended `add_note` in `server.py` and `BullhornClient.add_note()` in `client.py` to support 7 entity types: Candidate, ClientContact, ClientCorporation, JobOrder, Placement, Lead, Opportunity (previously only ClientContact and ClientCorporation were supported).
+
+Added `commenting_person_id: int | None` parameter to `BullhornClient.add_note()`; the `add_note` MCP tool in `server.py` resolves this from `resolve_caller()` with a graceful `IdentityResolutionError` fallback (omits `commentingPerson` from the payload rather than failing).
+
+**Bug fixed:** `commentingPerson` was previously mis-set to the target contact's entity ID. It is now correctly set to the calling user's CorporateUser ID, sourced from `resolve_caller()`.
+
+Added `_NOTE_TARGET_ENTITIES` set in `server.py` to gate the `entity_type` parameter. Added `_ENTITY_FIELD` dispatch dict in `client.py` to map each entity type to its Bullhorn Note association field name and association style.
+
+### Files changed
+
+- `src/bullhorn_mcp/server.py`: `add_note` tool updated — `_NOTE_TARGET_ENTITIES` set, `entity_id` param added, `commenting_person_id` resolved via `resolve_caller()`; `ValueError` added to except clause.
+- `src/bullhorn_mcp/client.py`: `add_note()` signature extended with `commenting_person_id` param; `_ENTITY_FIELD` dispatch dict added; to-many association fields (Placement, Lead, Opportunity) use `[{"id": id}]` list-of-id-dicts; single-valued fields (Candidate/ClientContact use `personReference`, ClientCorporation uses `clientCorporation`, JobOrder uses `jobOrder`).
+
+### Key patterns
+
+- `_NOTE_TARGET_ENTITIES` in `server.py` and `_ENTITY_FIELD` in `client.py` must be kept in sync whenever a new entity type is added.
+- Bullhorn Note to-many associations (Placement, Lead, Opportunity) require a list of ID dicts: `[{"id": entity_id}]`.
+- Bullhorn Note single-valued associations: `personReference` for Candidate/ClientContact, `clientCorporation` for ClientCorporation, `jobOrder` for JobOrder.
+
+### Review cycle findings
+
+One finding was identified and fixed during the Sprint 28 review cycle.
+
+**M1 — `ValueError` from `resolve_caller()` was not caught.**
+The `add_note` tool's except clause only caught `Exception`; a `ValueError` raised by `resolve_caller()` when the caller's Bullhorn user cannot be resolved would propagate uncaught. Fixed by adding `ValueError` to the except clause alongside the existing `IdentityResolutionError` fallback path.
+
+**Final state: 461 tests passing, 0 failing. Tagged v0.0.28.**
+
+### Expected test count after Sprint 28
+
+Previous: 450. Added tests covering 7-entity `add_note` dispatch, `commentingPerson` fix, and M1 ValueError guard. **Actual: 461 passing, 0 failing.** Tagged v0.0.28.

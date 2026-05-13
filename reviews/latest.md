@@ -1,8 +1,8 @@
-# Review: Add tests for post-resolution clientCorporation guard and create_candidate_from_cv required-fields path
+# Review: Catch ValueError in add_note to guard against entity/dispatch divergence
 
-**Commit:** 5aac9e5
+**Commit:** f154ff0
 **Date:** 2026-05-13
-**Files changed:** 2
+**Files changed:** 3
 
 ## CRITICAL
 
