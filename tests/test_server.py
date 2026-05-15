@@ -79,6 +79,23 @@ class TestListJobs:
         assert "ERROR:" in result
         assert "API Error" in result
 
+    def test_list_jobs_start_forwarded(self, mock_client):
+        """start is passed through to client.search."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_jobs(limit=500, start=500)
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 500
+        assert call_args.kwargs["count"] == 500
+
+    def test_list_jobs_default_start_is_zero(self, mock_client):
+        """Default start value is 0."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_jobs()
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 0
+
 
 class TestListCandidates:
     """Tests for list_candidates tool."""
@@ -111,6 +128,23 @@ class TestListCandidates:
 
         assert "ERROR:" in result
         assert "Auth failed" in result
+
+    def test_list_candidates_start_forwarded(self, mock_client):
+        """start is passed through to client.search."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_candidates(limit=500, start=1000)
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 1000
+        assert call_args.kwargs["count"] == 500
+
+    def test_list_candidates_default_start_is_zero(self, mock_client):
+        """Default start value is 0."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_candidates()
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 0
 
 
 class TestGetJob:
@@ -171,6 +205,7 @@ class TestSearchEntities:
             query="status:Approved",
             fields=None,
             count=20,
+            start=0,
         )
 
     def test_search_with_limit(self, mock_client):
@@ -182,6 +217,23 @@ class TestSearchEntities:
 
         call_args = mock_client.search.call_args
         assert call_args.kwargs["count"] == 100
+
+    def test_search_entities_start_forwarded(self, mock_client):
+        """start is passed through to client.search."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.search_entities(entity="Candidate", query="status:Active", limit=500, start=500)
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 500
+        assert call_args.kwargs["count"] == 500
+
+    def test_search_entities_default_start_is_zero(self, mock_client):
+        """Default start value is 0."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.search_entities(entity="Placement", query="status:Approved")
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 0
 
 
 class TestQueryEntities:
@@ -199,6 +251,7 @@ class TestQueryEntities:
             where="salary > 100000",
             fields=None,
             count=20,
+            start=0,
             order_by=None,
         )
 
@@ -213,6 +266,23 @@ class TestQueryEntities:
 
         call_args = mock_client.query.call_args
         assert call_args.kwargs["order_by"] == "-dateAdded"
+
+    def test_query_entities_start_forwarded(self, mock_client):
+        """start is passed through to client.query."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.query_entities(entity="Placement", where="status='Approved'", limit=500, start=500)
+
+        call_args = mock_client.query.call_args
+        assert call_args.kwargs["start"] == 500
+        assert call_args.kwargs["count"] == 500
+
+    def test_query_entities_default_start_is_zero(self, mock_client):
+        """Default start value is 0."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.query_entities(entity="JobOrder", where="salary > 100000")
+
+        call_args = mock_client.query.call_args
+        assert call_args.kwargs["start"] == 0
 
 
 class TestSearchEmails:
@@ -423,6 +493,27 @@ class TestListContacts:
 
         assert result.startswith("ERROR:")
 
+    def test_list_contacts_start_forwarded(self, mock_client):
+        """start is passed through to client.search."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_contacts(limit=500, start=500)
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 500
+        assert call_args.kwargs["count"] == 500
+
+    def test_list_contacts_default_start_is_zero(self, mock_client):
+        """Default start value is 0."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_contacts()
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 0
+
 
 class TestListCompanies:
     """Tests for list_companies tool."""
@@ -449,6 +540,27 @@ class TestListCompanies:
 
         call_args = mock_client.search.call_args
         assert "name:Acme*" in call_args.kwargs["query"]
+
+    def test_list_companies_start_forwarded(self, mock_client):
+        """start is passed through to client.search."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_companies(limit=500, start=1000)
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 1000
+        assert call_args.kwargs["count"] == 500
+
+    def test_list_companies_default_start_is_zero(self, mock_client):
+        """Default start value is 0."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_companies()
+
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs["start"] == 0
 
 
 class TestSprint1E2E:

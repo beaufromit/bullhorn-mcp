@@ -237,6 +237,7 @@ def list_jobs(
     query: str | None = None,
     status: str | None = None,
     limit: int = 20,
+    start: int = 0,
     fields: str | None = None,
 ) -> str:
     """List and filter job orders from Bullhorn CRM.
@@ -245,6 +246,9 @@ def list_jobs(
         query: Lucene search query (e.g., "title:Engineer AND isOpen:1")
         status: Filter by job status
         limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset — index of the first record to return (default 0).
+               Use with limit to page through results: start=0 limit=500 for page 1,
+               start=500 limit=500 for page 2, etc.
         fields: Comma-separated fields to return
 
     Returns:
@@ -255,6 +259,7 @@ def list_jobs(
         - list_jobs(query="isOpen:1") - Get open jobs
         - list_jobs(query="title:Software AND employmentType:Direct Hire", limit=10)
         - list_jobs(status="Accepting Candidates")
+        - list_jobs(limit=500, start=500) - Get records 501-1000
     """
     try:
         client = get_client()
@@ -269,6 +274,7 @@ def list_jobs(
             query=search_query,
             fields=fields,
             count=limit,
+            start=start,
             sort="-dateAdded",
         )
 
@@ -283,6 +289,7 @@ def list_candidates(
     query: str | None = None,
     status: str | None = None,
     limit: int = 20,
+    start: int = 0,
     fields: str | None = None,
 ) -> str:
     """List and filter candidates from Bullhorn CRM.
@@ -291,6 +298,9 @@ def list_candidates(
         query: Lucene search query (e.g., "lastName:Smith" or "skillSet:Python")
         status: Filter by candidate status
         limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset — index of the first record to return (default 0).
+               Use with limit to page through results: start=0 limit=500 for page 1,
+               start=500 limit=500 for page 2, etc.
         fields: Comma-separated fields to return
 
     Returns:
@@ -301,6 +311,7 @@ def list_candidates(
         - list_candidates(query="skillSet:Python") - Find Python developers
         - list_candidates(query="lastName:Smith AND status:Active")
         - list_candidates(status="Active", limit=50)
+        - list_candidates(limit=500, start=500) - Get records 501-1000
     """
     try:
         client = get_client()
@@ -315,6 +326,7 @@ def list_candidates(
             query=search_query,
             fields=fields,
             count=limit,
+            start=start,
             sort="-dateAdded",
         )
 
@@ -329,6 +341,7 @@ def list_contacts(
     query: str | None = None,
     status: str | None = None,
     limit: int = 20,
+    start: int = 0,
     fields: str | None = None,
 ) -> str:
     """List and filter client contacts from Bullhorn CRM.
@@ -337,6 +350,9 @@ def list_contacts(
         query: Lucene search query (e.g., "lastName:Smith" or "occupation:Manager")
         status: Filter by contact status (e.g., "Active")
         limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset — index of the first record to return (default 0).
+               Use with limit to page through results: start=0 limit=500 for page 1,
+               start=500 limit=500 for page 2, etc.
         fields: Comma-separated fields to return
 
     Returns:
@@ -347,6 +363,7 @@ def list_contacts(
         - list_contacts(query="lastName:Smith") - Find contacts named Smith
         - list_contacts(query="occupation:Manager AND clientCorporation.name:Acme")
         - list_contacts(status="Active", limit=50)
+        - list_contacts(limit=500, start=500) - Get records 501-1000
     """
     try:
         client = get_client()
@@ -361,6 +378,7 @@ def list_contacts(
             query=search_query,
             fields=fields,
             count=limit,
+            start=start,
             sort="-dateAdded",
         )
 
@@ -375,6 +393,7 @@ def list_companies(
     query: str | None = None,
     status: str | None = None,
     limit: int = 20,
+    start: int = 0,
     fields: str | None = None,
 ) -> str:
     """List and filter client companies from Bullhorn CRM.
@@ -383,6 +402,9 @@ def list_companies(
         query: Lucene search query (e.g., "name:Acme*" or "phone:555*")
         status: Filter by company status (e.g., "Active")
         limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset — index of the first record to return (default 0).
+               Use with limit to page through results: start=0 limit=500 for page 1,
+               start=500 limit=500 for page 2, etc.
         fields: Comma-separated fields to return
 
     Returns:
@@ -392,6 +414,7 @@ def list_companies(
         - list_companies() - Get recent companies
         - list_companies(query="name:Acme*") - Find companies starting with Acme
         - list_companies(status="Active", limit=50)
+        - list_companies(limit=500, start=500) - Get records 501-1000
     """
     try:
         client = get_client()
@@ -406,6 +429,7 @@ def list_companies(
             query=search_query,
             fields=fields,
             count=limit,
+            start=start,
             sort="-dateAdded",
         )
 
@@ -460,6 +484,7 @@ def search_entities(
     entity: str,
     query: str,
     limit: int = 20,
+    start: int = 0,
     fields: str | None = None,
 ) -> str:
     """Search any Bullhorn entity type using Lucene query syntax.
@@ -470,6 +495,9 @@ def search_entities(
         entity: Entity type (JobOrder, Candidate, Placement, ClientCorporation, ClientContact, etc.)
         query: Lucene search query
         limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset — index of the first record to return (default 0).
+               Use with limit to page through results: start=0 limit=500 for page 1,
+               start=500 limit=500 for page 2, etc.
         fields: Comma-separated fields to return
 
     Returns:
@@ -479,6 +507,7 @@ def search_entities(
         - search_entities(entity="Placement", query="status:Approved")
         - search_entities(entity="ClientCorporation", query="name:Acme*")
         - search_entities(entity="JobSubmission", query="jobOrder.id:12345")
+        - search_entities(entity="Candidate", query="status:Active", limit=500, start=500)
     """
     try:
         client = get_client()
@@ -488,6 +517,7 @@ def search_entities(
             query=query,
             fields=fields,
             count=limit,
+            start=start,
         )
 
         return format_response(results)
@@ -501,6 +531,7 @@ def query_entities(
     entity: str,
     where: str,
     limit: int = 20,
+    start: int = 0,
     fields: str | None = None,
     order_by: str | None = None,
 ) -> str:
@@ -512,6 +543,9 @@ def query_entities(
         entity: Entity type (JobOrder, Candidate, etc.)
         where: WHERE clause (e.g., "salary > 100000 AND status='Active'")
         limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset — index of the first record to return (default 0).
+               Use with limit to page through results: start=0 limit=500 for page 1,
+               start=500 limit=500 for page 2, etc.
         fields: Comma-separated fields to return
         order_by: Sort order (e.g., "-dateAdded" for newest first)
 
@@ -521,6 +555,7 @@ def query_entities(
     Examples:
         - query_entities(entity="JobOrder", where="salary > 100000")
         - query_entities(entity="Candidate", where="status='Active'", order_by="-dateAdded")
+        - query_entities(entity="Placement", where="status='Approved'", limit=500, start=500)
     """
     try:
         client = get_client()
@@ -530,6 +565,7 @@ def query_entities(
             where=where,
             fields=fields,
             count=limit,
+            start=start,
             order_by=order_by,
         )
 
