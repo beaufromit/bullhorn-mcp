@@ -1081,6 +1081,9 @@ _NOTE_DEFAULT_FIELDS = (
     "personReference(id,firstName,lastName),"
     "jobOrder(id,title),"
     "clientCorporation(id,name),"
+    "placements(id),"
+    "leads(id),"
+    "opportunities(id),"
     "isDeleted"
 )
 
@@ -2442,7 +2445,7 @@ def get_notes_for_entity(
         # not the Note's own deletion state. We filter Notes themselves below.
         note_entity_rows = client.query(
             "NoteEntity",
-            where=f"targetEntityID={entity_id}",
+            where=f"targetEntityID={entity_id} AND targetEntityType='{entity}'",
             fields="id,note",
             count=limit,
             start=start,

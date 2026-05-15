@@ -5189,6 +5189,7 @@ class TestGetNotesForEntity:
         assert call_args.kwargs.get("entity") == "NoteEntity" or call_args.args[0] == "NoteEntity"
         where_arg = call_args.kwargs.get("where") or call_args.args[1]
         assert "169020" in where_arg
+        assert "Candidate" in where_arg
 
     def test_api_error_returns_error_string(self, mock_client):
         """BullhornAPIError is caught and returned as ERROR: string."""
@@ -5277,6 +5278,48 @@ class TestSearchNotes:
             result = server.search_notes("visa sponsorship")
 
         assert result.startswith("ERROR:")
+
+    def test_entity_filter_placement_matches_via_placements_field(self, mock_client):
+        """entity_filter for Placement matches notes via the placements list field."""
+        note_with_placement = {
+            "id": 2001,
+            "action": "General Note",
+            "comments": "placement note",
+            "dateAdded": 1700000000000,
+            "isDeleted": False,
+            "commentingPerson": None,
+            "personReference": None,
+            "jobOrder": None,
+            "clientCorporation": None,
+            "placements": [{"id": 555}],
+            "leads": [],
+            "opportunities": [],
+        }
+        note_without_match = {
+            "id": 2002,
+            "action": "General Note",
+            "comments": "other note",
+            "dateAdded": 1699000000000,
+            "isDeleted": False,
+            "commentingPerson": None,
+            "personReference": None,
+            "jobOrder": None,
+            "clientCorporation": None,
+            "placements": [{"id": 999}],
+            "leads": [],
+            "opportunities": [],
+        }
+        mock_client.search.return_value = [note_with_placement, note_without_match]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes(
+                "placement",
+                entity_filter={"type": "Placement", "id": 555},
+            )
+
+        notes = json.loads(result)
+        assert len(notes) == 1
+        assert notes[0]["id"] == 2001
 
 
 class TestQueryEntitiesNoteGuard:
