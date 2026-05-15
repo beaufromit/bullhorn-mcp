@@ -2428,7 +2428,6 @@ def get_notes_for_entity(
             comments, dateAdded, commentingPerson, personReference, jobOrder,
             clientCorporation, isDeleted.
         order_by: Sort field with optional leading "-" for descending (default "-dateAdded").
-            Sorting is applied in Python — Bullhorn's NoteEntity ordering is unreliable.
         include_deleted: If True, include soft-deleted notes. Default False.
 
     Returns:
@@ -2453,39 +2452,20 @@ def get_notes_for_entity(
                 ),
             })
 
-        # Step 1: fetch Note IDs from the NoteEntity join table
-        # exclude_deleted=False because NoteEntity.isDeleted is a join-row flag,
-        # not the Note's own deletion state. We filter Notes themselves below.
-        note_entity_rows = client.query(
-            "NoteEntity",
-            where=f"targetEntityID={entity_id} AND targetEntityName='{entity}'",
-            fields="id,note",
+        resolved_fields = fields if fields is not None else _NOTE_DEFAULT_FIELDS
+        notes = client.get_association(
+            entity,
+            entity_id,
+            "notes",
+            fields=resolved_fields,
             count=limit,
             start=start,
-            exclude_deleted=False,
+            order_by=order_by,
         )
 
-        if not note_entity_rows:
-            return format_response([])
-
-        note_ids = [
-            row["note"]["id"]
-            for row in note_entity_rows
-            if isinstance(row.get("note"), dict) and row["note"].get("id")
-        ]
-
-        if not note_ids:
-            return format_response([])
-
-        # Step 2: batch-fetch full Note bodies
-        resolved_fields = fields if fields is not None else _NOTE_DEFAULT_FIELDS
-        notes = client.get_many("Note", note_ids, fields=resolved_fields)
-
-        # Filter deleted unless requested
         if not include_deleted:
             notes = [n for n in notes if not n.get("isDeleted")]
 
-        # Strip CC telemetry from comments
         cleaned_notes = []
         for note in notes:
             note = dict(note)
@@ -2496,14 +2476,6 @@ def get_notes_for_entity(
                 if tags:
                     note["call_metadata"] = tags
             cleaned_notes.append(note)
-
-        # Sort in Python (Bullhorn's NoteEntity ordering is unreliable)
-        reverse = order_by.startswith("-")
-        sort_field = order_by.lstrip("-")
-        cleaned_notes.sort(
-            key=lambda n: (n.get(sort_field) is None, n.get(sort_field)),
-            reverse=reverse,
-        )
 
         return format_response(cleaned_notes)
 
@@ -2526,18 +2498,21 @@ def search_notes(
     all notes on a specific record, use get_notes_for_entity instead — it is
     more reliable and efficient for that use case.
 
-    Note: Filtering by subject-entity ID via Lucene (e.g. personReference.id:N)
-    is unreliable on /search/Note. Use entity_filter for record-scoped filtering —
-    it is applied client-side after Bullhorn returns results.
+    When entity_filter is provided the search is performed against the entity's
+    notes directly (reliable on all tenants). Without entity_filter, Bullhorn's
+    Lucene index is used — this requires the Note search index to be enabled on
+    your tenant; contact Bullhorn support to enable "Advanced Note Searching" if
+    results are unexpectedly empty.
 
     Args:
-        query: Lucene query over the comments field, e.g. "visa sponsorship" or
-            "counter offer"
+        query: Keyword to search for in note comments (case-insensitive substring
+            when entity_filter is provided; Lucene syntax when searching globally)
         entity_filter: Optional dict to narrow results to notes attached to a
             specific record. Format: {"type": "Candidate", "id": 169020}.
             Supported types: Candidate, ClientContact, ClientCorporation,
             JobOrder, Placement, Lead, Opportunity.
-            Applied client-side — combine with a tight Lucene query for best results.
+            When provided, fetches all notes for that record and keyword-filters
+            them locally — reliable regardless of Lucene index configuration.
         limit: Maximum number of results (1-500, default 20)
         start: Pagination offset (default 0)
         fields: Comma-separated Note fields to return. Default includes id, action,
@@ -2570,36 +2545,37 @@ def search_notes(
     try:
         client = get_client()
 
-        resolved_fields = fields if fields is not None else _NOTE_SEARCH_DEFAULT_FIELDS
-        notes = client.search(
-            "Note",
-            query=stripped_query,
-            fields=resolved_fields,
-            count=limit,
-            start=start,
-        )
+        filter_type = (entity_filter or {}).get("type")
+        filter_id = (entity_filter or {}).get("id")
 
-        # Client-side entity filter
-        if entity_filter is not None:
-            filter_type = entity_filter.get("type")
-            filter_id = entity_filter.get("id")
-            if filter_type and filter_id is not None:
-                subject_field = _NOTE_ENTITY_SUBJECT_FIELD.get(filter_type)
-                if subject_field:
-                    filtered = []
-                    for note in notes:
-                        subject = note.get(subject_field)
-                        # List-valued fields (placements, leads, opportunities)
-                        if isinstance(subject, list):
-                            if any(
-                                isinstance(s, dict) and s.get("id") == filter_id
-                                for s in subject
-                            ):
-                                filtered.append(note)
-                        # Dict-valued fields (personReference, jobOrder, clientCorporation)
-                        elif isinstance(subject, dict) and subject.get("id") == filter_id:
-                            filtered.append(note)
-                    notes = filtered
+        if filter_type in _NOTE_TARGET_ENTITIES and filter_id is not None:
+            # Entity-scoped path: fetch all notes for the record via association
+            # endpoint, then keyword-filter in Python. Reliable on all tenants
+            # regardless of Lucene index configuration.
+            resolved_fields = fields if fields is not None else _NOTE_DEFAULT_FIELDS
+            all_notes = client.get_association(
+                filter_type,
+                filter_id,
+                "notes",
+                fields=resolved_fields,
+                count=500,
+            )
+            all_notes = [n for n in all_notes if not n.get("isDeleted")]
+            keyword = stripped_query.lower()
+            matched = [
+                n for n in all_notes
+                if keyword in (n.get("comments") or "").lower()
+            ]
+            notes = matched[start: start + limit]
+        else:
+            resolved_fields = fields if fields is not None else _NOTE_SEARCH_DEFAULT_FIELDS
+            notes = client.search(
+                "Note",
+                query=stripped_query,
+                fields=resolved_fields,
+                count=limit,
+                start=start,
+            )
 
         # Strip CC telemetry
         cleaned_notes = []

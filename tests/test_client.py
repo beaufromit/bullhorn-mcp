@@ -1092,81 +1092,69 @@ class TestAttachFile:
             client.attach_file("Candidate", 123, b"data", "cv.pdf", "application/pdf")
 
 
-class TestGetMany:
-    """Tests for BullhornClient.get_many()."""
-
-    def test_get_many_empty_ids_returns_empty_list_no_api_call(self, mock_auth, mock_session):
-        """get_many() with empty ids list must return [] without any HTTP call."""
-        client = BullhornClient(mock_auth)
-        result = client.get_many("Note", [])
-        assert result == []
+class TestGetAssociation:
+    """Tests for BullhornClient.get_association()."""
 
     @respx.mock
-    def test_get_many_single_id(self, mock_auth, mock_session):
-        """get_many() with one ID fetches /entity/Note/1001 and returns list."""
-        note_data = [{"id": 1001, "action": "General Note", "comments": "test"}]
-        respx.get(f"{mock_session.rest_url}/entity/Note/1001").mock(
-            return_value=httpx.Response(200, json={"data": note_data})
-        )
+    def test_correct_url_constructed(self, mock_auth, mock_session):
+        """get_association() hits /entity/{entity}/{id}/{association}."""
+        note_data = [{"id": 2632862, "action": "Inbound Call", "comments": "test"}]
+        route = respx.get(
+            f"{mock_session.rest_url}/entity/Candidate/169020/notes"
+        ).mock(return_value=httpx.Response(200, json={"data": note_data}))
 
         client = BullhornClient(mock_auth)
-        result = client.get_many("Note", [1001], fields="id,action,comments")
+        result = client.get_association("Candidate", 169020, "notes", fields="id,action,comments")
 
-        assert len(result) == 1
-        assert result[0]["id"] == 1001
-        assert result[0]["action"] == "General Note"
-
-    @respx.mock
-    def test_get_many_multiple_ids(self, mock_auth, mock_session):
-        """get_many() with multiple IDs hits /entity/Note/1001,1002 in one request."""
-        note_data = [
-            {"id": 1001, "action": "General Note", "comments": "first"},
-            {"id": 1002, "action": "Phone Call", "comments": "second"},
-        ]
-        route = respx.get(f"{mock_session.rest_url}/entity/Note/1001,1002").mock(
-            return_value=httpx.Response(200, json={"data": note_data})
-        )
-
-        client = BullhornClient(mock_auth)
-        result = client.get_many("Note", [1001, 1002], fields="id,action,comments")
-
-        assert len(result) == 2
-        assert result[0]["id"] == 1001
-        assert result[1]["id"] == 1002
         assert route.call_count == 1
-
-    @respx.mock
-    def test_get_many_dict_data_wrapped_in_list(self, mock_auth, mock_session):
-        """get_many() wraps a single dict response in a list for consistency."""
-        respx.get(f"{mock_session.rest_url}/entity/Note/1001").mock(
-            return_value=httpx.Response(200, json={"data": {"id": 1001, "action": "General Note"}})
-        )
-
-        client = BullhornClient(mock_auth)
-        result = client.get_many("Note", [1001], fields="id,action")
-
-        assert isinstance(result, list)
         assert len(result) == 1
-        assert result[0]["id"] == 1001
+        assert result[0]["id"] == 2632862
 
     @respx.mock
-    def test_get_many_uses_default_fields_when_none(self, mock_auth, mock_session):
-        """get_many() falls back to DEFAULT_FIELDS or '*' when fields is None."""
-        route = respx.get(f"{mock_session.rest_url}/entity/Note/1001").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": 1001}]})
-        )
+    def test_count_and_start_passed_as_params(self, mock_auth, mock_session):
+        """count and start are forwarded in query params."""
+        route = respx.get(
+            f"{mock_session.rest_url}/entity/Candidate/169020/notes"
+        ).mock(return_value=httpx.Response(200, json={"data": []}))
 
         client = BullhornClient(mock_auth)
-        client.get_many("Note", [1001])
+        client.get_association("Candidate", 169020, "notes", count=25, start=10)
 
-        # Note has no DEFAULT_FIELDS entry so it should use "*"
-        assert "fields=%2A" in str(route.calls[0].request.url) or "fields=*" in str(route.calls[0].request.url)
+        url = str(route.calls[0].request.url)
+        assert "count=25" in url
+        assert "start=10" in url
 
     @respx.mock
-    def test_get_many_401_retries(self, mock_auth, mock_session):
-        """get_many() retries once on 401 after session refresh."""
-        note_data = [{"id": 1001, "action": "test"}]
-        respx.get(f"{mock_session.rest_url}/entity/Note/1001").mock(
+    def test_order_by_passed_as_orderBy(self, mock_auth, mock_session):
+        """order_by is forwarded as 'orderBy' query param."""
+        route = respx.get(
+            f"{mock_session.rest_url}/entity/Candidate/169020/notes"
+        ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+        client = BullhornClient(mock_auth)
+        client.get_association("Candidate", 169020, "notes", order_by="-dateAdded")
+
+        url = str(route.calls[0].request.url)
+        assert "orderBy=" in url
+
+    @respx.mock
+    def test_count_capped_at_500(self, mock_auth, mock_session):
+        """count > 500 is silently capped to 500."""
+        route = respx.get(
+            f"{mock_session.rest_url}/entity/Candidate/169020/notes"
+        ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+        client = BullhornClient(mock_auth)
+        client.get_association("Candidate", 169020, "notes", count=999)
+
+        url = str(route.calls[0].request.url)
+        assert "count=500" in url
+
+    @respx.mock
+    def test_401_retries_once(self, mock_auth, mock_session):
+        """get_association() retries once on 401 after session refresh."""
+        note_data = [{"id": 1001}]
+        respx.get(f"{mock_session.rest_url}/entity/Candidate/169020/notes").mock(
             side_effect=[
                 httpx.Response(401, text="Unauthorized"),
                 httpx.Response(200, json={"data": note_data}),
@@ -1174,18 +1162,18 @@ class TestGetMany:
         )
 
         client = BullhornClient(mock_auth)
-        result = client.get_many("Note", [1001], fields="id,action")
+        result = client.get_association("Candidate", 169020, "notes", fields="id")
 
         mock_auth._refresh_session.assert_called_once()
         assert result[0]["id"] == 1001
 
     @respx.mock
-    def test_get_many_raises_on_api_error(self, mock_auth, mock_session):
-        """get_many() raises BullhornAPIError on non-200/201/401 response."""
-        respx.get(f"{mock_session.rest_url}/entity/Note/1001").mock(
+    def test_api_error_raises(self, mock_auth, mock_session):
+        """get_association() raises BullhornAPIError on non-200/201/401 response."""
+        respx.get(f"{mock_session.rest_url}/entity/Candidate/169020/notes").mock(
             return_value=httpx.Response(500, text="Internal Server Error")
         )
 
         client = BullhornClient(mock_auth)
         with pytest.raises(BullhornAPIError):
-            client.get_many("Note", [1001], fields="id,action")
+            client.get_association("Candidate", 169020, "notes", fields="id")

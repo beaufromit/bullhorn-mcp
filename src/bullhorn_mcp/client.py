@@ -403,33 +403,41 @@ class BullhornClient:
             return {"id": results[0]["id"]}
         return results
 
-    def get_many(
-        self, entity: str, ids: list[int], fields: str | None = None
+    def get_association(
+        self,
+        entity: str,
+        entity_id: int,
+        association: str,
+        fields: str | None = None,
+        count: int = 20,
+        start: int = 0,
+        order_by: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Batch-fetch multiple entities by ID in one request.
+        """Fetch a TO_MANY association via /entity/{entity}/{id}/{association}.
 
         Args:
-            entity: Entity type (e.g. "Note")
-            ids: List of entity IDs. Returns [] immediately if empty.
-            fields: Comma-separated fields to return (defaults to entity default or "*")
+            entity: Entity type (e.g. "Candidate")
+            entity_id: Entity ID
+            association: Association name (e.g. "notes")
+            fields: Comma-separated fields to return
+            count: Max results (1-500)
+            start: Pagination offset
+            order_by: Sort field with optional leading "-" for descending
 
         Returns:
-            List of entity dicts (Bullhorn returns a list for comma-separated ID requests)
+            List of association records
         """
-        if not ids:
-            return []
-
-        if fields is None:
-            fields = DEFAULT_FIELDS.get(entity, "*")
-
-        id_str = ",".join(str(i) for i in ids)
-        params = {"fields": fields}
-        result = self._request("GET", f"/entity/{entity}/{id_str}", params)
-        data = result.get("data", [])
-        # Single-entity responses return a dict; comma-sep returns a list
-        if isinstance(data, dict):
-            return [data]
-        return data
+        params: dict[str, Any] = {
+            "fields": fields or "id",
+            "count": min(count, 500),
+            "start": start,
+        }
+        if order_by:
+            params["orderBy"] = order_by
+        result = self._request(
+            "GET", f"/entity/{entity}/{entity_id}/{association}", params
+        )
+        return result.get("data", [])
 
     def get_meta(self, entity: str) -> dict[str, Any]:
         """Get metadata/schema for an entity type.
