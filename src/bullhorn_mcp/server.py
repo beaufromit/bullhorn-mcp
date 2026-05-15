@@ -1087,6 +1087,19 @@ _NOTE_DEFAULT_FIELDS = (
     "isDeleted"
 )
 
+# /search/Note does not expose clientCorporation — use a separate default for
+# the search path to avoid a 400 from Bullhorn.
+_NOTE_SEARCH_DEFAULT_FIELDS = (
+    "id,action,comments,dateAdded,"
+    "commentingPerson(id,firstName,lastName),"
+    "personReference(id,firstName,lastName),"
+    "jobOrder(id,title),"
+    "placements(id),"
+    "leads(id),"
+    "opportunities(id),"
+    "isDeleted"
+)
+
 
 def _strip_cc_telemetry(comments: str) -> tuple[str, list[str]]:
     """Remove click-to-call tags from a note comments string.
@@ -2445,7 +2458,7 @@ def get_notes_for_entity(
         # not the Note's own deletion state. We filter Notes themselves below.
         note_entity_rows = client.query(
             "NoteEntity",
-            where=f"targetEntityID={entity_id} AND targetEntityType='{entity}'",
+            where=f"targetEntityID={entity_id} AND targetEntityName='{entity}'",
             fields="id,note",
             count=limit,
             start=start,
@@ -2529,7 +2542,9 @@ def search_notes(
         start: Pagination offset (default 0)
         fields: Comma-separated Note fields to return. Default includes id, action,
             comments, dateAdded, commentingPerson, personReference, jobOrder,
-            clientCorporation, isDeleted.
+            placements, leads, opportunities, isDeleted. Note: clientCorporation
+            is not available on /search/Note — use get_notes_for_entity if you
+            need that field.
 
     Returns:
         JSON array of note dicts. Click-to-call telemetry tags are stripped from
@@ -2540,13 +2555,25 @@ def search_notes(
         - search_notes("counter offer", entity_filter={"type": "Candidate", "id": 169020})
         - search_notes("references", limit=50)
     """
+    stripped_query = (query or "").strip()
+    if not stripped_query or stripped_query == "*":
+        return format_response({
+            "error": "invalid_query",
+            "message": (
+                "search_notes requires a non-empty keyword query. "
+                "Bullhorn's /search/Note rejects bare '*'. "
+                "To fetch all notes on a specific record use "
+                "get_notes_for_entity(entity, entity_id) instead."
+            ),
+        })
+
     try:
         client = get_client()
 
-        resolved_fields = fields if fields is not None else _NOTE_DEFAULT_FIELDS
+        resolved_fields = fields if fields is not None else _NOTE_SEARCH_DEFAULT_FIELDS
         notes = client.search(
             "Note",
-            query=query,
+            query=stripped_query,
             fields=resolved_fields,
             count=limit,
             start=start,

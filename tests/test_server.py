@@ -5190,6 +5190,8 @@ class TestGetNotesForEntity:
         where_arg = call_args.kwargs.get("where") or call_args.args[1]
         assert "169020" in where_arg
         assert "Candidate" in where_arg
+        assert "targetEntityName" in where_arg
+        assert "targetEntityType" not in where_arg
 
     def test_api_error_returns_error_string(self, mock_client):
         """BullhornAPIError is caught and returned as ERROR: string."""
@@ -5320,6 +5322,36 @@ class TestSearchNotes:
         notes = json.loads(result)
         assert len(notes) == 1
         assert notes[0]["id"] == 2001
+
+    def test_wildcard_query_returns_invalid_query_error(self, mock_client):
+        """search_notes('*') returns structured error without making an HTTP call."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("*")
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_query"
+        assert "get_notes_for_entity" in data["message"]
+        mock_client.search.assert_not_called()
+
+    def test_empty_query_returns_invalid_query_error(self, mock_client):
+        """search_notes('') returns structured error without making an HTTP call."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("  ")
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_query"
+        mock_client.search.assert_not_called()
+
+    def test_default_fields_do_not_include_client_corporation(self, mock_client, sample_note_records):
+        """Default fields for search_notes exclude clientCorporation (invalid on /search/Note)."""
+        mock_client.search.return_value = [sample_note_records[0]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.search_notes("strong fit")
+
+        call_args = mock_client.search.call_args
+        fields_arg = call_args.kwargs.get("fields") or call_args.args[2]
+        assert "clientCorporation" not in fields_arg
 
 
 class TestQueryEntitiesNoteGuard:
