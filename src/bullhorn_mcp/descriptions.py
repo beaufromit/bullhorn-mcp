@@ -53,6 +53,8 @@ TOOL_ENTITY_MAP: dict[str, list[str]] = {
     "update_job": ["JobOrder"],
     "update_record": SUPPORTED_ENTITIES,
     "add_note": ["Note"],
+    "get_notes_for_entity": ["Note"],
+    "search_notes": ["Note"],
     "find_duplicate_companies": ["ClientCorporation"],
     "find_duplicate_contacts": ["ClientContact", "ClientCorporation"],
     "find_duplicate_candidates": ["Candidate"],

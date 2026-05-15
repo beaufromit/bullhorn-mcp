@@ -403,6 +403,34 @@ class BullhornClient:
             return {"id": results[0]["id"]}
         return results
 
+    def get_many(
+        self, entity: str, ids: list[int], fields: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Batch-fetch multiple entities by ID in one request.
+
+        Args:
+            entity: Entity type (e.g. "Note")
+            ids: List of entity IDs. Returns [] immediately if empty.
+            fields: Comma-separated fields to return (defaults to entity default or "*")
+
+        Returns:
+            List of entity dicts (Bullhorn returns a list for comma-separated ID requests)
+        """
+        if not ids:
+            return []
+
+        if fields is None:
+            fields = DEFAULT_FIELDS.get(entity, "*")
+
+        id_str = ",".join(str(i) for i in ids)
+        params = {"fields": fields}
+        result = self._request("GET", f"/entity/{entity}/{id_str}", params)
+        data = result.get("data", [])
+        # Single-entity responses return a dict; comma-sep returns a list
+        if isinstance(data, dict):
+            return [data]
+        return data
+
     def get_meta(self, entity: str) -> dict[str, Any]:
         """Get metadata/schema for an entity type.
 

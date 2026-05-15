@@ -62,6 +62,52 @@ def sample_candidate():
 
 
 @pytest.fixture
+def sample_note_records():
+    """Sample Note records as returned by /entity/Note/<ids>."""
+    return [
+        {
+            "id": 1001,
+            "action": "General Note",
+            "comments": "Candidate is a strong fit.",
+            "dateAdded": 1700000000000,
+            "isDeleted": False,
+            "commentingPerson": {"id": 10, "firstName": "Alice", "lastName": "Recruiter"},
+            "personReference": {"id": 169020, "firstName": "John", "lastName": "Doe"},
+            "jobOrder": None,
+            "clientCorporation": None,
+        },
+        {
+            "id": 1002,
+            "action": "Phone Call",
+            "comments": "Left voicemail. [cc:abcd1234-0000-0000-0000-000000000001,+61400000000,+61400000001,inbound]",
+            "dateAdded": 1699000000000,
+            "isDeleted": False,
+            "commentingPerson": {"id": 10, "firstName": "Alice", "lastName": "Recruiter"},
+            "personReference": {"id": 169020, "firstName": "John", "lastName": "Doe"},
+            "jobOrder": None,
+            "clientCorporation": None,
+        },
+        {
+            "id": 1003,
+            "action": "General Note",
+            "comments": "Old deleted note.",
+            "dateAdded": 1698000000000,
+            "isDeleted": True,
+            "commentingPerson": None,
+            "personReference": {"id": 169020, "firstName": "John", "lastName": "Doe"},
+            "jobOrder": None,
+            "clientCorporation": None,
+        },
+    ]
+
+
+@pytest.fixture
+def sample_cc_telemetry_comment():
+    """A comments string with an embedded click-to-call tag."""
+    return "Left voicemail. [cc:abcd1234-0000-0000-0000-000000000001,+61400000000,+61400000001,inbound]"
+
+
+@pytest.fixture
 def sample_parsed_resume():
     """Realistic Bullhorn /resume/parseToCandidate response fixture."""
     return {

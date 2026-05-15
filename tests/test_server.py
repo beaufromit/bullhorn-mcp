@@ -5071,3 +5071,235 @@ class TestAttachCv:
             )
 
         assert result.startswith("ERROR:")
+
+
+class TestGetNotesForEntity:
+    """Tests for get_notes_for_entity tool."""
+
+    def _note_entity_rows(self, note_ids):
+        """Build fake /query/NoteEntity rows for the given IDs."""
+        return [{"id": i * 100, "note": {"id": nid}} for i, nid in enumerate(note_ids, 1)]
+
+    def test_returns_notes_for_candidate(self, mock_client, sample_note_records):
+        """Happy path: returns cleaned list for a valid entity."""
+        mock_client.query.return_value = self._note_entity_rows([1001, 1002])
+        # Return only non-deleted notes (1001 and 1002)
+        mock_client.get_many.return_value = [sample_note_records[0], sample_note_records[1]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020)
+
+        notes = json.loads(result)
+        assert isinstance(notes, list)
+        assert len(notes) == 2
+        assert notes[0]["id"] == 1001
+
+    def test_cc_telemetry_stripped_from_comments(self, mock_client, sample_note_records, sample_cc_telemetry_comment):
+        """CC tag is removed from comments; call_metadata is populated."""
+        mock_client.query.return_value = self._note_entity_rows([1002])
+        mock_client.get_many.return_value = [sample_note_records[1]]  # note 1002 has CC tag
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020)
+
+        notes = json.loads(result)
+        assert len(notes) == 1
+        assert "[cc:" not in notes[0]["comments"]
+        assert "call_metadata" in notes[0]
+        assert len(notes[0]["call_metadata"]) == 1
+
+    def test_soft_deleted_excluded_by_default(self, mock_client, sample_note_records):
+        """Notes with isDeleted=True are excluded unless include_deleted=True."""
+        mock_client.query.return_value = self._note_entity_rows([1001, 1003])
+        mock_client.get_many.return_value = [sample_note_records[0], sample_note_records[2]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020)
+
+        notes = json.loads(result)
+        assert all(not n.get("isDeleted") for n in notes)
+        assert len(notes) == 1
+        assert notes[0]["id"] == 1001
+
+    def test_include_deleted_returns_all(self, mock_client, sample_note_records):
+        """include_deleted=True returns deleted notes alongside active ones."""
+        mock_client.query.return_value = self._note_entity_rows([1001, 1003])
+        mock_client.get_many.return_value = [sample_note_records[0], sample_note_records[2]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020, include_deleted=True)
+
+        notes = json.loads(result)
+        assert len(notes) == 2
+
+    def test_invalid_entity_returns_error(self, mock_client):
+        """Returns error dict for unsupported entity without calling client."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("FooBar", 1)
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_entity"
+        mock_client.query.assert_not_called()
+        mock_client.get_many.assert_not_called()
+
+    def test_empty_result_returns_empty_list(self, mock_client):
+        """Returns [] when the record has no notes."""
+        mock_client.query.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020)
+
+        assert json.loads(result) == []
+        mock_client.get_many.assert_not_called()
+
+    def test_order_by_descending_dateAdded(self, mock_client, sample_note_records):
+        """Default -dateAdded sort returns newest note first."""
+        mock_client.query.return_value = self._note_entity_rows([1002, 1001])
+        # Return in reverse order so we can confirm re-sort
+        mock_client.get_many.return_value = [sample_note_records[1], sample_note_records[0]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020, order_by="-dateAdded")
+
+        notes = json.loads(result)
+        # 1001 has dateAdded=1700000000000, 1002 has 1699000000000 → 1001 should be first
+        assert notes[0]["id"] == 1001
+
+    def test_order_by_ascending_dateAdded(self, mock_client, sample_note_records):
+        """order_by='dateAdded' returns oldest note first."""
+        mock_client.query.return_value = self._note_entity_rows([1001, 1002])
+        mock_client.get_many.return_value = [sample_note_records[0], sample_note_records[1]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020, order_by="dateAdded")
+
+        notes = json.loads(result)
+        assert notes[0]["id"] == 1002  # older
+
+    def test_query_calls_note_entity_with_correct_where(self, mock_client, sample_note_records):
+        """Verifies client.query is called on NoteEntity with correct where clause."""
+        mock_client.query.return_value = self._note_entity_rows([1001])
+        mock_client.get_many.return_value = [sample_note_records[0]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.get_notes_for_entity("Candidate", 169020)
+
+        mock_client.query.assert_called_once()
+        call_args = mock_client.query.call_args
+        assert call_args.kwargs.get("entity") == "NoteEntity" or call_args.args[0] == "NoteEntity"
+        where_arg = call_args.kwargs.get("where") or call_args.args[1]
+        assert "169020" in where_arg
+
+    def test_api_error_returns_error_string(self, mock_client):
+        """BullhornAPIError is caught and returned as ERROR: string."""
+        mock_client.query.side_effect = BullhornAPIError("timeout")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020)
+
+        assert result.startswith("ERROR:")
+
+    def test_note_without_cc_tag_has_no_call_metadata(self, mock_client, sample_note_records):
+        """Notes without CC tags do not get a call_metadata key."""
+        mock_client.query.return_value = self._note_entity_rows([1001])
+        mock_client.get_many.return_value = [sample_note_records[0]]  # no CC tag
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020)
+
+        notes = json.loads(result)
+        assert "call_metadata" not in notes[0]
+
+
+class TestSearchNotes:
+    """Tests for search_notes tool."""
+
+    def test_happy_path_returns_results(self, mock_client, sample_note_records):
+        """Returns notes matching the Lucene query."""
+        mock_client.search.return_value = [sample_note_records[0]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("strong fit")
+
+        notes = json.loads(result)
+        assert len(notes) == 1
+        assert notes[0]["id"] == 1001
+        mock_client.search.assert_called_once()
+        call_args = mock_client.search.call_args
+        assert call_args.kwargs.get("entity") == "Note" or call_args.args[0] == "Note"
+
+    def test_entity_filter_narrows_results(self, mock_client, sample_note_records):
+        """entity_filter removes notes not attached to the specified record."""
+        # Return two notes, only one attached to candidate 169020
+        other_note = dict(sample_note_records[0])
+        other_note["id"] = 9999
+        other_note["personReference"] = {"id": 99999, "firstName": "Other", "lastName": "Person"}
+        mock_client.search.return_value = [sample_note_records[0], other_note]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes(
+                "strong",
+                entity_filter={"type": "Candidate", "id": 169020},
+            )
+
+        notes = json.loads(result)
+        assert len(notes) == 1
+        assert notes[0]["id"] == 1001
+
+    def test_entity_filter_no_match_returns_empty(self, mock_client, sample_note_records):
+        """entity_filter that matches no notes returns []."""
+        mock_client.search.return_value = [sample_note_records[0]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes(
+                "strong",
+                entity_filter={"type": "Candidate", "id": 99999},
+            )
+
+        assert json.loads(result) == []
+
+    def test_cc_telemetry_stripped(self, mock_client, sample_note_records):
+        """CC tags are stripped from comments in search_notes results too."""
+        mock_client.search.return_value = [sample_note_records[1]]  # has CC tag
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("voicemail")
+
+        notes = json.loads(result)
+        assert "[cc:" not in notes[0]["comments"]
+        assert "call_metadata" in notes[0]
+
+    def test_api_error_returns_error_string(self, mock_client):
+        """BullhornAPIError is returned as ERROR: string."""
+        mock_client.search.side_effect = BullhornAPIError("service unavailable")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("visa sponsorship")
+
+        assert result.startswith("ERROR:")
+
+
+class TestQueryEntitiesNoteGuard:
+    """Tests for query_entities hard refusal when entity='Note'."""
+
+    def test_note_entity_returns_error_without_api_call(self, mock_client):
+        """query_entities('Note', ...) returns structured error, no client call."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.query_entities("Note", "comments LIKE '%foo%'")
+
+        data = json.loads(result)
+        assert data["error"] == "entity_not_queryable"
+        assert "get_notes_for_entity" in data["message"]
+        assert "search_notes" in data["message"]
+        mock_client.query.assert_not_called()
+
+    def test_non_note_entity_still_passes_through(self, mock_client, sample_job):
+        """query_entities for JobOrder is not affected by the Note guard."""
+        mock_client.query.return_value = [sample_job]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.query_entities("JobOrder", "salary > 100000")
+
+        data = json.loads(result)
+        assert isinstance(data, list)
+        mock_client.query.assert_called_once()

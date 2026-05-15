@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 from typing import Any
 from fastmcp import FastMCP
@@ -448,7 +449,11 @@ def get_job(job_id: int, fields: str | None = None) -> str:
         fields: Comma-separated fields to return (default: all common fields)
 
     Returns:
-        JSON object with job details
+        JSON object with job details.
+
+    Note on notes: the JobOrder record's notes association returns IDs only unless
+    expanded as notes(id,action,comments,...) in fields. For any non-trivial notes
+    read, use get_notes_for_entity("JobOrder", job_id) instead.
     """
     try:
         client = get_client()
@@ -468,7 +473,11 @@ def get_candidate(candidate_id: int, fields: str | None = None) -> str:
         fields: Comma-separated fields to return (default: all common fields)
 
     Returns:
-        JSON object with candidate details
+        JSON object with candidate details.
+
+    Note on notes: the Candidate record's notes association returns IDs only unless
+    expanded as notes(id,action,comments,...) in fields. For any non-trivial notes
+    read, use get_notes_for_entity("Candidate", candidate_id) instead.
     """
     try:
         client = get_client()
@@ -508,6 +517,11 @@ def search_entities(
         - search_entities(entity="ClientCorporation", query="name:Acme*")
         - search_entities(entity="JobSubmission", query="jobOrder.id:12345")
         - search_entities(entity="Candidate", query="status:Active", limit=500, start=500)
+
+    Note on entity="Note": /search/Note runs Lucene over the comments text field only.
+    Filtering by subject-entity ID (e.g. personReference.id:N, jobOrder.id:N) is unreliable
+    and should not be used to fetch notes for a specific record. Use get_notes_for_entity
+    for record-scoped reads. Use search_notes for full-text keyword search across all notes.
     """
     try:
         client = get_client()
@@ -556,7 +570,20 @@ def query_entities(
         - query_entities(entity="JobOrder", where="salary > 100000")
         - query_entities(entity="Candidate", where="status='Active'", order_by="-dateAdded")
         - query_entities(entity="Placement", where="status='Approved'", limit=500, start=500)
+
+    Note: entity="Note" is not supported — Bullhorn does not expose /query/Note.
+    Use get_notes_for_entity for record-scoped reads or search_notes for full-text search.
     """
+    if entity == "Note":
+        return format_response({
+            "error": "entity_not_queryable",
+            "message": (
+                "Note does not support /query in Bullhorn. "
+                "Use get_notes_for_entity(entity, entity_id) to fetch all notes on a record, "
+                "or search_notes(query) to search note content by keyword."
+            ),
+        })
+
     try:
         client = get_client()
 
@@ -1029,6 +1056,43 @@ _NOTE_TARGET_ENTITIES = {
     "Lead",
     "Opportunity",
 }
+
+# Bullhorn phone-integration click-to-call tag: [cc:<uuid>,<number>,<number>,inbound|outbound]
+_CC_TAG_RE = re.compile(
+    r"\[cc:[a-f0-9-]+,[^,\]]*,[^,\]]*(,inbound|,outbound)?\]",
+    re.IGNORECASE,
+)
+
+# Maps _NOTE_TARGET_ENTITIES members to the subject-reference field name on a
+# Note record (mirrors the write-side _ENTITY_FIELD map in client.add_note).
+_NOTE_ENTITY_SUBJECT_FIELD: dict[str, str] = {
+    "Candidate": "personReference",
+    "ClientContact": "personReference",
+    "ClientCorporation": "clientCorporation",
+    "JobOrder": "jobOrder",
+    "Placement": "placements",
+    "Lead": "leads",
+    "Opportunity": "opportunities",
+}
+
+_NOTE_DEFAULT_FIELDS = (
+    "id,action,comments,dateAdded,"
+    "commentingPerson(id,firstName,lastName),"
+    "personReference(id,firstName,lastName),"
+    "jobOrder(id,title),"
+    "clientCorporation(id,name),"
+    "isDeleted"
+)
+
+
+def _strip_cc_telemetry(comments: str) -> tuple[str, list[str]]:
+    """Remove click-to-call tags from a note comments string.
+
+    Returns (cleaned_comments, list_of_removed_tags).
+    """
+    full_matches = [m.group(0) for m in _CC_TAG_RE.finditer(comments)]
+    cleaned = _CC_TAG_RE.sub("", comments).strip()
+    return cleaned, full_matches
 
 
 @mcp.tool()
@@ -2316,6 +2380,210 @@ def shortlist_candidates(
             "results": results,
             "summary": {"created": created, "duplicates": duplicates, "errors": errors},
         })
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def get_notes_for_entity(
+    entity: str,
+    entity_id: int,
+    limit: int = 50,
+    start: int = 0,
+    fields: str | None = None,
+    order_by: str = "-dateAdded",
+    include_deleted: bool = False,
+) -> str:
+    """Fetch all notes attached to a specific Bullhorn record.
+
+    This is the correct tool for "what are the notes on candidate X / job Y / contact Z".
+    Do NOT use query_entities(entity="Note") — Note does not support /query. Do NOT
+    rely on search_entities(entity="Note") to filter by record ID — Lucene by subject-entity
+    ID is unreliable on /search/Note. Use this tool instead.
+
+    Args:
+        entity: One of "Candidate", "ClientContact", "ClientCorporation",
+            "JobOrder", "Placement", "Lead", or "Opportunity"
+        entity_id: Bullhorn ID of the record whose notes to fetch
+        limit: Maximum number of notes (1-500, default 50)
+        start: Pagination offset (default 0)
+        fields: Comma-separated Note fields to return. Default includes id, action,
+            comments, dateAdded, commentingPerson, personReference, jobOrder,
+            clientCorporation, isDeleted.
+        order_by: Sort field with optional leading "-" for descending (default "-dateAdded").
+            Sorting is applied in Python — Bullhorn's NoteEntity ordering is unreliable.
+        include_deleted: If True, include soft-deleted notes. Default False.
+
+    Returns:
+        JSON array of note dicts. Click-to-call telemetry tags are stripped from
+        the comments field and moved to a sibling call_metadata list. Empty array
+        if the record has no notes.
+
+    Examples:
+        - get_notes_for_entity("Candidate", 169020) - All notes on a candidate
+        - get_notes_for_entity("JobOrder", 12345, limit=10, order_by="dateAdded")
+        - get_notes_for_entity("ClientContact", 54321, include_deleted=True)
+    """
+    try:
+        client = get_client()
+
+        if entity not in _NOTE_TARGET_ENTITIES:
+            return format_response({
+                "error": "invalid_entity",
+                "message": (
+                    f"get_notes_for_entity does not support entity '{entity}'. "
+                    f"Supported: {', '.join(sorted(_NOTE_TARGET_ENTITIES))}."
+                ),
+            })
+
+        # Step 1: fetch Note IDs from the NoteEntity join table
+        # exclude_deleted=False because NoteEntity.isDeleted is a join-row flag,
+        # not the Note's own deletion state. We filter Notes themselves below.
+        note_entity_rows = client.query(
+            "NoteEntity",
+            where=f"targetEntityID={entity_id}",
+            fields="id,note",
+            count=limit,
+            start=start,
+            exclude_deleted=False,
+        )
+
+        if not note_entity_rows:
+            return format_response([])
+
+        note_ids = [
+            row["note"]["id"]
+            for row in note_entity_rows
+            if isinstance(row.get("note"), dict) and row["note"].get("id")
+        ]
+
+        if not note_ids:
+            return format_response([])
+
+        # Step 2: batch-fetch full Note bodies
+        resolved_fields = fields if fields is not None else _NOTE_DEFAULT_FIELDS
+        notes = client.get_many("Note", note_ids, fields=resolved_fields)
+
+        # Filter deleted unless requested
+        if not include_deleted:
+            notes = [n for n in notes if not n.get("isDeleted")]
+
+        # Strip CC telemetry from comments
+        cleaned_notes = []
+        for note in notes:
+            note = dict(note)
+            raw_comments = note.get("comments") or ""
+            if raw_comments:
+                cleaned, tags = _strip_cc_telemetry(raw_comments)
+                note["comments"] = cleaned
+                if tags:
+                    note["call_metadata"] = tags
+            cleaned_notes.append(note)
+
+        # Sort in Python (Bullhorn's NoteEntity ordering is unreliable)
+        reverse = order_by.startswith("-")
+        sort_field = order_by.lstrip("-")
+        cleaned_notes.sort(
+            key=lambda n: (n.get(sort_field) is None, n.get(sort_field)),
+            reverse=reverse,
+        )
+
+        return format_response(cleaned_notes)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def search_notes(
+    query: str,
+    entity_filter: dict | None = None,
+    limit: int = 20,
+    start: int = 0,
+    fields: str | None = None,
+) -> str:
+    """Search notes by content using Lucene full-text search.
+
+    Use this tool when you want to find notes mentioning a phrase across the
+    entire database (e.g. "visa sponsorship", "counter offer"). For fetching
+    all notes on a specific record, use get_notes_for_entity instead — it is
+    more reliable and efficient for that use case.
+
+    Note: Filtering by subject-entity ID via Lucene (e.g. personReference.id:N)
+    is unreliable on /search/Note. Use entity_filter for record-scoped filtering —
+    it is applied client-side after Bullhorn returns results.
+
+    Args:
+        query: Lucene query over the comments field, e.g. "visa sponsorship" or
+            "counter offer"
+        entity_filter: Optional dict to narrow results to notes attached to a
+            specific record. Format: {"type": "Candidate", "id": 169020}.
+            Supported types: Candidate, ClientContact, ClientCorporation,
+            JobOrder, Placement, Lead, Opportunity.
+            Applied client-side — combine with a tight Lucene query for best results.
+        limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset (default 0)
+        fields: Comma-separated Note fields to return. Default includes id, action,
+            comments, dateAdded, commentingPerson, personReference, jobOrder,
+            clientCorporation, isDeleted.
+
+    Returns:
+        JSON array of note dicts. Click-to-call telemetry tags are stripped from
+        comments and moved to a call_metadata sibling field.
+
+    Examples:
+        - search_notes("visa sponsorship") - Find all notes mentioning visa sponsorship
+        - search_notes("counter offer", entity_filter={"type": "Candidate", "id": 169020})
+        - search_notes("references", limit=50)
+    """
+    try:
+        client = get_client()
+
+        resolved_fields = fields if fields is not None else _NOTE_DEFAULT_FIELDS
+        notes = client.search(
+            "Note",
+            query=query,
+            fields=resolved_fields,
+            count=limit,
+            start=start,
+        )
+
+        # Client-side entity filter
+        if entity_filter is not None:
+            filter_type = entity_filter.get("type")
+            filter_id = entity_filter.get("id")
+            if filter_type and filter_id is not None:
+                subject_field = _NOTE_ENTITY_SUBJECT_FIELD.get(filter_type)
+                if subject_field:
+                    filtered = []
+                    for note in notes:
+                        subject = note.get(subject_field)
+                        # List-valued fields (placements, leads, opportunities)
+                        if isinstance(subject, list):
+                            if any(
+                                isinstance(s, dict) and s.get("id") == filter_id
+                                for s in subject
+                            ):
+                                filtered.append(note)
+                        # Dict-valued fields (personReference, jobOrder, clientCorporation)
+                        elif isinstance(subject, dict) and subject.get("id") == filter_id:
+                            filtered.append(note)
+                    notes = filtered
+
+        # Strip CC telemetry
+        cleaned_notes = []
+        for note in notes:
+            note = dict(note)
+            raw_comments = note.get("comments") or ""
+            if raw_comments:
+                cleaned, tags = _strip_cc_telemetry(raw_comments)
+                note["comments"] = cleaned
+                if tags:
+                    note["call_metadata"] = tags
+            cleaned_notes.append(note)
+
+        return format_response(cleaned_notes)
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
