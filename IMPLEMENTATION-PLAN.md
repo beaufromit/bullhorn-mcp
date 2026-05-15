@@ -2327,3 +2327,28 @@ The `add_note` tool's except clause only caught `Exception`; a `ValueError` rais
 ### Expected test count after Sprint 28
 
 Previous: 450. Added tests covering 7-entity `add_note` dispatch, `commentingPerson` fix, and M1 ValueError guard. **Actual: 461 passing, 0 failing.** Tagged v0.0.28.
+
+---
+
+## Sprint 29 — CR20: Pagination `start` parameter for list and search tools
+
+### What was built
+
+Added a `start: int = 0` pagination parameter to 6 MCP tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `search_entities`, and `query_entities`. The parameter is forwarded directly to the existing `start` kwarg on `client.search()` and `client.query()`. No changes to `client.py` were required — the client methods already accepted and forwarded `start` to the Bullhorn API.
+
+### Files changed
+
+- `src/bullhorn_mcp/server.py`: `start: int = 0` parameter added to `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `search_entities`, and `query_entities`; each forwards `start=start` to the relevant client call.
+
+### Review cycle findings
+
+No critical or moderate issues were found during the Sprint 29 review cycle.
+
+**Minor — no lower-bound validation on `start`.**
+A negative `start` value is accepted and forwarded to Bullhorn without validation. This is consistent with the existing behaviour of the `limit` parameter, which also has no lower-bound guard. Noted for awareness; no fix applied.
+
+**Final state: 473 tests passing, 0 failing. Tagged v0.0.29.**
+
+### Expected test count after Sprint 29
+
+Previous: 461. Added 12 new pagination forwarding tests + corrected 2 existing test assertions. **Actual: 473 passing, 0 failing.** Tagged v0.0.29.
