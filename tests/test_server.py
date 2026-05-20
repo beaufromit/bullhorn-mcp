@@ -1581,6 +1581,53 @@ class TestAddNote:
         assert data["changedEntityId"] == 998
         mock_client.add_note.assert_called_once()
 
+    def test_load_valid_note_actions_returns_set_from_metadata(self, mock_client):
+        """_load_valid_note_actions extracts values from Note.action picklist options."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.get_fields.return_value = [
+            {
+                "name": "action",
+                "options": [
+                    {"value": "General Note"},
+                    {"value": "Outbound Call"},
+                    {"value": ""},
+                ],
+            },
+            {"name": "comments"},
+        ]
+        result = server._load_valid_note_actions(meta)
+        assert result == {"General Note", "Outbound Call"}
+        meta.get_fields.assert_called_once_with("Note")
+
+    def test_load_valid_note_actions_returns_none_when_no_action_field(self, mock_client):
+        """_load_valid_note_actions returns None when Note metadata has no action field."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.get_fields.return_value = [{"name": "comments"}, {"name": "dateAdded"}]
+        result = server._load_valid_note_actions(meta)
+        assert result is None
+
+    def test_load_valid_note_actions_returns_none_when_options_empty(self, mock_client):
+        """_load_valid_note_actions returns None when action field has no options."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.get_fields.return_value = [{"name": "action", "options": []}]
+        result = server._load_valid_note_actions(meta)
+        assert result is None
+
+    def test_load_valid_note_actions_returns_none_on_metadata_exception(self, mock_client):
+        """_load_valid_note_actions returns None and does not raise when metadata fails."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.get_fields.side_effect = Exception("metadata unavailable")
+        result = server._load_valid_note_actions(meta)
+        assert result is None
+
 
 class TestSprint6E2E:
     """End-to-end tests for Sprint 6."""
@@ -5103,6 +5150,57 @@ class TestCreateCandidateFromCv:
         # Warnings surfaced for child failures
         assert "warnings" in data
         assert len(data["warnings"]) > 0
+
+    def test_source_auto_stamped_when_not_provided(self, mock_client, mock_metadata, sample_parsed_resume):
+        """create_candidate_from_cv stamps source=get_mcp_source() when caller omits source."""
+        mock_client.parse_resume_text.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+        mock_client.create.side_effect = [
+            {"changedEntityId": 250, "changeType": "INSERT", "data": {"id": 250}},
+            {"changedEntityId": 251, "changeType": "INSERT", "data": {"id": 251}},
+            {"changedEntityId": 252, "changeType": "INSERT", "data": {"id": 252}},
+            {"changedEntityId": 253, "changeType": "INSERT", "data": {"id": 253}},
+        ]
+        mock_client.update.return_value = {"changedEntityId": 250, "changeType": "UPDATE", "data": {"id": 250}}
+        mock_client.get.return_value = {"id": 250, "skillSet": ""}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}), \
+             patch("bullhorn_mcp.server.get_mcp_source", return_value="Claude"):
+            server.create_candidate_from_cv(content="Jane Doe\nEngineer")
+
+        candidate_call = mock_client.create.call_args_list[0]
+        assert candidate_call[0][0] == "Candidate"
+        payload = candidate_call[0][1]
+        assert payload.get("source") == "Claude"
+
+    def test_user_supplied_source_wins_in_cv_flow(self, mock_client, mock_metadata, sample_parsed_resume):
+        """create_candidate_from_cv does not overwrite source when caller supplies it via fields_override."""
+        mock_client.parse_resume_text.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+        mock_client.create.side_effect = [
+            {"changedEntityId": 255, "changeType": "INSERT", "data": {"id": 255}},
+            {"changedEntityId": 256, "changeType": "INSERT", "data": {"id": 256}},
+            {"changedEntityId": 257, "changeType": "INSERT", "data": {"id": 257}},
+            {"changedEntityId": 258, "changeType": "INSERT", "data": {"id": 258}},
+        ]
+        mock_client.update.return_value = {"changedEntityId": 255, "changeType": "UPDATE", "data": {"id": 255}}
+        mock_client.get.return_value = {"id": 255, "skillSet": ""}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}), \
+             patch("bullhorn_mcp.server.get_mcp_source", return_value="Claude"):
+            server.create_candidate_from_cv(
+                content="Jane Doe\nEngineer",
+                fields_override={"source": "LinkedIn"},
+            )
+
+        candidate_call = mock_client.create.call_args_list[0]
+        assert candidate_call[0][0] == "Candidate"
+        payload = candidate_call[0][1]
+        assert payload.get("source") == "LinkedIn"
 
 
 class TestAttachCv:
