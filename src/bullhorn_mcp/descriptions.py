@@ -44,6 +44,7 @@ TOOL_ENTITY_MAP: dict[str, list[str]] = {
     "list_companies": ["ClientCorporation"],
     "get_job": ["JobOrder"],
     "get_candidate": ["Candidate"],
+    "get_company": ["ClientCorporation"],
     "search_entities": SUPPORTED_ENTITIES,
     "query_entities": SUPPORTED_ENTITIES,
     "create_company": ["ClientCorporation"],

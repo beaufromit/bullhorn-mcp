@@ -331,7 +331,7 @@ class TestSearchExtraParams:
         url = str(route.calls[0].request.url)
         assert "entityId=42" in url
         assert "sender.id%3A1" in url  # field + value present in query param (: encoded as %3A)
-        assert "isDeleted" in url  # blanket deleted filter applied
+        assert "isDeleted" not in url  # UserMessage has no isDeleted field — denylist applies
 
 
 class TestCreateEntity:
@@ -895,6 +895,65 @@ class TestExcludeDeletedFilter:
         url = str(route.calls[0].request.url)
         assert "isDeleted%3Dfalse" in url
         assert "%28%29" not in url  # no empty parens
+
+
+class TestIsDeletedDenylist:
+    """Tests for _ENTITIES_WITHOUT_ISDELETED — entities that have no isDeleted field."""
+
+    @respx.mock
+    def test_search_skips_isdeleted_for_client_corporation(self, mock_auth, mock_session):
+        """search() does NOT append isDeleted:0 for ClientCorporation."""
+        route = respx.get(f"{mock_session.rest_url}/search/ClientCorporation").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.search("ClientCorporation", "name:Acme*")
+        url = str(route.calls[0].request.url)
+        assert "isDeleted" not in url
+
+    @respx.mock
+    def test_search_skips_isdeleted_for_user_message(self, mock_auth, mock_session):
+        """search() does NOT append isDeleted:0 for UserMessage."""
+        route = respx.get(f"{mock_session.rest_url}/search/UserMessage").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.search("UserMessage", "subject:hello")
+        url = str(route.calls[0].request.url)
+        assert "isDeleted" not in url
+
+    @respx.mock
+    def test_query_skips_isdeleted_for_client_corporation(self, mock_auth, mock_session):
+        """query() does NOT append isDeleted=false for ClientCorporation."""
+        route = respx.get(f"{mock_session.rest_url}/query/ClientCorporation").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.query("ClientCorporation", "status='Active'")
+        url = str(route.calls[0].request.url)
+        assert "isDeleted" not in url
+
+    @respx.mock
+    def test_search_still_appends_isdeleted_for_candidate(self, mock_auth, mock_session):
+        """Denylist does not affect entities that do have isDeleted (e.g. Candidate)."""
+        route = respx.get(f"{mock_session.rest_url}/search/Candidate").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.search("Candidate", "name:Smith")
+        url = str(route.calls[0].request.url)
+        assert "isDeleted%3A0" in url
+
+    @respx.mock
+    def test_query_still_appends_isdeleted_for_job_order(self, mock_auth, mock_session):
+        """Denylist does not affect entities that do have isDeleted (e.g. JobOrder)."""
+        route = respx.get(f"{mock_session.rest_url}/query/JobOrder").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.query("JobOrder", "salary > 100000")
+        url = str(route.calls[0].request.url)
+        assert "isDeleted%3Dfalse" in url
 
 
 class TestMultipartRequest:

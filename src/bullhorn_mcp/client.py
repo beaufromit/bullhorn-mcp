@@ -6,6 +6,10 @@ from typing import Any
 from .auth import BullhornAuth
 
 
+# Entities that do not expose an isDeleted field on /search or /query.
+# The auto-exclude-deleted clause is silently skipped for these entities.
+_ENTITIES_WITHOUT_ISDELETED: frozenset[str] = frozenset({"ClientCorporation", "UserMessage"})
+
 # Default fields for common entities
 DEFAULT_FIELDS = {
     "JobOrder": "id,title,status,employmentType,dateAdded,startDate,salary,clientCorporation,owner,description,numOpenings,isOpen",
@@ -222,7 +226,7 @@ class BullhornClient:
         Returns:
             List of matching entities
         """
-        if exclude_deleted:
+        if exclude_deleted and entity not in _ENTITIES_WITHOUT_ISDELETED:
             query = f"({query}) AND isDeleted:0" if query else "isDeleted:0"
 
         if fields is None:
@@ -270,7 +274,7 @@ class BullhornClient:
         Returns:
             List of matching entities
         """
-        if exclude_deleted:
+        if exclude_deleted and entity not in _ENTITIES_WITHOUT_ISDELETED:
             where = f"({where}) AND isDeleted=false" if where else "isDeleted=false"
 
         if fields is None:

@@ -15,7 +15,7 @@ from .config import BullhornConfig
 from .auth import BullhornAuth, AuthenticationError
 from .client import BullhornClient, BullhornAPIError, DEFAULT_FIELDS
 from .metadata import BullhornMetadata
-from .candidate_config import get_candidate_defaults, get_candidate_required
+from .candidate_config import get_candidate_defaults, get_candidate_required, get_mcp_source
 from .joborder_config import get_joborder_defaults, get_joborder_required
 from .shortlist_config import get_shortlist_status
 from .fuzzy import score_company_match, categorize_score, score_contact_match
@@ -208,6 +208,7 @@ mcp = FastMCP(
 _client: BullhornClient | None = None
 _metadata: BullhornMetadata | None = None
 _shortlist_status_validated: bool = False
+_valid_note_actions: set[str] | None = None
 
 
 def get_client() -> BullhornClient:
@@ -489,6 +490,28 @@ def get_candidate(candidate_id: int, fields: str | None = None) -> str:
 
 
 @mcp.tool()
+def get_company(company_id: int, fields: str | None = None) -> str:
+    """Get details for a specific client company (ClientCorporation) by ID.
+
+    Args:
+        company_id: The ClientCorporation ID
+        fields: Comma-separated fields to return (default: id,name,status,phone,address,dateAdded)
+
+    Returns:
+        JSON object with company details.
+
+    Note on notes: use get_notes_for_entity("ClientCorporation", company_id) for company notes.
+    """
+    try:
+        client = get_client()
+        result = client.get(entity="ClientCorporation", entity_id=company_id, fields=fields)
+        return format_response(result)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
 def search_entities(
     entity: str,
     query: str,
@@ -700,7 +723,6 @@ def search_emails(
             count=limit,
             sort="-smtpReceiveDate",
             extra_params={"entityId": person_id},
-            exclude_deleted=False,
         )
 
         return format_response(results)
@@ -1081,15 +1103,14 @@ _NOTE_DEFAULT_FIELDS = (
     "commentingPerson(id,firstName,lastName),"
     "personReference(id,firstName,lastName),"
     "jobOrder(id,title),"
-    "clientCorporation(id,name),"
     "placements(id),"
     "leads(id),"
     "opportunities(id),"
     "isDeleted"
 )
 
-# /search/Note does not expose clientCorporation — use a separate default for
-# the search path to avoid a 400 from Bullhorn.
+# /search/Note and the /entity/{Entity}/{id}/notes association endpoint both
+# reject clientCorporation — keep these fields in sync with _NOTE_DEFAULT_FIELDS.
 _NOTE_SEARCH_DEFAULT_FIELDS = (
     "id,action,comments,dateAdded,"
     "commentingPerson(id,firstName,lastName),"
@@ -1143,6 +1164,14 @@ def add_note(entity: str, entity_id: int, action: str, comments: str) -> str:
                     f"add_note does not support entity '{entity}'. "
                     f"Supported: {', '.join(sorted(_NOTE_TARGET_ENTITIES))}."
                 ),
+            })
+
+        valid_actions = _load_valid_note_actions(get_metadata())
+        if valid_actions is not None and action not in valid_actions:
+            return format_response({
+                "error": "invalid_action",
+                "message": f"'{action}' is not a valid Note action for this Bullhorn instance.",
+                "valid_actions": sorted(valid_actions),
             })
 
         commenting_person_id = None
@@ -1400,6 +1429,10 @@ def create_candidate(fields: dict, force: bool = False) -> str:
                 "message": "Multiple users found. Specify owner by ID.",
             })
         merged["owner"] = owner_result
+
+        # Stamp source with configured MCP value if not already set
+        if not merged.get("source"):
+            merged["source"] = get_mcp_source()
 
         # Validate tenant-configured required fields
         env_required = get_candidate_required()
@@ -1730,6 +1763,10 @@ def create_candidate_from_cv(
         # Apply tenant defaults
         defaults = get_candidate_defaults()
         candidate_data = {**metadata.resolve_fields("Candidate", defaults), **candidate_data}
+
+        # Stamp source with configured MCP value if not already set
+        if not candidate_data.get("source"):
+            candidate_data["source"] = get_mcp_source()
 
         resolved = metadata.resolve_fields("Candidate", candidate_data)
         resolved, strip_warnings = _strip_contact_title(resolved, "Candidate")
@@ -2162,6 +2199,28 @@ def bulk_import(companies: list, contacts: list) -> str:
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
+
+
+def _load_valid_note_actions(metadata: BullhornMetadata) -> set[str] | None:
+    """Load and cache valid Note action picklist values from Bullhorn metadata.
+
+    Returns the set of valid values, or None if metadata is unavailable.
+    """
+    global _valid_note_actions
+    if _valid_note_actions is not None:
+        return _valid_note_actions
+    try:
+        fields_meta = metadata.get_fields("Note")
+        action_field = next((f for f in fields_meta if f.get("name") == "action"), None)
+        if action_field:
+            options = action_field.get("options", [])
+            values = {o.get("value") for o in options if o.get("value")}
+            if values:
+                _valid_note_actions = values
+                return _valid_note_actions
+    except Exception:
+        pass
+    return None
 
 
 def _validate_shortlist_status_once(metadata: BullhornMetadata, configured_status: str) -> None:

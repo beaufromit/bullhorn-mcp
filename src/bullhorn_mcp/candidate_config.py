@@ -46,3 +46,12 @@ def get_candidate_defaults() -> dict:
     """Return env-defined default values for Candidate fields."""
     raw = _load_json_env("BULLHORN_CANDIDATE_DEFAULTS", {})
     return dict(raw) if isinstance(raw, dict) else {}
+
+
+def get_mcp_source() -> str:
+    """Return the source value stamped on candidates created via the MCP.
+
+    Reads BULLHORN_MCP_SOURCE from the environment. Must be a valid
+    Candidate.source picklist value in the Bullhorn instance.
+    """
+    return os.environ.get("BULLHORN_MCP_SOURCE", "Claude")

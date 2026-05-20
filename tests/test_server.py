@@ -26,10 +26,12 @@ def reset_client():
     server._client = None
     server._metadata = None
     server._shortlist_status_validated = False
+    server._valid_note_actions = None
     yield
     server._client = None
     server._metadata = None
     server._shortlist_status_validated = False
+    server._valid_note_actions = None
 
 
 class TestListJobs:
@@ -184,6 +186,44 @@ class TestGetCandidate:
         data = json.loads(result)
         assert data["firstName"] == "John"
         assert data["lastName"] == "Smith"
+
+
+class TestGetCompany:
+    """Tests for get_company tool."""
+
+    def test_get_company_by_id(self, mock_client):
+        """get_company delegates to client.get with entity=ClientCorporation."""
+        mock_client.get.return_value = {"id": 9493, "name": "Pinergy", "status": "Active"}
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_company(company_id=9493)
+
+        data = json.loads(result)
+        assert data["id"] == 9493
+        assert data["name"] == "Pinergy"
+        mock_client.get.assert_called_with(
+            entity="ClientCorporation", entity_id=9493, fields=None
+        )
+
+    def test_get_company_with_fields(self, mock_client):
+        """get_company passes custom fields to client.get."""
+        mock_client.get.return_value = {"id": 9493, "name": "Pinergy"}
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.get_company(company_id=9493, fields="id,name,phone")
+
+        mock_client.get.assert_called_with(
+            entity="ClientCorporation", entity_id=9493, fields="id,name,phone"
+        )
+
+    def test_get_company_api_error(self, mock_client):
+        """get_company returns ERROR prefix on API failure."""
+        mock_client.get.side_effect = BullhornAPIError("not found")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_company(company_id=99999)
+
+        assert result.startswith("ERROR:")
 
 
 class TestSearchEntities:
@@ -1494,6 +1534,52 @@ class TestAddNote:
              patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
             result = server.add_note("ClientContact", 1, "General Note", "note")
         assert result.startswith("ERROR:")
+
+    def test_invalid_action_blocked_with_valid_list(self, mock_client):
+        """add_note returns invalid_action error when action is not in picklist."""
+        valid = {"General Note", "Outbound Call", "Email"}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "_load_valid_note_actions", return_value=valid):
+            result = server.add_note("Candidate", 1, "Bogus Action", "test")
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_action"
+        assert "Bogus Action" in data["message"]
+        assert sorted(data["valid_actions"]) == sorted(valid)
+        mock_client.add_note.assert_not_called()
+
+    def test_valid_action_passes_through(self, mock_client):
+        """add_note succeeds when action is in the picklist."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        valid = {"General Note", "Outbound Call"}
+        mock_client.add_note.return_value = {
+            "changedEntityId": 999, "changeType": "INSERT",
+            "data": {"id": 999, "action": "General Note"},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")), \
+             patch.object(server, "_load_valid_note_actions", return_value=valid):
+            result = server.add_note("Candidate", 1, "General Note", "note")
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 999
+        mock_client.add_note.assert_called_once()
+
+    def test_action_validation_skipped_when_picklist_unavailable(self, mock_client):
+        """add_note proceeds without validation when picklist cannot be loaded."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        mock_client.add_note.return_value = {
+            "changedEntityId": 998, "changeType": "INSERT",
+            "data": {"id": 998},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")), \
+             patch.object(server, "_load_valid_note_actions", return_value=None):
+            result = server.add_note("Candidate", 1, "Any Action", "note")
+
+        data = json.loads(result)
+        assert data["changedEntityId"] == 998
+        mock_client.add_note.assert_called_once()
 
 
 class TestSprint6E2E:
@@ -4092,10 +4178,10 @@ class TestCR16DeletedRecordFilter:
             with patch.object(server, "get_client", return_value=real_client):
                 server.find_duplicate_companies(name="Acme Corp")
 
-        assert "isDeleted" in captured["url"]
+        assert "isDeleted" not in captured["url"]  # ClientCorporation has no isDeleted field
 
     def test_find_duplicate_contacts_company_and_contact_search_excludes_deleted(self, mock_auth, mock_session):
-        """Both the company-resolution and contact searches must include isDeleted:0.
+        """Company search skips isDeleted (ClientCorporation denylist); contact search includes it.
 
         Returns an exact-match company so find_duplicate_contacts proceeds past the
         company lookup and also issues the ClientContact search — exercising both legs.
@@ -4126,9 +4212,9 @@ class TestCR16DeletedRecordFilter:
                 )
 
         assert len(captured_urls) == 2, f"Expected 2 searches (company + contact), got {len(captured_urls)}"
-        assert all("isDeleted" in url for url in captured_urls), (
-            "Not all search calls included isDeleted filter"
-        )
+        company_url, contact_url = captured_urls
+        assert "isDeleted" not in company_url, "ClientCorporation search must NOT include isDeleted (denylist)"
+        assert "isDeleted" in contact_url, "ClientContact search must include isDeleted filter"
 
     def test_find_duplicate_contacts_contact_search_excludes_deleted(self, mock_auth, mock_session):
         """find_duplicate_contacts contact search must include isDeleted:0 when corp_id is supplied."""
@@ -4263,7 +4349,7 @@ class TestCR16DeletedRecordFilter:
             with patch.object(server, "get_client", return_value=real_client):
                 server.find_duplicate_companies(name="")
 
-        assert "isDeleted" in captured["url"]
+        assert "isDeleted" not in captured["url"]  # ClientCorporation has no isDeleted field (denylist)
         assert "name%3A" not in captured["url"]  # no name: Lucene filter for empty input
 
 
@@ -4282,6 +4368,12 @@ class TestCreateCandidate:
         meta.resolve_fields.side_effect = lambda entity, fields: fields
         meta.get_fields.return_value = []
         return meta
+
+    @pytest.fixture(autouse=True)
+    def clear_candidate_required(self):
+        """Patch get_candidate_required to [] so existing tests aren't broken by .env defaults."""
+        with patch("bullhorn_mcp.server.get_candidate_required", return_value=[]):
+            yield
 
     def test_create_candidate_success(self, mock_client, mock_metadata):
         """create_candidate with minimal required fields creates record."""
@@ -4549,6 +4641,70 @@ class TestCreateCandidate:
         # resolve_fields is called with "Candidate" at least once
         calls = mock_metadata.resolve_fields.call_args_list
         assert any(c.args[0] == "Candidate" for c in calls)
+
+    def test_source_auto_stamped_when_not_provided(self, mock_client, mock_metadata):
+        """create_candidate stamps source=get_mcp_source() when caller omits source."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 120, "changeType": "INSERT",
+            "data": {"id": 120},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}), \
+             patch("bullhorn_mcp.server.get_mcp_source", return_value="Claude"):
+            server.create_candidate({"firstName": "Jane", "lastName": "Doe", "owner": {"id": 1}})
+
+        payload = mock_client.create.call_args[0][1]
+        assert payload.get("source") == "Claude"
+
+    def test_user_supplied_source_wins(self, mock_client, mock_metadata):
+        """create_candidate does not overwrite source when caller supplies it."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 121, "changeType": "INSERT",
+            "data": {"id": 121},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}), \
+             patch("bullhorn_mcp.server.get_mcp_source", return_value="Claude"):
+            server.create_candidate({
+                "firstName": "Jane", "lastName": "Doe",
+                "source": "LinkedIn", "owner": {"id": 1},
+            })
+
+        payload = mock_client.create.call_args[0][1]
+        assert payload.get("source") == "LinkedIn"
+
+    def test_custom_mcp_source_env_var(self, mock_client, mock_metadata):
+        """get_mcp_source() reads BULLHORN_MCP_SOURCE env var."""
+        from bullhorn_mcp.candidate_config import get_mcp_source
+        import os
+        original = os.environ.get("BULLHORN_MCP_SOURCE")
+        try:
+            os.environ["BULLHORN_MCP_SOURCE"] = "GPT-4o"
+            assert get_mcp_source() == "GPT-4o"
+        finally:
+            if original is None:
+                os.environ.pop("BULLHORN_MCP_SOURCE", None)
+            else:
+                os.environ["BULLHORN_MCP_SOURCE"] = original
+
+    def test_mcp_source_defaults_to_claude(self):
+        """get_mcp_source() defaults to 'Claude' when env var is unset."""
+        from bullhorn_mcp.candidate_config import get_mcp_source
+        import os
+        original = os.environ.pop("BULLHORN_MCP_SOURCE", None)
+        try:
+            assert get_mcp_source() == "Claude"
+        finally:
+            if original is not None:
+                os.environ["BULLHORN_MCP_SOURCE"] = original
 
 
 class TestFindDuplicateCandidates:
@@ -5174,6 +5330,55 @@ class TestGetNotesForEntity:
 
         notes = json.loads(result)
         assert "call_metadata" not in notes[0]
+
+    def test_returns_notes_for_client_contact(self, mock_client):
+        """ClientContact uses the same association endpoint and returns real notes."""
+        contact_note = {
+            "id": 2001,
+            "action": "Outbound Call",
+            "comments": "Follow-up call re candidate submissions.",
+            "dateAdded": 1741000000000,
+            "isDeleted": False,
+            "commentingPerson": {"id": 2, "firstName": "Paul", "lastName": "McArdle"},
+            "personReference": {"id": 132773, "firstName": "Anne", "lastName": "McEvoy"},
+            "jobOrder": None,
+        }
+        mock_client.get_association.return_value = [contact_note]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("ClientContact", 132773)
+
+        notes = json.loads(result)
+        assert len(notes) == 1
+        assert notes[0]["id"] == 2001
+        call_args = mock_client.get_association.call_args
+        assert call_args.args[0] == "ClientContact"
+        assert call_args.args[1] == 132773
+        assert call_args.args[2] == "notes"
+
+    def test_returns_notes_for_job_order(self, mock_client):
+        """JobOrder uses the same association endpoint."""
+        job_note = {
+            "id": 3001,
+            "action": "General Note",
+            "comments": "Role put on hold.",
+            "dateAdded": 1740000000000,
+            "isDeleted": False,
+            "commentingPerson": {"id": 5, "firstName": "Sarah", "lastName": "Jones"},
+            "personReference": None,
+            "jobOrder": {"id": 51227, "title": "Interim CIO"},
+        }
+        mock_client.get_association.return_value = [job_note]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("JobOrder", 51227)
+
+        notes = json.loads(result)
+        assert len(notes) == 1
+        assert notes[0]["id"] == 3001
+        call_args = mock_client.get_association.call_args
+        assert call_args.args[0] == "JobOrder"
+        assert call_args.args[1] == 51227
 
 
 class TestSearchNotes:
