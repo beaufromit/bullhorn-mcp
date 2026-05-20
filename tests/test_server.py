@@ -801,6 +801,48 @@ class TestCreateContact:
 
         mock_client.resolve_owner.assert_called_once_with({"id": 99})
 
+    def test_create_contact_name_always_computed(self, mock_client, mock_metadata):
+        """create_contact injects name into payload from firstName + lastName."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 2, "changeType": "INSERT",
+            "data": {"id": 2, "firstName": "Jane", "lastName": "Doe"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        call_kwargs = mock_client.create.call_args[0][1]
+        assert call_kwargs["name"] == "Jane Doe"
+
+    def test_create_contact_strips_name_field(self, mock_client, mock_metadata):
+        """create_contact ignores LLM-supplied 'name', warns, then injects MCP-computed value."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 3, "changeType": "INSERT",
+            "data": {"id": 3, "firstName": "Jane", "lastName": "Doe"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.create_contact({
+                "firstName": "Jane", "lastName": "Doe",
+                "name": "Bogus Name",
+                "clientCorporation": {"id": 1}, "owner": {"id": 99},
+            })
+
+        data = json.loads(result)
+        assert "warnings" in data
+        assert any("name" in w for w in data["warnings"])
+        call_kwargs = mock_client.create.call_args[0][1]
+        assert call_kwargs["name"] == "Jane Doe"
+
 
 class TestCreateJob:
     """Tests for create_job tool (CR14 dict-based signature)."""
@@ -1436,6 +1478,92 @@ class TestUpdateRecord:
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.update_record("ClientContact", 1, {"title": "CTO"})
         assert result.startswith("ERROR:")
+
+    def test_update_record_candidate_name_recomputed_both(self, mock_client, mock_metadata):
+        """update_record recomputes name when both firstName and lastName in payload — no GET needed."""
+        mock_client.update.return_value = {
+            "changedEntityId": 10, "changeType": "UPDATE",
+            "data": {"id": 10, "firstName": "New", "lastName": "Name"},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.update_record("Candidate", 10, {"firstName": "New", "lastName": "Name"})
+
+        mock_client.get.assert_not_called()
+        payload = mock_client.update.call_args[0][2]
+        assert payload["name"] == "New Name"
+
+    def test_update_record_candidate_name_recomputed_first_only(self, mock_client, mock_metadata):
+        """update_record fetches missing lastName to recompute name when only firstName updated."""
+        mock_client.get.return_value = {"firstName": "Old", "lastName": "Smith"}
+        mock_client.update.return_value = {
+            "changedEntityId": 11, "changeType": "UPDATE",
+            "data": {"id": 11},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.update_record("Candidate", 11, {"firstName": "Updated"})
+
+        mock_client.get.assert_called_once_with("Candidate", 11, fields="firstName,lastName")
+        payload = mock_client.update.call_args[0][2]
+        assert payload["name"] == "Updated Smith"
+
+    def test_update_record_candidate_name_recomputed_last_only(self, mock_client, mock_metadata):
+        """update_record fetches missing firstName to recompute name when only lastName updated."""
+        mock_client.get.return_value = {"firstName": "Jane", "lastName": "Old"}
+        mock_client.update.return_value = {
+            "changedEntityId": 12, "changeType": "UPDATE",
+            "data": {"id": 12},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.update_record("Candidate", 12, {"lastName": "Updated"})
+
+        mock_client.get.assert_called_once_with("Candidate", 12, fields="firstName,lastName")
+        payload = mock_client.update.call_args[0][2]
+        assert payload["name"] == "Jane Updated"
+
+    def test_update_record_candidate_no_name_recompute_other_fields(self, mock_client, mock_metadata):
+        """update_record does not recompute name when neither firstName nor lastName is updated."""
+        mock_client.update.return_value = {
+            "changedEntityId": 13, "changeType": "UPDATE",
+            "data": {"id": 13},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.update_record("Candidate", 13, {"occupation": "Engineer"})
+
+        mock_client.get.assert_not_called()
+        payload = mock_client.update.call_args[0][2]
+        assert "name" not in payload
+
+    def test_update_record_contact_name_recomputed(self, mock_client, mock_metadata):
+        """update_record recomputes name for ClientContact too."""
+        mock_client.update.return_value = {
+            "changedEntityId": 14, "changeType": "UPDATE",
+            "data": {"id": 14},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.update_record("ClientContact", 14, {"firstName": "Alice", "lastName": "Brown"})
+
+        mock_client.get.assert_not_called()
+        payload = mock_client.update.call_args[0][2]
+        assert payload["name"] == "Alice Brown"
+
+    def test_update_record_other_entity_no_name_injection(self, mock_client, mock_metadata):
+        """update_record does not inject name for entities other than Candidate/ClientContact."""
+        mock_client.update.return_value = {
+            "changedEntityId": 15, "changeType": "UPDATE",
+            "data": {"id": 15},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.update_record("ClientCorporation", 15, {"firstName": "Acme", "lastName": "Corp"})
+
+        mock_client.get.assert_not_called()
+        payload = mock_client.update.call_args[0][2]
+        assert "name" not in payload
 
 
 class TestAddNote:
@@ -2186,11 +2314,10 @@ class TestSprint9PayloadAudit:
         return meta
 
     def test_create_contact_payload_only_contains_caller_fields(self, mock_client, mock_metadata):
-        """PUT body for create_contact contains exactly the keys the caller provided.
+        """PUT body for create_contact contains exactly the caller-provided keys plus MCP-computed name.
 
-        Only 'owner' is transformed (string → {"id": int}); no other fields are
-        added. This guards against auto-injection of defaults, parameter bleed-through,
-        or template population beyond the caller's input dict.
+        Only 'owner' is transformed (string → {"id": int}); 'name' is always
+        computed by the MCP from firstName + lastName. No other fields are added.
         """
         mock_client.resolve_owner.return_value = {"id": 99}
         mock_client.create.return_value = {
@@ -2206,10 +2333,11 @@ class TestSprint9PayloadAudit:
             })
 
         create_fields = mock_client.create.call_args[0][1]
-        assert set(create_fields.keys()) == {"firstName", "lastName", "clientCorporation", "owner"}
+        assert set(create_fields.keys()) == {"firstName", "lastName", "clientCorporation", "owner", "name"}
+        assert create_fields["name"] == "Jane Doe"
 
     def test_create_contact_owner_normalised_not_injected(self, mock_client, mock_metadata):
-        """When owner is a name string, only that key is transformed — nothing else added."""
+        """When owner is a name string, only that key is transformed; name is MCP-computed."""
         mock_client.resolve_owner.return_value = {"id": 55}
         mock_client.create.return_value = {
             "changedEntityId": 1, "changeType": "INSERT",
@@ -2224,8 +2352,9 @@ class TestSprint9PayloadAudit:
             })
 
         create_fields = mock_client.create.call_args[0][1]
-        assert set(create_fields.keys()) == {"firstName", "lastName", "clientCorporation", "owner"}
+        assert set(create_fields.keys()) == {"firstName", "lastName", "clientCorporation", "owner", "name"}
         assert create_fields["owner"] == {"id": 55}
+        assert create_fields["name"] == "Jane Doe"
 
     def test_create_company_payload_only_contains_caller_fields(self, mock_client, mock_metadata):
         """PUT body for create_company contains exactly the caller-supplied keys plus auto-populated owner.
@@ -2299,11 +2428,12 @@ class TestSprint9E2E:
         data = json.loads(result)
         assert data["changedEntityId"] == 54321
 
-        # The PUT body must be exactly the four caller-supplied fields
+        # The PUT body must contain exactly the caller-supplied fields plus MCP-computed name
         create_fields = mock_client.create.call_args[0][1]
         assert create_fields == {
             "firstName": "Jane",
             "lastName": "Doe",
+            "name": "Jane Doe",
             "clientCorporation": {"id": 1},
             "owner": {"id": 99},
         }
@@ -2501,11 +2631,12 @@ class TestSprint12TitleInjectionRegression:
         )
 
     def test_sprint12_e2e_update_no_title_injection(self, mock_auth, mock_session):
-        """E2E: update_record("ClientContact", 1, {"firstName": "Aleksandr"}) sends only that field.
+        """E2E: update_record("ClientContact", 1, {"firstName": "Aleksandr"}) sends firstName + name.
 
         Exercises the full stack: server.update_record() → metadata.resolve_fields()
-        → client.update() → HTTP POST. Captures the raw POST body and asserts it is
-        exactly {"firstName": "Aleksandr"} with no injected keys.
+        → client.update() → HTTP POST. Captures the raw POST body and asserts it contains
+        firstName and the MCP-computed name (fetched from current record for missing lastName).
+        No other unexpected keys are injected.
         """
         import httpx
         import respx
@@ -2519,7 +2650,8 @@ class TestSprint12TitleInjectionRegression:
             captured["body"] = json.loads(request.content)
             return httpx.Response(200, json={"changedEntityId": 1, "changeType": "UPDATE"})
 
-        contact_record = {"id": 1, "firstName": "Aleksandr"}
+        # Current record has both firstName and lastName so name can be fully computed
+        contact_record = {"id": 1, "firstName": "Old", "lastName": "Smith"}
 
         # Mock metadata: resolve_fields passes through unchanged (no label remapping needed)
         meta = Mock(spec=BullhornMetadata)
@@ -2543,8 +2675,9 @@ class TestSprint12TitleInjectionRegression:
         assert data["changedEntityId"] == 1
 
         assert "body" in captured, "POST was not called — route did not match"
-        assert captured["body"] == {"firstName": "Aleksandr"}, (
-            f"POST body contained unexpected keys: {captured['body']}"
+        # name is MCP-computed from the updated firstName + fetched lastName
+        assert captured["body"] == {"firstName": "Aleksandr", "name": "Aleksandr Smith"}, (
+            f"POST body was unexpected: {captured['body']}"
         )
 
 
@@ -4530,7 +4663,7 @@ class TestCreateCandidate:
         assert "title" not in call_kwargs
 
     def test_create_candidate_strips_name_field(self, mock_client, mock_metadata):
-        """create_candidate strips read-only 'name' and includes warning."""
+        """create_candidate ignores LLM-supplied 'name', warns, then injects MCP-computed value."""
         mock_client.resolve_owner.return_value = {"id": 1}
         mock_client.search.return_value = []
         mock_client.create.return_value = {
@@ -4543,14 +4676,32 @@ class TestCreateCandidate:
              patch.object(server, "resolve_caller", return_value={"id": 1}):
             result = server.create_candidate({
                 "firstName": "Jane", "lastName": "Doe",
-                "name": "Jane Doe", "owner": {"id": 1},
+                "name": "Bogus Name", "owner": {"id": 1},
             })
 
         data = json.loads(result)
         assert "warnings" in data
         assert any("name" in w for w in data["warnings"])
         call_kwargs = mock_client.create.call_args[0][1]
-        assert "name" not in call_kwargs
+        # MCP injects the correct computed value, not the LLM-supplied bogus string
+        assert call_kwargs["name"] == "Jane Doe"
+
+    def test_create_candidate_name_always_computed(self, mock_client, mock_metadata):
+        """create_candidate injects name into payload even when LLM does not supply it."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.search.return_value = []
+        mock_client.create.return_value = {
+            "changedEntityId": 116, "changeType": "INSERT",
+            "data": {"id": 116, "firstName": "Alice", "lastName": "Smith"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.create_candidate({"firstName": "Alice", "lastName": "Smith", "owner": {"id": 1}})
+
+        call_kwargs = mock_client.create.call_args[0][1]
+        assert call_kwargs["name"] == "Alice Smith"
 
     def test_create_candidate_dup_found_no_force(self, mock_client, mock_metadata):
         """create_candidate returns duplicate_found when a match is detected."""
@@ -4995,9 +5146,9 @@ class TestCreateCandidateFromCv:
         assert payload["lastName"] == "Doe"
         assert payload["email"] == "jane.doe@example.com"
         assert payload["occupation"] == "Senior Software Engineer"
-        assert "title" not in payload  # stripped by _strip_contact_title
-        assert "name" not in payload   # stripped by _strip_contact_title
-        assert "owner" in payload      # auto-stamped from resolve_caller
+        assert "title" not in payload        # stripped by _strip_contact_title
+        assert payload["name"] == "Jane Doe"  # computed by MCP from firstName + lastName
+        assert "owner" in payload             # auto-stamped from resolve_caller
 
     def test_create_from_cv_text_success(self, mock_client, mock_metadata, sample_parsed_resume):
         """create_candidate_from_cv text path creates candidate without file attach."""
@@ -5028,9 +5179,9 @@ class TestCreateCandidateFromCv:
         payload = candidate_call[0][1]
         assert payload["firstName"] == "Jane"
         assert payload["lastName"] == "Doe"
-        assert "title" not in payload  # stripped by _strip_contact_title
-        assert "name" not in payload   # stripped by _strip_contact_title
-        assert "owner" in payload      # auto-stamped from resolve_caller
+        assert "title" not in payload        # stripped by _strip_contact_title
+        assert payload["name"] == "Jane Doe"  # computed by MCP from firstName + lastName
+        assert "owner" in payload             # auto-stamped from resolve_caller
 
     def test_create_from_cv_duplicate_found(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """create_candidate_from_cv returns duplicate_found when match detected."""

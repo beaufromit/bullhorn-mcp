@@ -44,12 +44,24 @@ def _strip_contact_title(fields: dict, entity: str) -> tuple[dict, list[str]]:
             msg = "Field 'title' was stripped from the Candidate payload. Use 'occupation' for job title — Candidate has no title field."
             _logger.warning(msg)
             warnings.append(msg)
-        if "name" in fields:
-            del fields["name"]
-            msg = "Field 'name' was stripped from the Candidate payload. It is auto-computed from firstName + lastName and must not be sent."
-            _logger.warning(msg)
-            warnings.append(msg)
+    if entity in ("Candidate", "ClientContact") and "name" in fields:
+        fields = dict(fields)
+        del fields["name"]
+        msg = (
+            f"Field 'name' was ignored on the {entity} payload — "
+            "it is computed by the MCP from firstName + lastName to keep them in sync."
+        )
+        _logger.warning(msg)
+        warnings.append(msg)
     return fields, warnings
+
+
+def _compute_person_name(fields: dict) -> str | None:
+    """Return computed name from firstName + lastName, or None if neither is present."""
+    first = str(fields.get("firstName") or "").strip()
+    last = str(fields.get("lastName") or "").strip()
+    combined = f"{first} {last}".strip()
+    return combined or None
 
 
 def _check_candidate_duplicates(
@@ -784,11 +796,12 @@ def create_contact(fields: dict, force: bool = False) -> str:
                 such as "Maryrose Lyons" (resolved to a Bullhorn CorporateUser ID).
                 clientCorporation must be {"id": <company_id>}.
                 Example: {
-                    "firstName": "Jane", "lastName": "Doe", "name": "Jane Doe",
+                    "firstName": "Jane", "lastName": "Doe",
                     "email": "jane@acme.com", "occupation": "VP Engineering",
                     "clientCorporation": {"id": 98765},
                     "owner": "Maryrose Lyons"
                 }
+                'name' is computed by the MCP from firstName + lastName — do not send.
         force: If True, skip duplicate detection and create regardless. Default False.
 
     Returns:
@@ -798,7 +811,7 @@ def create_contact(fields: dict, force: bool = False) -> str:
         (unless force=True).
 
     Examples:
-        - create_contact({"firstName": "Jane", "lastName": "Doe", "name": "Jane Doe",
+        - create_contact({"firstName": "Jane", "lastName": "Doe",
                           "clientCorporation": {"id": 98765}, "owner": {"id": 12345}})
         - create_contact({"firstName": "John", "lastName": "Smith",
                           "clientCorporation": {"id": 1}, "owner": "Maryrose Lyons"})
@@ -837,6 +850,10 @@ def create_contact(fields: dict, force: bool = False) -> str:
 
         resolved = get_metadata().resolve_fields("ClientContact", contact_fields)
         resolved, warnings = _strip_contact_title(resolved, "ClientContact")
+
+        computed = _compute_person_name(resolved)
+        if computed:
+            resolved["name"] = computed
 
         if not force:
             corp_id = resolved.get("clientCorporation", {}).get("id")
@@ -1058,6 +1075,17 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
             })
 
         resolved, warnings = _strip_contact_title(resolved, entity)
+
+        # Recompute name when firstName or lastName changes on person entities
+        if entity in ("Candidate", "ClientContact") and ("firstName" in resolved or "lastName" in resolved):
+            if "firstName" in resolved and "lastName" in resolved:
+                computed = _compute_person_name(resolved)
+            else:
+                current = client.get(entity, entity_id, fields="firstName,lastName")
+                computed = _compute_person_name({**current, **resolved})
+            if computed:
+                resolved["name"] = computed
+
         result = client.update(entity, entity_id, resolved)
         response = format_response(result)
         if warnings:
@@ -1457,6 +1485,10 @@ def create_candidate(fields: dict, force: bool = False) -> str:
 
         resolved, warnings = _strip_contact_title(resolved, "Candidate")
 
+        computed = _compute_person_name(resolved)
+        if computed:
+            resolved["name"] = computed
+
         if not force:
             first_name = str(resolved.get("firstName", ""))
             last_name = str(resolved.get("lastName", ""))
@@ -1782,6 +1814,10 @@ def create_candidate_from_cv(
                     "message": "Missing required Candidate fields configured for this instance.",
                     "fields": missing,
                 })
+
+        computed = _compute_person_name(resolved)
+        if computed:
+            resolved["name"] = computed
 
         create_result = client.create("Candidate", resolved)
         candidate_id = create_result["changedEntityId"]
