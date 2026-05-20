@@ -618,7 +618,7 @@ def search_emails(
     Returns emails sent to or from a Candidate or ClientContact, optionally
     filtered to those that also involve a specific recruiter (CorporateUser),
     a date range, or a subject substring. Sorted most-recent-first by
-    smtpSendDate.
+    smtpReceiveDate.
 
     Args:
         person_id: ID of the Candidate or ClientContact whose mailbox to
@@ -698,8 +698,9 @@ def search_emails(
             query=query,
             fields=resolved_fields,
             count=limit,
-            sort="-smtpSendDate",
+            sort="-smtpReceiveDate",
             extra_params={"entityId": person_id},
+            exclude_deleted=False,
         )
 
         return format_response(results)

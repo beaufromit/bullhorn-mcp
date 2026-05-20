@@ -297,7 +297,7 @@ class TestSearchEmails:
         return client
 
     def test_search_emails_basic(self, email_client):
-        """Only person_id set: query is the OR clause, entityId is passed, sort is -smtpSendDate."""
+        """Only person_id set: query is the OR clause, entityId is passed, sort is -smtpReceiveDate."""
         from bullhorn_mcp.identity import IdentityResolutionError
         with patch.object(server, "get_client", return_value=email_client), \
              patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
@@ -306,7 +306,7 @@ class TestSearchEmails:
         call_args = email_client.search.call_args
         assert call_args.kwargs["entity"] == "UserMessage"
         assert call_args.kwargs["query"] == "(sender.id:34389 OR recipients.id:34389)"
-        assert call_args.kwargs["sort"] == "-smtpSendDate"
+        assert call_args.kwargs["sort"] == "-smtpReceiveDate"
         assert call_args.kwargs["extra_params"] == {"entityId": 34389}
         # Body should not be requested by default.
         assert "comments" not in call_args.kwargs["fields"]
