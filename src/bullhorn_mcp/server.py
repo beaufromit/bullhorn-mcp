@@ -2079,6 +2079,14 @@ def attach_cv(
                 update_payload = _truncate_against_meta(metadata, "Candidate", update_payload)
                 update_payload, strip_warns = _strip_contact_title(update_payload, "Candidate")
                 warnings.extend(strip_warns)
+                if "firstName" in update_payload or "lastName" in update_payload:
+                    if "firstName" in update_payload and "lastName" in update_payload:
+                        computed = _compute_person_name(update_payload)
+                    else:
+                        current = client.get("Candidate", candidate_id, fields="firstName,lastName")
+                        computed = _compute_person_name({**current, **update_payload})
+                    if computed:
+                        update_payload["name"] = computed
                 client.update("Candidate", candidate_id, update_payload)
                 fields_updated = list(update_payload.keys())
 

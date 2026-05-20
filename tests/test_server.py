@@ -5477,6 +5477,67 @@ class TestAttachCv:
 
         assert result.startswith("ERROR:")
 
+    def test_attach_cv_commit_recomputes_name_both_components(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """attach_cv commit injects recomputed name when both firstName and lastName are updated."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        # parsed has firstName="Jane", lastName="Doe"; candidate has firstName="John", lastName="Smith"
+        mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
+        mock_client.query.return_value = []
+        mock_client.update.return_value = {
+            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE", "data": {},
+        }
+        mock_client.attach_file.return_value = {"fileId": 90, "name": "cv.pdf"}
+        mock_client._guess_content_type.return_value = "application/pdf"
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(
+                candidate_id=sample_candidate["id"],
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+                fields_to_update=["firstName", "lastName"],
+            )
+
+        data = json.loads(result)
+        assert data["committed"] is True
+        call_kwargs = mock_client.update.call_args[0][2]
+        assert call_kwargs.get("name") == "Jane Doe"
+        # No extra client.get call needed when both components present
+        assert mock_client.get.call_count == 1
+
+    def test_attach_cv_commit_recomputes_name_single_component(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """attach_cv commit fetches the other half from Bullhorn when only one name component is updated."""
+        import base64
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        # First get: broad candidate fetch. Second get: firstName,lastName for name recomputation.
+        mock_client.get.side_effect = [
+            {**sample_candidate, "occupation": "Junior Developer"},
+            {"firstName": "John", "lastName": "Smith"},
+        ]
+        mock_client.query.return_value = []
+        mock_client.update.return_value = {
+            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE", "data": {},
+        }
+        mock_client.attach_file.return_value = {"fileId": 91, "name": "cv.pdf"}
+        mock_client._guess_content_type.return_value = "application/pdf"
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(
+                candidate_id=sample_candidate["id"],
+                file_b64=base64.b64encode(b"%PDF-fake").decode(),
+                filename="cv.pdf",
+                fields_to_update=["firstName"],
+            )
+
+        data = json.loads(result)
+        assert data["committed"] is True
+        call_kwargs = mock_client.update.call_args[0][2]
+        # firstName changed to "Jane", lastName stays "Smith"
+        assert call_kwargs.get("name") == "Jane Smith"
+        assert mock_client.get.call_count == 2
+
 
 class TestGetNotesForEntity:
     """Tests for get_notes_for_entity tool."""
