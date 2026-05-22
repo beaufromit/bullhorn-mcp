@@ -2382,3 +2382,11 @@ The handler function is `_upload_cv_handler(request)` and is registered via `mcp
 ### Final state
 
 **544 tests passing, 0 failing.**
+
+### Review findings (f684bfc)
+
+- **C1 (fixed):** Create path returned HTTP 200 when `create_candidate_from_cv` returned an error JSON string (e.g. `identity_resolution_failed` from `resolve_caller()` having no Entra token). Fix: parse the result JSON; if an `"error"` key is present, return JSONResponse with status 500.
+- **M1 (fixed):** Added `test_upload_cv_create_returns_tool_error_as_500` to verify the handler returns 500 when the tool function returns an error JSON string.
+- The create path will return 500 with `identity_resolution_failed` for automated callers without an Entra token. Providing `owner` via `fields_override` is a workaround if the caller knows the Bullhorn CorporateUser ID.
+
+**Final state after review: 545 tests passing, 0 failing. Tagged v0.0.39.**
