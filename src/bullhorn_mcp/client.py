@@ -217,8 +217,7 @@ class BullhornClient:
             count: Max results (1-500)
             start: Starting offset for pagination
             sort: Sort field with direction (e.g., "-dateAdded" for descending)
-            extra_params: Additional query-string params to merge in (e.g.,
-                ``{"entityId": 123}`` for UserMessage mailbox scoping).
+            extra_params: Additional query-string params to merge in.
             exclude_deleted: When True (default), appends ``AND isDeleted:0`` to
                 filter out soft-deleted records. Pass False only when deleted
                 records are explicitly needed.

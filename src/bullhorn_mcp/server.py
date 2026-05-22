@@ -734,7 +734,6 @@ def search_emails(
             fields=resolved_fields,
             count=limit,
             sort="-smtpReceiveDate",
-            extra_params={"entityId": person_id},
         )
 
         return format_response(results)
