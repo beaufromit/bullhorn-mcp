@@ -2763,6 +2763,16 @@ async def _upload_cv_handler(request: Request) -> Response:
                 format=str(fmt),
                 force=force,
             )
+            try:
+                parsed = json.loads(result_json)
+                if "error" in parsed:
+                    _logger.error(
+                        "upload-cv create error filename=%s error=%s",
+                        filename, parsed.get("error"),
+                    )
+                    return JSONResponse(parsed, status_code=500)
+            except (json.JSONDecodeError, TypeError):
+                pass
             _logger.info("upload-cv success create filename=%s", filename)
             return Response(content=result_json, media_type="application/json", status_code=200)
     except BullhornAPIError as exc:

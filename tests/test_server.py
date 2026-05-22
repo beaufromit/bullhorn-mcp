@@ -5963,6 +5963,19 @@ class TestCVUploadEndpoint:
         assert body["error"] == "bullhorn_error"
         assert "boom" in body["message"]
 
+    @pytest.mark.asyncio
+    async def test_upload_cv_create_returns_tool_error_as_500(self, monkeypatch):
+        """create_candidate_from_cv returning JSON with 'error' key → handler returns 500."""
+        monkeypatch.setenv("UPLOAD_SECRET", "s")
+        req = self._make_request()
+        error_body = '{"error": "identity_resolution_failed", "message": "No authentication token available"}'
+        with patch.object(server, "create_candidate_from_cv", return_value=error_body):
+            resp = await server._upload_cv_handler(req)
+        assert resp.status_code == 500
+        import json as _json
+        body = _json.loads(resp.body)
+        assert body["error"] == "identity_resolution_failed"
+
 
 class TestQueryEntitiesNoteGuard:
     """Tests for query_entities hard refusal when entity='Note'."""
