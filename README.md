@@ -253,6 +253,65 @@ With these set, callers can use `"vertical"` and `"notice period"` as keys in `f
 
 Invalid JSON in any of these variables logs a warning and falls back to the empty default. The server starts normally.
 
+### Automated CV Upload
+
+The server exposes a `POST /upload-cv` endpoint that accepts CV files as raw
+multipart bytes. This sidesteps the MCP tool layer entirely — no base64 string
+in the conversation context, no chat round-trip overhead. It is intended for
+automated workflows such as Claude containers or email-to-Bullhorn pipelines.
+
+**Authentication:** `X-Upload-Secret` header (pre-shared secret, not Entra).
+Set the `UPLOAD_SECRET` environment variable to activate the endpoint. Requests
+without a valid secret return `401`; requests when the env var is unset return
+`400`. Generate a strong value with:
+
+```
+openssl rand -hex 32
+```
+
+**Request** — `POST /upload-cv` with `multipart/form-data`:
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `file` | bytes | yes | — | The CV file bytes |
+| `filename` | str | yes | — | Original filename (e.g. `jane_doe_cv.pdf`) |
+| `format` | str | no | `pdf` | File format: `pdf`, `doc`, `docx`, `html`, `text` |
+| `candidate_id` | int | no | — | If set, attaches to this Candidate instead of parse-and-create |
+| `force` | str | no | `false` | `"true"` to skip duplicate check on create path |
+
+**Responses** — always JSON:
+
+| Scenario | Status |
+|---|---|
+| Success | 200 |
+| Auth failure | 401 |
+| Bad request / env not configured | 400 |
+| Bullhorn API error | 500 |
+
+**Examples:**
+
+Parse a CV and create a new Candidate:
+
+```bash
+curl -X POST https://your-server/upload-cv \
+     -H "X-Upload-Secret: $UPLOAD_SECRET" \
+     -F file=@jane_doe_cv.pdf \
+     -F filename=jane_doe_cv.pdf \
+     -F format=pdf
+```
+
+Attach a CV file to an existing Candidate (ID 12345):
+
+```bash
+curl -X POST https://your-server/upload-cv \
+     -H "X-Upload-Secret: $UPLOAD_SECRET" \
+     -F file=@jane_doe_cv.pdf \
+     -F filename=jane_doe_cv.pdf \
+     -F candidate_id=12345
+```
+
+---
+
 ## Hosted Authentication Model
 
 When running in HTTP mode, the server requires Microsoft Entra authentication and resolves the authenticated caller to a Bullhorn `CorporateUser` by email.

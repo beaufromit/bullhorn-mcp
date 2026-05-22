@@ -2,12 +2,15 @@
 
 import asyncio
 import base64
+import hmac
 import json
 import logging
 import os
 import re
 import time
 from typing import Any
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 from fastmcp import FastMCP
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 
@@ -2696,6 +2699,81 @@ def search_notes(
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
+
+
+async def _upload_cv_handler(request: Request) -> Response:
+    """Handle POST /upload-cv: accept a CV file and either parse+create or attach to a Candidate."""
+    upload_secret = os.environ.get("UPLOAD_SECRET")
+    if not upload_secret:
+        return JSONResponse({"error": "upload_secret_not_configured"}, status_code=400)
+
+    provided = request.headers.get("X-Upload-Secret", "")
+    if not provided or not hmac.compare_digest(provided, upload_secret):
+        _logger.warning(
+            "upload-cv auth failure from %s",
+            request.client.host if request.client else "?",
+        )
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    form = await request.form()
+    upload = form.get("file")
+    filename = form.get("filename")
+    fmt = form.get("format") or "pdf"
+    candidate_id_raw = form.get("candidate_id")
+    force_raw = form.get("force") or "false"
+
+    if upload is None or not filename:
+        return JSONResponse(
+            {"error": "missing_field", "message": "file and filename are required"},
+            status_code=400,
+        )
+
+    if hasattr(upload, "read"):
+        file_bytes: bytes = await upload.read()
+    else:
+        file_bytes = bytes(upload)
+
+    force = str(force_raw).lower() == "true"
+
+    candidate_id: int | None = None
+    if candidate_id_raw:
+        try:
+            candidate_id = int(candidate_id_raw)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "invalid_candidate_id"}, status_code=400)
+
+    _logger.info("upload-cv attempt filename=%s candidate_id=%s", filename, candidate_id)
+
+    try:
+        if candidate_id is not None:
+            client = get_client()
+            content_mime = client._guess_content_type(fmt)
+            result = await asyncio.to_thread(
+                client.attach_file,
+                "Candidate", candidate_id, file_bytes, str(filename), content_mime, None, "CV",
+            )
+            _logger.info("upload-cv success attach candidate_id=%s", candidate_id)
+            return JSONResponse(result, status_code=200)
+        else:
+            file_b64 = base64.b64encode(file_bytes).decode()
+            result_json = await asyncio.to_thread(
+                create_candidate_from_cv,
+                file_b64=file_b64,
+                filename=str(filename),
+                format=str(fmt),
+                force=force,
+            )
+            _logger.info("upload-cv success create filename=%s", filename)
+            return Response(content=result_json, media_type="application/json", status_code=200)
+    except BullhornAPIError as exc:
+        _logger.exception("upload-cv bullhorn error filename=%s", filename)
+        return JSONResponse({"error": "bullhorn_error", "message": str(exc)}, status_code=500)
+    except Exception as exc:
+        _logger.exception("upload-cv internal error filename=%s", filename)
+        return JSONResponse({"error": "internal_error", "message": str(exc)}, status_code=500)
+
+
+mcp.custom_route("/upload-cv", methods=["POST"])(_upload_cv_handler)
 
 
 def main():

@@ -2355,3 +2355,30 @@ A negative `start` value is accepted and forwarded to Bullhorn without validatio
 ### Expected test count after Sprint 29
 
 Previous: 461. Added 12 new pagination forwarding tests + corrected 2 existing test assertions. **Actual: 473 passing, 0 failing.** Tagged v0.0.29.
+
+---
+
+## CR27 — POST /upload-cv HTTP endpoint for automated CV uploads
+
+### What was built
+
+Added a `POST /upload-cv` HTTP route to the FastMCP ASGI app in `server.py`. The endpoint accepts CV files as raw `multipart/form-data` bytes — bypassing the MCP tool layer so the binary transfer never appears in the conversation context. Intended for automated workflows (Claude containers, email pipelines) that cannot obtain an Entra OIDC token.
+
+Authentication uses a pre-shared secret (`X-Upload-Secret` header / `UPLOAD_SECRET` env var). The endpoint refuses to operate at all if `UPLOAD_SECRET` is not set (400), and returns 401 on missing or wrong secret.
+
+Two behaviours depending on the `candidate_id` form field:
+- **Create path** (no `candidate_id`): base64-encodes the file bytes and calls `create_candidate_from_cv` internally. Supports `force` and `format` fields.
+- **Attach path** (`candidate_id` provided): calls `client.attach_file("Candidate", id, bytes, filename, mime, None, "CV")` directly.
+
+The handler function is `_upload_cv_handler(request)` and is registered via `mcp.custom_route("/upload-cv", methods=["POST"])`. Sync client calls are wrapped in `asyncio.to_thread` to avoid blocking the event loop.
+
+### Files changed
+
+- `src/bullhorn_mcp/server.py`: added `import hmac` + Starlette `Request`/`JSONResponse`/`Response` imports; added `_upload_cv_handler` async function and route registration.
+- `tests/test_server.py`: added `TestCVUploadEndpoint` class with 8 async tests (stub-request pattern).
+- `.env.example`: added `UPLOAD_SECRET` section.
+- `README.md`: added `### Automated CV Upload` subsection under Hosted Deployment.
+
+### Final state
+
+**544 tests passing, 0 failing.**

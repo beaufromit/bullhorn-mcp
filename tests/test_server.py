@@ -5841,6 +5841,129 @@ class TestSearchNotes:
         assert "clientCorporation" not in fields_arg
 
 
+class TestCVUploadEndpoint:
+    """Tests for the POST /upload-cv HTTP route."""
+
+    class _FakeUpload:
+        def __init__(self, data: bytes):
+            self._data = data
+
+        async def read(self):
+            return self._data
+
+    class _FakeRequest:
+        def __init__(self, form_fields, headers=None):
+            self.headers = headers or {}
+            self.client = None
+            self._form = form_fields
+
+        async def form(self):
+            return self._form
+
+    def _make_request(self, file_bytes=b"%PDF-fake", filename="cv.pdf", fmt=None,
+                      candidate_id=None, force=None, secret="s"):
+        form = {"file": self._FakeUpload(file_bytes), "filename": filename}
+        if fmt is not None:
+            form["format"] = fmt
+        if candidate_id is not None:
+            form["candidate_id"] = str(candidate_id)
+        if force is not None:
+            form["force"] = force
+        headers = {"X-Upload-Secret": secret} if secret is not None else {}
+        return self._FakeRequest(form, headers)
+
+    @pytest.mark.asyncio
+    async def test_upload_cv_valid_secret_no_candidate_id(self, monkeypatch):
+        """Valid secret + file, no candidate_id → calls create_candidate_from_cv, returns 200 JSON."""
+        monkeypatch.setenv("UPLOAD_SECRET", "s")
+        req = self._make_request()
+        with patch.object(server, "create_candidate_from_cv", return_value='{"candidate_id": 1}') as mock_create:
+            resp = await server._upload_cv_handler(req)
+        assert resp.status_code == 200
+        mock_create.assert_called_once()
+        call_kw = mock_create.call_args.kwargs
+        assert call_kw["filename"] == "cv.pdf"
+        assert call_kw["format"] == "pdf"
+        assert call_kw["force"] is False
+        import base64
+        assert base64.b64decode(call_kw["file_b64"]) == b"%PDF-fake"
+
+    @pytest.mark.asyncio
+    async def test_upload_cv_missing_secret_header(self, monkeypatch):
+        """No X-Upload-Secret header → 401."""
+        monkeypatch.setenv("UPLOAD_SECRET", "s")
+        req = self._make_request(secret=None)
+        resp = await server._upload_cv_handler(req)
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_upload_cv_wrong_secret(self, monkeypatch):
+        """Wrong X-Upload-Secret value → 401."""
+        monkeypatch.setenv("UPLOAD_SECRET", "correct")
+        req = self._make_request(secret="wrong")
+        resp = await server._upload_cv_handler(req)
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_upload_cv_no_secret_configured(self, monkeypatch):
+        """UPLOAD_SECRET not set → 400 regardless of header."""
+        monkeypatch.delenv("UPLOAD_SECRET", raising=False)
+        req = self._make_request(secret="anything")
+        resp = await server._upload_cv_handler(req)
+        assert resp.status_code == 400
+        import json as _json
+        body = _json.loads(resp.body)
+        assert body["error"] == "upload_secret_not_configured"
+
+    @pytest.mark.asyncio
+    async def test_upload_cv_with_candidate_id(self, monkeypatch):
+        """candidate_id provided → calls attach_file, NOT create_candidate_from_cv."""
+        monkeypatch.setenv("UPLOAD_SECRET", "s")
+        mock_client = Mock()
+        mock_client._guess_content_type.return_value = "application/pdf"
+        mock_client.attach_file.return_value = {"fileId": 99, "name": "cv.pdf"}
+        req = self._make_request(candidate_id=42)
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "create_candidate_from_cv") as mock_create:
+            resp = await server._upload_cv_handler(req)
+        assert resp.status_code == 200
+        mock_create.assert_not_called()
+        mock_client.attach_file.assert_called_once_with(
+            "Candidate", 42, b"%PDF-fake", "cv.pdf", "application/pdf", None, "CV"
+        )
+
+    @pytest.mark.asyncio
+    async def test_upload_cv_force_true_passed_through(self, monkeypatch):
+        """force='true' form field → create_candidate_from_cv called with force=True."""
+        monkeypatch.setenv("UPLOAD_SECRET", "s")
+        req = self._make_request(force="true")
+        with patch.object(server, "create_candidate_from_cv", return_value='{}') as mock_create:
+            await server._upload_cv_handler(req)
+        assert mock_create.call_args.kwargs["force"] is True
+
+    @pytest.mark.asyncio
+    async def test_upload_cv_default_format_is_pdf(self, monkeypatch):
+        """No format field → format defaults to 'pdf'."""
+        monkeypatch.setenv("UPLOAD_SECRET", "s")
+        req = self._make_request(fmt=None)
+        with patch.object(server, "create_candidate_from_cv", return_value='{}') as mock_create:
+            await server._upload_cv_handler(req)
+        assert mock_create.call_args.kwargs["format"] == "pdf"
+
+    @pytest.mark.asyncio
+    async def test_upload_cv_server_error_returns_500(self, monkeypatch):
+        """BullhornAPIError in create path → 500 with JSON error body."""
+        monkeypatch.setenv("UPLOAD_SECRET", "s")
+        req = self._make_request()
+        with patch.object(server, "create_candidate_from_cv", side_effect=BullhornAPIError("boom")):
+            resp = await server._upload_cv_handler(req)
+        assert resp.status_code == 500
+        import json as _json
+        body = _json.loads(resp.body)
+        assert body["error"] == "bullhorn_error"
+        assert "boom" in body["message"]
+
+
 class TestQueryEntitiesNoteGuard:
     """Tests for query_entities hard refusal when entity='Note'."""
 
