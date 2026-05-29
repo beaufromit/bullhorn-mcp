@@ -249,6 +249,29 @@ def format_response(data: list | dict) -> str:
     return json.dumps(data, indent=2, default=str)
 
 
+def _paginate_envelope(meta: dict, start: int, count: int) -> dict:
+    """Build the user-facing pagination envelope from a *_with_meta client result."""
+    total = meta.get("total")
+    data = meta["data"]
+    returned = len(data)
+    if total is None:
+        has_more = returned == count
+        next_start = start + returned if has_more else None
+    else:
+        has_more = (start + returned) < total
+        next_start = start + returned if has_more else None
+    return {
+        "data": data,
+        "pagination": {
+            "total": total,
+            "start": start,
+            "count": returned,
+            "has_more": has_more,
+            "next_start": next_start,
+        },
+    }
+
+
 @mcp.tool()
 def list_jobs(
     query: str | None = None,
@@ -269,7 +292,10 @@ def list_jobs(
         fields: Comma-separated fields to return
 
     Returns:
-        JSON array of job orders
+        JSON object with ``data`` (array of job orders) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        When ``has_more`` is true, call again with ``start=<next_start>``
+        to fetch the next page.
 
     Examples:
         - list_jobs() - Get recent jobs
@@ -286,7 +312,7 @@ def list_jobs(
         if status:
             search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
 
-        results = client.search(
+        meta = client.search_with_meta(
             entity="JobOrder",
             query=search_query,
             fields=fields,
@@ -295,7 +321,7 @@ def list_jobs(
             sort="-dateAdded",
         )
 
-        return format_response(results)
+        return format_response(_paginate_envelope(meta, start, limit))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -321,7 +347,10 @@ def list_candidates(
         fields: Comma-separated fields to return
 
     Returns:
-        JSON array of candidates
+        JSON object with ``data`` (array of candidates) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        When ``has_more`` is true, call again with ``start=<next_start>``
+        to fetch the next page.
 
     Examples:
         - list_candidates() - Get recent candidates
@@ -338,7 +367,7 @@ def list_candidates(
         if status:
             search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
 
-        results = client.search(
+        meta = client.search_with_meta(
             entity="Candidate",
             query=search_query,
             fields=fields,
@@ -347,7 +376,7 @@ def list_candidates(
             sort="-dateAdded",
         )
 
-        return format_response(results)
+        return format_response(_paginate_envelope(meta, start, limit))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -373,7 +402,10 @@ def list_contacts(
         fields: Comma-separated fields to return
 
     Returns:
-        JSON array of client contacts
+        JSON object with ``data`` (array of client contacts) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        When ``has_more`` is true, call again with ``start=<next_start>``
+        to fetch the next page.
 
     Examples:
         - list_contacts() - Get recent contacts
@@ -390,7 +422,7 @@ def list_contacts(
         if status:
             search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
 
-        results = client.search(
+        meta = client.search_with_meta(
             entity="ClientContact",
             query=search_query,
             fields=fields,
@@ -399,7 +431,7 @@ def list_contacts(
             sort="-dateAdded",
         )
 
-        return format_response(results)
+        return format_response(_paginate_envelope(meta, start, limit))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -425,7 +457,10 @@ def list_companies(
         fields: Comma-separated fields to return
 
     Returns:
-        JSON array of client companies
+        JSON object with ``data`` (array of client companies) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        When ``has_more`` is true, call again with ``start=<next_start>``
+        to fetch the next page.
 
     Examples:
         - list_companies() - Get recent companies
@@ -441,7 +476,7 @@ def list_companies(
         if status:
             search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
 
-        results = client.search(
+        meta = client.search_with_meta(
             entity="ClientCorporation",
             query=search_query,
             fields=fields,
@@ -450,7 +485,7 @@ def list_companies(
             sort="-dateAdded",
         )
 
-        return format_response(results)
+        return format_response(_paginate_envelope(meta, start, limit))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -548,7 +583,10 @@ def search_entities(
         fields: Comma-separated fields to return
 
     Returns:
-        JSON array of matching entities
+        JSON object with ``data`` (array of matching entities) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        When ``has_more`` is true, call again with ``start=<next_start>``
+        to fetch the next page.
 
     Examples:
         - search_entities(entity="Placement", query="status:Approved")
@@ -564,7 +602,7 @@ def search_entities(
     try:
         client = get_client()
 
-        results = client.search(
+        meta = client.search_with_meta(
             entity=entity,
             query=query,
             fields=fields,
@@ -572,7 +610,7 @@ def search_entities(
             start=start,
         )
 
-        return format_response(results)
+        return format_response(_paginate_envelope(meta, start, limit))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -602,7 +640,10 @@ def query_entities(
         order_by: Sort order (e.g., "-dateAdded" for newest first)
 
     Returns:
-        JSON array of matching entities
+        JSON object with ``data`` (array of matching entities) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        When ``has_more`` is true, call again with ``start=<next_start>``
+        to fetch the next page.
 
     Examples:
         - query_entities(entity="JobOrder", where="salary > 100000")
@@ -625,7 +666,7 @@ def query_entities(
     try:
         client = get_client()
 
-        results = client.query(
+        meta = client.query_with_meta(
             entity=entity,
             where=where,
             fields=fields,
@@ -634,7 +675,7 @@ def query_entities(
             order_by=order_by,
         )
 
-        return format_response(results)
+        return format_response(_paginate_envelope(meta, start, limit))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -649,6 +690,7 @@ def search_emails(
     subject_contains: str | None = None,
     include_body: bool = False,
     limit: int = 20,
+    start: int = 0,
     fields: str | None = None,
 ) -> str:
     """Search Bullhorn email messages (UserMessage) for a person's mailbox.
@@ -677,14 +719,18 @@ def search_emails(
             ``comments`` field (HTML, can be large). Off by default to keep
             responses small for bulk searches.
         limit: Maximum number of results (1-500, default 20).
+        start: Pagination offset — index of the first record to return (default 0).
         fields: Override the default field selection.
 
     Returns:
-        JSON array of UserMessage records. Each record's nested sender and
-        recipients carry an auto-populated ``_subtype`` of "Candidate",
-        "ClientContact", or "CorporateUser". Attachments are listed in
-        ``messageFiles`` as metadata only — content download is not yet
-        supported (pending Bullhorn support resolution).
+        JSON object with ``data`` (array of UserMessage records) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        Each record's nested sender and recipients carry an auto-populated
+        ``_subtype`` of "Candidate", "ClientContact", or "CorporateUser".
+        Attachments are listed in ``messageFiles`` as metadata only — content
+        download is not yet supported (pending Bullhorn support resolution).
+        When ``has_more`` is true, call again with ``start=<next_start>`` for the
+        next page.
 
     Examples:
         - search_emails(person_id=34389, limit=10)
@@ -731,15 +777,16 @@ def search_emails(
         if include_body:
             resolved_fields = f"{resolved_fields},comments"
 
-        results = client.search(
+        meta = client.search_with_meta(
             entity="UserMessage",
             query=query,
             fields=resolved_fields,
             count=limit,
+            start=start,
             sort="-smtpReceiveDate",
         )
 
-        return format_response(results)
+        return format_response(_paginate_envelope(meta, start, limit))
 
     except ValueError as e:
         # resolve_owner raises ValueError when no CorporateUser matches.
@@ -2537,9 +2584,11 @@ def get_notes_for_entity(
         include_deleted: If True, include soft-deleted notes. Default False.
 
     Returns:
-        JSON array of note dicts. Click-to-call telemetry tags are stripped from
-        the comments field and moved to a sibling call_metadata list. Empty array
-        if the record has no notes.
+        JSON object with ``data`` (array of note dicts) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        Click-to-call telemetry tags are stripped from the comments field and
+        moved to a sibling ``call_metadata`` list. When ``has_more`` is true,
+        call again with ``start=<next_start>`` for the next page.
 
     Examples:
         - get_notes_for_entity("Candidate", 169020) - All notes on a candidate
@@ -2559,7 +2608,7 @@ def get_notes_for_entity(
             })
 
         resolved_fields = fields if fields is not None else _NOTE_DEFAULT_FIELDS
-        notes = client.get_association(
+        meta = client.get_association_with_meta(
             entity,
             entity_id,
             "notes",
@@ -2569,6 +2618,8 @@ def get_notes_for_entity(
             order_by=order_by,
         )
 
+        notes = meta["data"]
+        raw_count = len(notes)
         if not include_deleted:
             notes = [n for n in notes if not n.get("isDeleted")]
 
@@ -2583,7 +2634,19 @@ def get_notes_for_entity(
                     note["call_metadata"] = tags
             cleaned_notes.append(note)
 
-        return format_response(cleaned_notes)
+        total = meta.get("total")
+        has_more = (start + raw_count) < total if total is not None else raw_count == limit
+        next_start = start + raw_count if has_more else None
+        return format_response({
+            "data": cleaned_notes,
+            "pagination": {
+                "total": total,
+                "start": start,
+                "count": len(cleaned_notes),
+                "has_more": has_more,
+                "next_start": next_start,
+            },
+        })
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -2628,8 +2691,11 @@ def search_notes(
             need that field.
 
     Returns:
-        JSON array of note dicts. Click-to-call telemetry tags are stripped from
-        comments and moved to a call_metadata sibling field.
+        JSON object with ``data`` (array of note dicts) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        Click-to-call telemetry tags are stripped from comments and moved to a
+        ``call_metadata`` sibling field. When ``has_more`` is true, call again
+        with ``start=<next_start>`` for the next page.
 
     Examples:
         - search_notes("visa sponsorship") - Find all notes mentioning visa sponsorship
@@ -2673,15 +2739,28 @@ def search_notes(
                 if keyword in (n.get("comments") or "").lower()
             ]
             notes = matched[start: start + limit]
+            total_matched = len(matched)
+            has_more = (start + limit) < total_matched
+            next_start = start + limit if has_more else None
+            pagination: dict = {
+                "total": total_matched,
+                "start": start,
+                "count": len(notes),
+                "has_more": has_more,
+                "next_start": next_start,
+            }
         else:
             resolved_fields = fields if fields is not None else _NOTE_SEARCH_DEFAULT_FIELDS
-            notes = client.search(
+            note_meta = client.search_with_meta(
                 "Note",
                 query=stripped_query,
                 fields=resolved_fields,
                 count=limit,
                 start=start,
             )
+            notes = note_meta["data"]
+            envelope = _paginate_envelope(note_meta, start, limit)
+            pagination = envelope["pagination"]
 
         # Strip CC telemetry
         cleaned_notes = []
@@ -2695,7 +2774,7 @@ def search_notes(
                     note["call_metadata"] = tags
             cleaned_notes.append(note)
 
-        return format_response(cleaned_notes)
+        return format_response({"data": cleaned_notes, "pagination": pagination})
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"

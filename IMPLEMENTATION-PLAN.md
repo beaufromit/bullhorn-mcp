@@ -2390,3 +2390,19 @@ The handler function is `_upload_cv_handler(request)` and is registered via `mcp
 - The create path will return 500 with `identity_resolution_failed` for automated callers without an Entra token. Providing `owner` via `fields_override` is a workaround if the caller knows the Bullhorn CorporateUser ID.
 
 **Final state after review: 545 tests passing, 0 failing. Tagged v0.0.39.**
+
+## CR28 — Surface pagination metadata on list/search/query tools
+
+**Problem:** `search()`, `query()`, and `get_association()` discarded Bullhorn's `total` field. The LLM had no way to tell when results were truncated.
+
+**Solution:** Added `search_with_meta`, `query_with_meta`, `get_association_with_meta` to `client.py` returning `{ data, total, start, count }`. Existing bare-list methods delegate to these and remain unchanged (zero impact on internal callers). Nine user-facing MCP tools switch to the envelope variant via a new `_paginate_envelope` helper in `server.py`. `search_emails` gained a `start` parameter.
+
+**Response shape (all 9 tools):**
+```json
+{
+  "data": [...],
+  "pagination": { "total": 1234, "start": 0, "count": 50, "has_more": true, "next_start": 50 }
+}
+```
+
+**Tests:** 558 passing (39 new).

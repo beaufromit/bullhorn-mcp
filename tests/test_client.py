@@ -1236,3 +1236,142 @@ class TestGetAssociation:
         client = BullhornClient(mock_auth)
         with pytest.raises(BullhornAPIError):
             client.get_association("Candidate", 169020, "notes", fields="id")
+
+
+class TestSearchWithMeta:
+    """Tests for BullhornClient.search_with_meta() and delegation from search()."""
+
+    @respx.mock
+    def test_returns_envelope_with_total(self, mock_auth, mock_session):
+        """search_with_meta returns total, start, count alongside data."""
+        data = [{"id": 1}, {"id": 2}]
+        respx.get(f"{mock_session.rest_url}/search/Candidate").mock(
+            return_value=httpx.Response(
+                200, json={"total": 1234, "start": 0, "count": 2, "data": data}
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.search_with_meta("Candidate", query="status:Active")
+
+        assert result["data"] == data
+        assert result["total"] == 1234
+        assert result["start"] == 0
+        assert result["count"] == 2
+
+    @respx.mock
+    def test_search_still_returns_bare_list(self, mock_auth, mock_session):
+        """search() still returns the bare list (backward compat for internal callers)."""
+        data = [{"id": 1}]
+        respx.get(f"{mock_session.rest_url}/search/Candidate").mock(
+            return_value=httpx.Response(
+                200, json={"total": 10, "start": 0, "count": 1, "data": data}
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.search("Candidate", query="status:Active")
+
+        assert result == data
+
+    @respx.mock
+    def test_total_none_when_missing_from_response(self, mock_auth, mock_session):
+        """total is None when Bullhorn omits it from the envelope."""
+        respx.get(f"{mock_session.rest_url}/search/Note").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": 9}]})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.search_with_meta("Note", query="visa")
+
+        assert result["total"] is None
+        assert result["data"] == [{"id": 9}]
+
+    @respx.mock
+    def test_has_more_pagination_scenario(self, mock_auth, mock_session):
+        """search_with_meta: total > start+count indicates more pages exist."""
+        respx.get(f"{mock_session.rest_url}/search/JobOrder").mock(
+            return_value=httpx.Response(
+                200, json={"total": 500, "start": 0, "count": 20, "data": [{"id": i} for i in range(20)]}
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.search_with_meta("JobOrder", query="isOpen:1", count=20)
+
+        assert result["total"] == 500
+        assert len(result["data"]) == 20
+        assert (result["start"] + result["count"]) < result["total"]
+
+
+class TestQueryWithMeta:
+    """Tests for BullhornClient.query_with_meta() and delegation from query()."""
+
+    @respx.mock
+    def test_returns_envelope_with_total(self, mock_auth, mock_session):
+        """query_with_meta returns total, start, count alongside data."""
+        data = [{"id": 5}]
+        respx.get(f"{mock_session.rest_url}/query/JobOrder").mock(
+            return_value=httpx.Response(
+                200, json={"total": 99, "start": 0, "count": 1, "data": data}
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.query_with_meta("JobOrder", where="salary > 100000")
+
+        assert result["data"] == data
+        assert result["total"] == 99
+
+    @respx.mock
+    def test_query_still_returns_bare_list(self, mock_auth, mock_session):
+        """query() still returns the bare list (backward compat for internal callers)."""
+        data = [{"id": 5}]
+        respx.get(f"{mock_session.rest_url}/query/JobOrder").mock(
+            return_value=httpx.Response(
+                200, json={"total": 99, "start": 0, "count": 1, "data": data}
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.query("JobOrder", where="salary > 100000")
+
+        assert result == data
+
+
+class TestGetAssociationWithMeta:
+    """Tests for BullhornClient.get_association_with_meta() and delegation."""
+
+    @respx.mock
+    def test_returns_envelope_with_total(self, mock_auth, mock_session):
+        """get_association_with_meta returns total, start, count alongside data."""
+        notes = [{"id": 1001}, {"id": 1002}]
+        respx.get(f"{mock_session.rest_url}/entity/Candidate/169020/notes").mock(
+            return_value=httpx.Response(
+                200, json={"total": 50, "start": 0, "count": 2, "data": notes}
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.get_association_with_meta(
+            "Candidate", 169020, "notes", fields="id", count=2
+        )
+
+        assert result["data"] == notes
+        assert result["total"] == 50
+        assert result["count"] == 2
+
+    @respx.mock
+    def test_get_association_still_returns_bare_list(self, mock_auth, mock_session):
+        """get_association() still returns the bare list (backward compat)."""
+        notes = [{"id": 1001}]
+        respx.get(f"{mock_session.rest_url}/entity/Candidate/169020/notes").mock(
+            return_value=httpx.Response(
+                200, json={"total": 1, "start": 0, "count": 1, "data": notes}
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.get_association("Candidate", 169020, "notes", fields="id")
+
+        assert result == notes

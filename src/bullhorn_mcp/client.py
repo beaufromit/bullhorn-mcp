@@ -197,6 +197,50 @@ class BullhornClient:
         record = self.get(entity, entity_id)
         return {"changedEntityId": entity_id, "changeType": "INSERT", "data": record}
 
+    def search_with_meta(
+        self,
+        entity: str,
+        query: str,
+        fields: str | None = None,
+        count: int = 20,
+        start: int = 0,
+        sort: str | None = None,
+        extra_params: dict[str, Any] | None = None,
+        exclude_deleted: bool = True,
+    ) -> dict[str, Any]:
+        """Search entities and return the full Bullhorn response envelope.
+
+        Returns:
+            Dict with keys ``data`` (list), ``total``, ``start``, ``count``.
+        """
+        if exclude_deleted and entity not in _ENTITIES_WITHOUT_ISDELETED:
+            query = f"({query}) AND isDeleted:0" if query else "isDeleted:0"
+
+        if fields is None:
+            fields = DEFAULT_FIELDS.get(entity, "id")
+
+        params: dict[str, Any] = {
+            "query": query,
+            "fields": fields,
+            "count": min(count, 500),
+            "start": start,
+        }
+
+        if sort:
+            params["sort"] = sort
+
+        if extra_params:
+            params.update(extra_params)
+
+        result = self._request("GET", f"/search/{entity}", params)
+        data = result.get("data", [])
+        return {
+            "data": data,
+            "total": result.get("total"),
+            "start": result.get("start", start),
+            "count": result.get("count", len(data)),
+        }
+
     def search(
         self,
         entity: str,
@@ -225,27 +269,49 @@ class BullhornClient:
         Returns:
             List of matching entities
         """
+        return self.search_with_meta(
+            entity, query, fields, count, start, sort, extra_params, exclude_deleted
+        )["data"]
+
+    def query_with_meta(
+        self,
+        entity: str,
+        where: str,
+        fields: str | None = None,
+        count: int = 20,
+        start: int = 0,
+        order_by: str | None = None,
+        exclude_deleted: bool = True,
+    ) -> dict[str, Any]:
+        """Query entities and return the full Bullhorn response envelope.
+
+        Returns:
+            Dict with keys ``data`` (list), ``total``, ``start``, ``count``.
+        """
         if exclude_deleted and entity not in _ENTITIES_WITHOUT_ISDELETED:
-            query = f"({query}) AND isDeleted:0" if query else "isDeleted:0"
+            where = f"({where}) AND isDeleted=false" if where else "isDeleted=false"
 
         if fields is None:
             fields = DEFAULT_FIELDS.get(entity, "id")
 
-        params: dict[str, Any] = {
-            "query": query,
+        params = {
+            "where": where,
             "fields": fields,
             "count": min(count, 500),
             "start": start,
         }
 
-        if sort:
-            params["sort"] = sort
+        if order_by:
+            params["orderBy"] = order_by
 
-        if extra_params:
-            params.update(extra_params)
-
-        result = self._request("GET", f"/search/{entity}", params)
-        return result.get("data", [])
+        result = self._request("GET", f"/query/{entity}", params)
+        data = result.get("data", [])
+        return {
+            "data": data,
+            "total": result.get("total"),
+            "start": result.get("start", start),
+            "count": result.get("count", len(data)),
+        }
 
     def query(
         self,
@@ -273,24 +339,9 @@ class BullhornClient:
         Returns:
             List of matching entities
         """
-        if exclude_deleted and entity not in _ENTITIES_WITHOUT_ISDELETED:
-            where = f"({where}) AND isDeleted=false" if where else "isDeleted=false"
-
-        if fields is None:
-            fields = DEFAULT_FIELDS.get(entity, "id")
-
-        params = {
-            "where": where,
-            "fields": fields,
-            "count": min(count, 500),
-            "start": start,
-        }
-
-        if order_by:
-            params["orderBy"] = order_by
-
-        result = self._request("GET", f"/query/{entity}", params)
-        return result.get("data", [])
+        return self.query_with_meta(
+            entity, where, fields, count, start, order_by, exclude_deleted
+        )["data"]
 
     def get(
         self, entity: str, entity_id: int, fields: str | None = None
@@ -406,6 +457,39 @@ class BullhornClient:
             return {"id": results[0]["id"]}
         return results
 
+    def get_association_with_meta(
+        self,
+        entity: str,
+        entity_id: int,
+        association: str,
+        fields: str | None = None,
+        count: int = 20,
+        start: int = 0,
+        order_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch a TO_MANY association and return the full Bullhorn response envelope.
+
+        Returns:
+            Dict with keys ``data`` (list), ``total``, ``start``, ``count``.
+        """
+        params: dict[str, Any] = {
+            "fields": fields or "id",
+            "count": min(count, 500),
+            "start": start,
+        }
+        if order_by:
+            params["orderBy"] = order_by
+        result = self._request(
+            "GET", f"/entity/{entity}/{entity_id}/{association}", params
+        )
+        data = result.get("data", [])
+        return {
+            "data": data,
+            "total": result.get("total"),
+            "start": result.get("start", start),
+            "count": result.get("count", len(data)),
+        }
+
     def get_association(
         self,
         entity: str,
@@ -430,17 +514,9 @@ class BullhornClient:
         Returns:
             List of association records
         """
-        params: dict[str, Any] = {
-            "fields": fields or "id",
-            "count": min(count, 500),
-            "start": start,
-        }
-        if order_by:
-            params["orderBy"] = order_by
-        result = self._request(
-            "GET", f"/entity/{entity}/{entity_id}/{association}", params
-        )
-        return result.get("data", [])
+        return self.get_association_with_meta(
+            entity, entity_id, association, fields, count, start, order_by
+        )["data"]
 
     def get_meta(self, entity: str) -> dict[str, Any]:
         """Get metadata/schema for an entity type.

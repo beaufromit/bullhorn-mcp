@@ -17,6 +17,27 @@ def mock_client(sample_job, sample_candidate):
     client.search.return_value = [sample_job]
     client.query.return_value = [sample_job]
     client.get.return_value = sample_job
+
+    def _wrap_with_meta(bare_mock):
+        """Return a side_effect that wraps bare_mock.return_value in an envelope."""
+        def _se(*args, **kwargs):
+            se = bare_mock.side_effect
+            if se is not None:
+                if isinstance(se, BaseException):
+                    raise se
+                raise se
+            data = bare_mock.return_value
+            return {
+                "data": data,
+                "total": len(data),
+                "start": kwargs.get("start", 0),
+                "count": len(data),
+            }
+        return _se
+
+    client.search_with_meta.side_effect = _wrap_with_meta(client.search)
+    client.query_with_meta.side_effect = _wrap_with_meta(client.query)
+    client.get_association_with_meta.side_effect = _wrap_with_meta(client.get_association)
     return client
 
 
@@ -43,16 +64,16 @@ class TestListJobs:
             result = server.list_jobs()
 
         data = json.loads(result)
-        assert len(data) == 1
-        assert data[0]["title"] == "Software Engineer"
-        mock_client.search.assert_called_once()
+        assert len(data["data"]) == 1
+        assert data["data"][0]["title"] == "Software Engineer"
+        mock_client.search_with_meta.assert_called_once()
 
     def test_list_jobs_with_query(self, mock_client):
         """Test job listing with query parameter."""
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_jobs(query="title:Engineer")
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert "title:Engineer" in call_args.kwargs["query"]
 
     def test_list_jobs_with_status(self, mock_client):
@@ -60,7 +81,7 @@ class TestListJobs:
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_jobs(status="Open")
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert 'status:"Open"' in call_args.kwargs["query"]
 
     def test_list_jobs_with_limit(self, mock_client):
@@ -68,7 +89,7 @@ class TestListJobs:
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_jobs(limit=50)
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["count"] == 50
 
     def test_list_jobs_error_handling(self, mock_client):
@@ -82,11 +103,11 @@ class TestListJobs:
         assert "API Error" in result
 
     def test_list_jobs_start_forwarded(self, mock_client):
-        """start is passed through to client.search."""
+        """start is passed through to client.search_with_meta."""
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_jobs(limit=500, start=500)
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 500
         assert call_args.kwargs["count"] == 500
 
@@ -95,7 +116,7 @@ class TestListJobs:
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_jobs()
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 0
 
 
@@ -110,15 +131,15 @@ class TestListCandidates:
             result = server.list_candidates()
 
         data = json.loads(result)
-        assert len(data) == 1
-        assert data[0]["firstName"] == "John"
+        assert len(data["data"]) == 1
+        assert data["data"][0]["firstName"] == "John"
 
     def test_list_candidates_with_query(self, mock_client):
         """Test candidate listing with query."""
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_candidates(query="skillSet:Python")
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert "skillSet:Python" in call_args.kwargs["query"]
 
     def test_list_candidates_auth_error(self, mock_client):
@@ -132,11 +153,11 @@ class TestListCandidates:
         assert "Auth failed" in result
 
     def test_list_candidates_start_forwarded(self, mock_client):
-        """start is passed through to client.search."""
+        """start is passed through to client.search_with_meta."""
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_candidates(limit=500, start=1000)
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 1000
         assert call_args.kwargs["count"] == 500
 
@@ -145,7 +166,7 @@ class TestListCandidates:
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_candidates()
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 0
 
 
@@ -239,8 +260,8 @@ class TestSearchEntities:
             )
 
         data = json.loads(result)
-        assert data[0]["status"] == "Approved"
-        mock_client.search.assert_called_with(
+        assert data["data"][0]["status"] == "Approved"
+        mock_client.search_with_meta.assert_called_with(
             entity="Placement",
             query="status:Approved",
             fields=None,
@@ -255,15 +276,15 @@ class TestSearchEntities:
                 entity="ClientCorporation", query="name:Acme*", limit=100
             )
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["count"] == 100
 
     def test_search_entities_start_forwarded(self, mock_client):
-        """start is passed through to client.search."""
+        """start is passed through to client.search_with_meta."""
         with patch.object(server, "get_client", return_value=mock_client):
             server.search_entities(entity="Candidate", query="status:Active", limit=500, start=500)
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 500
         assert call_args.kwargs["count"] == 500
 
@@ -272,7 +293,7 @@ class TestSearchEntities:
         with patch.object(server, "get_client", return_value=mock_client):
             server.search_entities(entity="Placement", query="status:Approved")
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 0
 
 
@@ -286,7 +307,7 @@ class TestQueryEntities:
                 entity="JobOrder", where="salary > 100000"
             )
 
-        mock_client.query.assert_called_with(
+        mock_client.query_with_meta.assert_called_with(
             entity="JobOrder",
             where="salary > 100000",
             fields=None,
@@ -304,15 +325,15 @@ class TestQueryEntities:
                 order_by="-dateAdded",
             )
 
-        call_args = mock_client.query.call_args
+        call_args = mock_client.query_with_meta.call_args
         assert call_args.kwargs["order_by"] == "-dateAdded"
 
     def test_query_entities_start_forwarded(self, mock_client):
-        """start is passed through to client.query."""
+        """start is passed through to client.query_with_meta."""
         with patch.object(server, "get_client", return_value=mock_client):
             server.query_entities(entity="Placement", where="status='Approved'", limit=500, start=500)
 
-        call_args = mock_client.query.call_args
+        call_args = mock_client.query_with_meta.call_args
         assert call_args.kwargs["start"] == 500
         assert call_args.kwargs["count"] == 500
 
@@ -321,7 +342,7 @@ class TestQueryEntities:
         with patch.object(server, "get_client", return_value=mock_client):
             server.query_entities(entity="JobOrder", where="salary > 100000")
 
-        call_args = mock_client.query.call_args
+        call_args = mock_client.query_with_meta.call_args
         assert call_args.kwargs["start"] == 0
 
 
@@ -334,6 +355,17 @@ class TestSearchEmails:
         client = Mock()
         client.search.return_value = []
         client.resolve_owner.return_value = {"id": 0}
+
+        def _search_with_meta_se(*args, **kwargs):
+            se = client.search.side_effect
+            if se is not None:
+                if isinstance(se, BaseException):
+                    raise se
+                raise se
+            data = client.search.return_value
+            return {"data": data, "total": len(data), "start": kwargs.get("start", 0), "count": len(data)}
+
+        client.search_with_meta.side_effect = _search_with_meta_se
         return client
 
     def test_search_emails_basic(self, email_client):
@@ -343,7 +375,7 @@ class TestSearchEmails:
              patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
             server.search_emails(person_id=34389)
 
-        call_args = email_client.search.call_args
+        call_args = email_client.search_with_meta.call_args
         assert call_args.kwargs["entity"] == "UserMessage"
         assert call_args.kwargs["query"] == "(sender.id:34389 OR recipients.id:34389)"
         assert call_args.kwargs["sort"] == "-smtpReceiveDate"
@@ -359,7 +391,7 @@ class TestSearchEmails:
             server.search_emails(person_id=34389, user={"id": 24})
 
         resolve_caller_mock.assert_not_called()
-        query = email_client.search.call_args.kwargs["query"]
+        query = email_client.search_with_meta.call_args.kwargs["query"]
         assert "(sender.id:34389 OR recipients.id:34389)" in query
         assert "(sender.id:24 OR recipients.id:24)" in query
         assert " AND " in query
@@ -371,7 +403,7 @@ class TestSearchEmails:
             server.search_emails(person_id=34389, user="Andrew Wynne")
 
         email_client.resolve_owner.assert_called_once_with("Andrew Wynne")
-        query = email_client.search.call_args.kwargs["query"]
+        query = email_client.search_with_meta.call_args.kwargs["query"]
         assert "(sender.id:24 OR recipients.id:24)" in query
 
     def test_search_emails_user_name_ambiguous(self, email_client):
@@ -386,7 +418,7 @@ class TestSearchEmails:
         data = json.loads(result)
         assert data["error"] == "user_ambiguous"
         assert len(data["matches"]) == 2
-        email_client.search.assert_not_called()
+        email_client.search_with_meta.assert_not_called()
 
     def test_search_emails_user_not_found(self, email_client):
         """resolve_owner ValueError surfaces as user_not_found JSON; search not called."""
@@ -398,7 +430,7 @@ class TestSearchEmails:
 
         data = json.loads(result)
         assert data["error"] == "user_not_found"
-        email_client.search.assert_not_called()
+        email_client.search_with_meta.assert_not_called()
 
     def test_search_emails_user_none_resolves_caller(self, email_client):
         """user=None falls back to the authenticated CorporateUser."""
@@ -406,7 +438,7 @@ class TestSearchEmails:
              patch.object(server, "resolve_caller", return_value={"id": 99, "email": "me@firm.com"}):
             server.search_emails(person_id=34389)
 
-        query = email_client.search.call_args.kwargs["query"]
+        query = email_client.search_with_meta.call_args.kwargs["query"]
         assert "(sender.id:99 OR recipients.id:99)" in query
 
     def test_search_emails_user_none_no_caller_token(self, email_client):
@@ -416,7 +448,7 @@ class TestSearchEmails:
              patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
             server.search_emails(person_id=34389)
 
-        query = email_client.search.call_args.kwargs["query"]
+        query = email_client.search_with_meta.call_args.kwargs["query"]
         assert query == "(sender.id:34389 OR recipients.id:34389)"
 
     def test_search_emails_with_date_range(self, email_client):
@@ -425,13 +457,13 @@ class TestSearchEmails:
         with patch.object(server, "get_client", return_value=email_client), \
              patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
             server.search_emails(person_id=1, since="2024-01-01", until="2024-12-31")
-            full = email_client.search.call_args.kwargs["query"]
+            full = email_client.search_with_meta.call_args.kwargs["query"]
 
             server.search_emails(person_id=1, since=None, until="2024-12-31")
-            open_lo = email_client.search.call_args.kwargs["query"]
+            open_lo = email_client.search_with_meta.call_args.kwargs["query"]
 
             server.search_emails(person_id=1, since="2024-01-01", until=None)
-            open_hi = email_client.search.call_args.kwargs["query"]
+            open_hi = email_client.search_with_meta.call_args.kwargs["query"]
 
         assert "smtpSendDate:[2024-01-01 TO 2024-12-31]" in full
         assert "smtpSendDate:[* TO 2024-12-31]" in open_lo
@@ -444,7 +476,7 @@ class TestSearchEmails:
              patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
             server.search_emails(person_id=1, subject_contains="proposal")
 
-        query = email_client.search.call_args.kwargs["query"]
+        query = email_client.search_with_meta.call_args.kwargs["query"]
         assert "subject:(proposal)" in query
 
     def test_search_emails_include_body_appends_comments(self, email_client):
@@ -454,7 +486,7 @@ class TestSearchEmails:
              patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
             server.search_emails(person_id=1, include_body=True)
 
-        fields = email_client.search.call_args.kwargs["fields"]
+        fields = email_client.search_with_meta.call_args.kwargs["fields"]
         assert fields.endswith(",comments")
 
     def test_search_emails_api_error(self, email_client):
@@ -467,6 +499,50 @@ class TestSearchEmails:
 
         assert result.startswith("ERROR:")
         assert "boom" in result
+
+
+class TestPaginateEnvelope:
+    """Tests for the _paginate_envelope helper."""
+
+    def test_has_more_true_when_total_exceeds_returned(self):
+        meta = {"data": [{"id": 1}], "total": 100, "start": 0, "count": 1}
+        result = server._paginate_envelope(meta, start=0, count=1)
+        assert result["pagination"]["has_more"] is True
+        assert result["pagination"]["next_start"] == 1
+        assert result["pagination"]["total"] == 100
+
+    def test_has_more_false_when_all_returned(self):
+        meta = {"data": [{"id": 1}, {"id": 2}], "total": 2, "start": 0, "count": 2}
+        result = server._paginate_envelope(meta, start=0, count=2)
+        assert result["pagination"]["has_more"] is False
+        assert result["pagination"]["next_start"] is None
+
+    def test_has_more_fallback_when_total_none(self):
+        """When total is None, has_more is True iff len(data) == count."""
+        meta = {"data": [{"id": i} for i in range(20)], "total": None, "start": 0, "count": 20}
+        result = server._paginate_envelope(meta, start=0, count=20)
+        assert result["pagination"]["has_more"] is True
+        assert result["pagination"]["next_start"] == 20
+
+    def test_has_more_false_fallback_short_page(self):
+        """When total is None and len(data) < count, assume last page."""
+        meta = {"data": [{"id": 1}], "total": None, "start": 0, "count": 20}
+        result = server._paginate_envelope(meta, start=0, count=20)
+        assert result["pagination"]["has_more"] is False
+
+    def test_list_jobs_returns_pagination_has_more(self, mock_client, sample_job):
+        """list_jobs result includes has_more=True when total > returned."""
+        # Clear fixture side_effect so return_value takes precedence.
+        mock_client.search_with_meta.side_effect = None
+        mock_client.search_with_meta.return_value = {
+            "data": [sample_job], "total": 999, "start": 0, "count": 1
+        }
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_jobs(limit=1)
+        data = json.loads(result)
+        assert data["pagination"]["has_more"] is True
+        assert data["pagination"]["next_start"] == 1
+        assert data["pagination"]["total"] == 999
 
 
 class TestFormatResponse:
@@ -502,17 +578,17 @@ class TestListContacts:
     """Tests for list_contacts tool."""
 
     def test_list_contacts_default(self, mock_client):
-        """Test basic contact listing returns JSON list."""
+        """Test basic contact listing returns JSON object with data and pagination."""
         mock_client.search.return_value = [{"id": 111, "firstName": "Alice", "lastName": "Jones"}]
 
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.list_contacts()
 
         data = json.loads(result)
-        assert isinstance(data, list)
-        assert len(data) == 1
-        assert data[0]["id"] == 111
-        mock_client.search.assert_called_once()
+        assert isinstance(data["data"], list)
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == 111
+        mock_client.search_with_meta.assert_called_once()
 
     def test_list_contacts_with_status(self, mock_client):
         """Test contact listing with status filter appended to query."""
@@ -521,7 +597,7 @@ class TestListContacts:
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_contacts(status="Active")
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert 'status:"Active"' in call_args.kwargs["query"]
 
     def test_list_contacts_api_error(self, mock_client):
@@ -534,13 +610,13 @@ class TestListContacts:
         assert result.startswith("ERROR:")
 
     def test_list_contacts_start_forwarded(self, mock_client):
-        """start is passed through to client.search."""
+        """start is passed through to client.search_with_meta."""
         mock_client.search.return_value = []
 
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_contacts(limit=500, start=500)
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 500
         assert call_args.kwargs["count"] == 500
 
@@ -551,7 +627,7 @@ class TestListContacts:
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_contacts()
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 0
 
 
@@ -559,16 +635,16 @@ class TestListCompanies:
     """Tests for list_companies tool."""
 
     def test_list_companies_default(self, mock_client):
-        """Test basic company listing returns JSON list with ClientCorporation entity."""
+        """Test basic company listing returns JSON object with data and pagination."""
         mock_client.search.return_value = [{"id": 222, "name": "Acme Corp"}]
 
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.list_companies()
 
         data = json.loads(result)
-        assert isinstance(data, list)
-        assert len(data) == 1
-        call_args = mock_client.search.call_args
+        assert isinstance(data["data"], list)
+        assert len(data["data"]) == 1
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["entity"] == "ClientCorporation"
 
     def test_list_companies_with_query(self, mock_client):
@@ -578,17 +654,17 @@ class TestListCompanies:
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_companies(query="name:Acme*")
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert "name:Acme*" in call_args.kwargs["query"]
 
     def test_list_companies_start_forwarded(self, mock_client):
-        """start is passed through to client.search."""
+        """start is passed through to client.search_with_meta."""
         mock_client.search.return_value = []
 
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_companies(limit=500, start=1000)
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 1000
         assert call_args.kwargs["count"] == 500
 
@@ -599,7 +675,7 @@ class TestListCompanies:
         with patch.object(server, "get_client", return_value=mock_client):
             server.list_companies()
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs["start"] == 0
 
 
@@ -619,12 +695,12 @@ class TestSprint1E2E:
             companies_result = server.list_companies()
 
         contacts_data = json.loads(contacts_result)
-        assert isinstance(contacts_data, list)
-        assert "id" in contacts_data[0]
+        assert isinstance(contacts_data["data"], list)
+        assert "id" in contacts_data["data"][0]
 
         companies_data = json.loads(companies_result)
-        assert isinstance(companies_data, list)
-        assert "id" in companies_data[0]
+        assert isinstance(companies_data["data"], list)
+        assert "id" in companies_data["data"][0]
 
 
 class TestCreateCompany:
@@ -3232,6 +3308,9 @@ class TestSprint15HttpTransport:
 
         mock_bullhorn = Mock()
         mock_bullhorn.search.return_value = [{"id": 1, "title": "Smoke"}]
+        mock_bullhorn.search_with_meta.return_value = {
+            "data": [{"id": 1, "title": "Smoke"}], "total": 1, "start": 0, "count": 1
+        }
 
         async with app.router.lifespan_context(app):
             transport = StreamableHttpTransport(
@@ -3249,7 +3328,7 @@ class TestSprint15HttpTransport:
 
         assert not result.is_error
         assert "Smoke" in str(result.data)
-        mock_bullhorn.search.assert_called_once()
+        mock_bullhorn.search_with_meta.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -5549,20 +5628,20 @@ class TestGetNotesForEntity:
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.get_notes_for_entity("Candidate", 169020)
 
-        notes = json.loads(result)
-        assert isinstance(notes, list)
-        assert len(notes) == 2
-        assert notes[0]["id"] == 1001
+        data = json.loads(result)
+        assert isinstance(data["data"], list)
+        assert len(data["data"]) == 2
+        assert data["data"][0]["id"] == 1001
 
     def test_get_association_called_with_correct_args(self, mock_client, sample_note_records):
-        """Verifies get_association is called with entity, id, and 'notes'."""
+        """Verifies get_association_with_meta is called with entity, id, and 'notes'."""
         mock_client.get_association.return_value = [sample_note_records[0]]
 
         with patch.object(server, "get_client", return_value=mock_client):
             server.get_notes_for_entity("Candidate", 169020, limit=25, order_by="-dateAdded")
 
-        mock_client.get_association.assert_called_once()
-        call_args = mock_client.get_association.call_args
+        mock_client.get_association_with_meta.assert_called_once()
+        call_args = mock_client.get_association_with_meta.call_args
         assert call_args.args[0] == "Candidate"
         assert call_args.args[1] == 169020
         assert call_args.args[2] == "notes"
@@ -5576,7 +5655,8 @@ class TestGetNotesForEntity:
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.get_notes_for_entity("Candidate", 169020)
 
-        notes = json.loads(result)
+        data = json.loads(result)
+        notes = data["data"]
         assert len(notes) == 1
         assert "[cc:" not in notes[0]["comments"]
         assert "call_metadata" in notes[0]
@@ -5589,7 +5669,8 @@ class TestGetNotesForEntity:
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.get_notes_for_entity("Candidate", 169020)
 
-        notes = json.loads(result)
+        data = json.loads(result)
+        notes = data["data"]
         assert all(not n.get("isDeleted") for n in notes)
         assert len(notes) == 1
         assert notes[0]["id"] == 1001
@@ -5601,8 +5682,8 @@ class TestGetNotesForEntity:
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.get_notes_for_entity("Candidate", 169020, include_deleted=True)
 
-        notes = json.loads(result)
-        assert len(notes) == 2
+        data = json.loads(result)
+        assert len(data["data"]) == 2
 
     def test_invalid_entity_returns_error(self, mock_client):
         """Returns error dict for unsupported entity without calling client."""
@@ -5611,16 +5692,17 @@ class TestGetNotesForEntity:
 
         data = json.loads(result)
         assert data["error"] == "invalid_entity"
-        mock_client.get_association.assert_not_called()
+        mock_client.get_association_with_meta.assert_not_called()
 
-    def test_empty_result_returns_empty_list(self, mock_client):
-        """Returns [] when the record has no notes."""
+    def test_empty_result_returns_empty_data(self, mock_client):
+        """Returns empty data array when the record has no notes."""
         mock_client.get_association.return_value = []
 
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.get_notes_for_entity("Candidate", 169020)
 
-        assert json.loads(result) == []
+        data = json.loads(result)
+        assert data["data"] == []
 
     def test_api_error_returns_error_string(self, mock_client):
         """BullhornAPIError is caught and returned as ERROR: string."""
@@ -5638,8 +5720,8 @@ class TestGetNotesForEntity:
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.get_notes_for_entity("Candidate", 169020)
 
-        notes = json.loads(result)
-        assert "call_metadata" not in notes[0]
+        data = json.loads(result)
+        assert "call_metadata" not in data["data"][0]
 
     def test_returns_notes_for_client_contact(self, mock_client):
         """ClientContact uses the same association endpoint and returns real notes."""
@@ -5658,10 +5740,11 @@ class TestGetNotesForEntity:
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.get_notes_for_entity("ClientContact", 132773)
 
-        notes = json.loads(result)
+        data = json.loads(result)
+        notes = data["data"]
         assert len(notes) == 1
         assert notes[0]["id"] == 2001
-        call_args = mock_client.get_association.call_args
+        call_args = mock_client.get_association_with_meta.call_args
         assert call_args.args[0] == "ClientContact"
         assert call_args.args[1] == 132773
         assert call_args.args[2] == "notes"
@@ -5683,10 +5766,11 @@ class TestGetNotesForEntity:
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.get_notes_for_entity("JobOrder", 51227)
 
-        notes = json.loads(result)
+        data = json.loads(result)
+        notes = data["data"]
         assert len(notes) == 1
         assert notes[0]["id"] == 3001
-        call_args = mock_client.get_association.call_args
+        call_args = mock_client.get_association_with_meta.call_args
         assert call_args.args[0] == "JobOrder"
         assert call_args.args[1] == 51227
 
@@ -5701,11 +5785,12 @@ class TestSearchNotes:
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.search_notes("strong fit")
 
-        notes = json.loads(result)
+        data = json.loads(result)
+        notes = data["data"]
         assert len(notes) == 1
         assert notes[0]["id"] == 1001
-        mock_client.search.assert_called_once()
-        call_args = mock_client.search.call_args
+        mock_client.search_with_meta.assert_called_once()
+        call_args = mock_client.search_with_meta.call_args
         assert call_args.kwargs.get("entity") == "Note" or call_args.args[0] == "Note"
 
     def test_entity_filter_uses_association_endpoint(self, mock_client, sample_note_records):
@@ -5719,12 +5804,13 @@ class TestSearchNotes:
             )
 
         mock_client.get_association.assert_called_once()
-        mock_client.search.assert_not_called()
+        mock_client.search_with_meta.assert_not_called()
         call_args = mock_client.get_association.call_args
         assert call_args.args[0] == "Candidate"
         assert call_args.args[1] == 169020
         assert call_args.args[2] == "notes"
-        notes = json.loads(result)
+        data = json.loads(result)
+        notes = data["data"]
         assert len(notes) == 1  # only note 1001 has "strong" in comments
         assert notes[0]["id"] == 1001
 
@@ -5740,7 +5826,8 @@ class TestSearchNotes:
                 entity_filter={"type": "Candidate", "id": 169020},
             )
 
-        notes = json.loads(result)
+        data = json.loads(result)
+        notes = data["data"]
         assert len(notes) == 1
         assert notes[0]["id"] == 1002
 
@@ -5754,11 +5841,11 @@ class TestSearchNotes:
                 entity_filter={"type": "Candidate", "id": 169020},
             )
 
-        notes = json.loads(result)
-        assert len(notes) == 1
+        data = json.loads(result)
+        assert len(data["data"]) == 1
 
     def test_entity_filter_no_keyword_match_returns_empty(self, mock_client, sample_note_records):
-        """entity_filter path returns [] when keyword matches no note comments."""
+        """entity_filter path returns empty data array when keyword matches no note comments."""
         mock_client.get_association.return_value = [sample_note_records[0]]
 
         with patch.object(server, "get_client", return_value=mock_client):
@@ -5767,19 +5854,19 @@ class TestSearchNotes:
                 entity_filter={"type": "Candidate", "id": 169020},
             )
 
-        assert json.loads(result) == []
+        assert json.loads(result)["data"] == []
 
     def test_no_entity_filter_uses_lucene_search(self, mock_client, sample_note_records):
-        """Without entity_filter, search() is called (Lucene path)."""
+        """Without entity_filter, search_with_meta() is called (Lucene path)."""
         mock_client.search.return_value = [sample_note_records[0]]
 
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.search_notes("strong fit")
 
-        mock_client.search.assert_called_once()
+        mock_client.search_with_meta.assert_called_once()
         mock_client.get_association.assert_not_called()
-        notes = json.loads(result)
-        assert notes[0]["id"] == 1001
+        data = json.loads(result)
+        assert data["data"][0]["id"] == 1001
 
     def test_cc_telemetry_stripped(self, mock_client, sample_note_records):
         """CC tags are stripped from comments in search_notes results too."""
@@ -5788,7 +5875,8 @@ class TestSearchNotes:
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.search_notes("voicemail")
 
-        notes = json.loads(result)
+        data = json.loads(result)
+        notes = data["data"]
         assert "[cc:" not in notes[0]["comments"]
         assert "call_metadata" in notes[0]
 
@@ -5836,7 +5924,7 @@ class TestSearchNotes:
         with patch.object(server, "get_client", return_value=mock_client):
             server.search_notes("strong fit")
 
-        call_args = mock_client.search.call_args
+        call_args = mock_client.search_with_meta.call_args
         fields_arg = call_args.kwargs.get("fields") or call_args.args[2]
         assert "clientCorporation" not in fields_arg
 
@@ -5999,5 +6087,5 @@ class TestQueryEntitiesNoteGuard:
             result = server.query_entities("JobOrder", "salary > 100000")
 
         data = json.loads(result)
-        assert isinstance(data, list)
-        mock_client.query.assert_called_once()
+        assert isinstance(data["data"], list)
+        mock_client.query_with_meta.assert_called_once()
