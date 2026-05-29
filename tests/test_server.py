@@ -5685,6 +5685,33 @@ class TestGetNotesForEntity:
         data = json.loads(result)
         assert len(data["data"]) == 2
 
+    def test_pagination_next_start_advances_by_raw_page_count(self, mock_client, sample_note_records):
+        """next_start uses the raw Bullhorn page count so it always advances past deleted records.
+
+        When include_deleted=False and some notes are isDeleted=True, the raw page
+        returned by Bullhorn may be larger than len(data). next_start must be
+        start + raw_page_count, not start + len(data), to avoid re-fetching the same
+        deleted records on the next call.
+        """
+        # Page has 2 raw notes; 1 is deleted → len(cleaned) = 1, raw_page_count = 2
+        mock_client.get_association_with_meta.side_effect = None
+        mock_client.get_association_with_meta.return_value = {
+            "data": [sample_note_records[0], sample_note_records[2]],  # [active, deleted]
+            "total": 10,
+            "start": 0,
+            "count": 2,
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("Candidate", 169020, limit=2)
+
+        data = json.loads(result)
+        assert len(data["data"]) == 1  # deleted note filtered out
+        assert data["pagination"]["count"] == 1
+        assert data["pagination"]["has_more"] is True
+        # next_start must be 2 (raw page count), not 1 (cleaned count) — prevents re-fetch loop
+        assert data["pagination"]["next_start"] == 2
+
     def test_invalid_entity_returns_error(self, mock_client):
         """Returns error dict for unsupported entity without calling client."""
         with patch.object(server, "get_client", return_value=mock_client):

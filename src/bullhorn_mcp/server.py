@@ -2589,6 +2589,12 @@ def get_notes_for_entity(
         Click-to-call telemetry tags are stripped from the comments field and
         moved to a sibling ``call_metadata`` list. When ``has_more`` is true,
         call again with ``start=<next_start>`` for the next page.
+        ``next_start`` is always the raw Bullhorn page offset; when
+        ``include_deleted=False`` (the default), soft-deleted notes occupy
+        Bullhorn offsets but are excluded from ``data``, so
+        ``pagination.count`` may be less than ``next_start - start``.
+        Always use ``next_start`` directly — do not compute it as
+        ``start + count``.
 
     Examples:
         - get_notes_for_entity("Candidate", 169020) - All notes on a candidate
@@ -2618,9 +2624,11 @@ def get_notes_for_entity(
             order_by=order_by,
         )
 
-        notes = meta["data"]
-        if not include_deleted:
-            notes = [n for n in notes if not n.get("isDeleted")]
+        raw_notes = meta["data"]
+        # raw_page_count drives offset arithmetic so next_start always advances
+        # past the current Bullhorn page (including any soft-deleted entries).
+        raw_page_count = len(raw_notes)
+        notes = raw_notes if include_deleted else [n for n in raw_notes if not n.get("isDeleted")]
 
         cleaned_notes = []
         for note in notes:
@@ -2633,8 +2641,19 @@ def get_notes_for_entity(
                     note["call_metadata"] = tags
             cleaned_notes.append(note)
 
-        filtered_meta = {**meta, "data": cleaned_notes}
-        return format_response(_paginate_envelope(filtered_meta, start, limit))
+        total = meta.get("total")
+        has_more = (start + raw_page_count) < total if total is not None else raw_page_count == limit
+        next_start = start + raw_page_count if has_more else None
+        return format_response({
+            "data": cleaned_notes,
+            "pagination": {
+                "total": total,
+                "start": start,
+                "count": len(cleaned_notes),
+                "has_more": has_more,
+                "next_start": next_start,
+            },
+        })
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
