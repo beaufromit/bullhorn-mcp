@@ -25,7 +25,7 @@ def mock_client(sample_job, sample_candidate):
             if se is not None:
                 if isinstance(se, BaseException):
                     raise se
-                raise se
+                return se(*args, **kwargs)
             data = bare_mock.return_value
             return {
                 "data": data,
@@ -361,7 +361,7 @@ class TestSearchEmails:
             if se is not None:
                 if isinstance(se, BaseException):
                     raise se
-                raise se
+                return se(*args, **kwargs)
             data = client.search.return_value
             return {"data": data, "total": len(data), "start": kwargs.get("start", 0), "count": len(data)}
 

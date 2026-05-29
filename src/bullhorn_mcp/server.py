@@ -2619,7 +2619,6 @@ def get_notes_for_entity(
         )
 
         notes = meta["data"]
-        raw_count = len(notes)
         if not include_deleted:
             notes = [n for n in notes if not n.get("isDeleted")]
 
@@ -2634,19 +2633,8 @@ def get_notes_for_entity(
                     note["call_metadata"] = tags
             cleaned_notes.append(note)
 
-        total = meta.get("total")
-        has_more = (start + raw_count) < total if total is not None else raw_count == limit
-        next_start = start + raw_count if has_more else None
-        return format_response({
-            "data": cleaned_notes,
-            "pagination": {
-                "total": total,
-                "start": start,
-                "count": len(cleaned_notes),
-                "has_more": has_more,
-                "next_start": next_start,
-            },
-        })
+        filtered_meta = {**meta, "data": cleaned_notes}
+        return format_response(_paginate_envelope(filtered_meta, start, limit))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
