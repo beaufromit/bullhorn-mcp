@@ -2,13 +2,20 @@
 
 ## PRD Validation Notes
 
-PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user stories US-1 through US-28, plus targeted addendum stories US-7A and US-15A for duplicate preflight and ClientContact title stripping. This includes the accepted change-request scope for hosted identity/owner stamping, first-class JobOrder writes, and JobSubmission shortlist tools. The implementation plan has been updated to cover the expanded PRD.
+**Current baseline:** All sprints through CR28 are implemented and tested. **559 tests passing, tagged v0.0.40.** Sprints 30 (CR29) and 31 (CR30) are PLANNED — not yet implemented.
 
-**Minor gap noted:** NFR-4 requires field label resolution in all tools that accept field names (including create operations). US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks — label resolution via the metadata module will be applied consistently to create and update operations per NFR-4, without requiring a new user story.
+**PRD reconciliation (June 2026):** PRD.md has been updated to cover all post-CR18 tool drift that previously had no documented requirement. The PRD now contains **19 functional requirements (FR-1 through FR-19)** and user stories **US-1 through US-38** (plus US-7A and US-15A). Summary of new additions:
+- **FR-15** (CR19) — Candidate creation and CV parsing (`create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`)
+- **FR-16** (CR21/CR23) — Note reading and full-text search (`get_notes_for_entity`, `search_notes`)
+- **FR-17** (CR24) — Email/UserMessage search (`search_emails`)
+- **FR-18** (CR25 + CR29 planned + CR30 planned) — Single-record and pipeline read tools (`get_company` implemented; `get_contact` planned in Sprint 30; `get_job_submissions` planned in Sprint 31)
+- **FR-19** (CR28) — Pagination metadata envelope on all list/search/query tools
+- **FR-7 amendment** (CR20) — `add_note` extended to 7 entity types with `commenting_person_id`
+- **Non-Goal amendment** — The candidate-creation Non-Goal has been updated; candidate creation is now in scope (FR-15)
 
-**Current validation note:** Sprints 1-29 are implemented and tested, 502 tests passing, tagged v0.0.33. CR23 review cycle completed cleanly: no critical issues, no moderate issues. Three minor issues noted: (1) `_NOTE_ENTITY_SUBJECT_FIELD` constant in `server.py` is now dead code after the client-side filter was removed; (2) Placement/Lead/Opportunity entity_filter paths in `search_notes` are untested at the server layer; (3) Python-side sort behavioral tests removed without server-layer replacement. CR23 patch: `get_notes_for_entity` and `search_notes` (with entity_filter) rewritten to use the entity association endpoint `GET /entity/{Entity}/{id}/notes` instead of the broken NoteEntity two-step. Root cause: Bullhorn stores `targetEntityName='User'` (not `'Candidate'`) for Candidate NoteEntity rows; additionally the NoteEntity rows for a JobOrder mix `'JobOrder'` and `'User'` values so no targetEntityName filter is safe. The association endpoint is reliable across all entity types and tenants. `search_notes` with `entity_filter` now fetches all notes for the record and keyword-filters comments in Python (case-insensitive substring). Without `entity_filter`, the existing Lucene `/search/Note` path is preserved. `BullhornClient.get_many()` removed (no longer has callers); replaced with `get_association(entity, entity_id, association, ...)` — 502 tests passing, tagged v0.0.33. Sprint 29 completed CR21: two new read tools (`get_notes_for_entity`, `search_notes`); `BullhornClient.get_many()` for batch entity reads; `query_entities` hard-refuses `entity="Note"` with a helpful error; CC-tag telemetry stripping; docstring guards on `search_entities`, `get_candidate`, `get_job`; both new tools wired into `descriptions.py` TOOL_ENTITY_MAP for startup field-reference enrichment. Review cycle fixes: C1 — `get_notes_for_entity` NoteEntity where clause was missing `AND targetEntityType='{entity}'`, allowing cross-entity note leakage when different entity types share the same numeric ID; M1 — `search_notes` entity_filter for Placement/Lead/Opportunity silently returned empty results because `_NOTE_DEFAULT_FIELDS` lacked the `placements(id)`, `leads(id)`, `opportunities(id)` association fields — both fixed, 499 tests passing. CR22 patch: three post-CR21 bugs fixed from live usage — (1) get_notes_for_entity NoteEntity query used non-existent `targetEntityType` field; correct field is `targetEntityName`; (2) search_notes default fields included `clientCorporation` which is invalid on /search/Note; split into `_NOTE_SEARCH_DEFAULT_FIELDS`; (3) bare `*` query forwarded to Bullhorn causing Bad Query error; now rejected client-side with redirect hint — 502 tests passing, tagged v0.0.32. Sprint 26 completed CR18: new `descriptions.py` module with `enrich_tool_descriptions()` called in `main()` before `mcp.run()`; fetches `/meta/{entity}` at startup for 9 entity types and appends compact field summaries to all relevant tool descriptions; `BullhornMetadata.get_fields()` extended to retain picklist `options` in its projection; picklist values inlined for `status`, `employmentType`, `category`, `type`, `source` fields; graceful fallback to static docstrings if Bullhorn is unreachable at boot. Review cycle fixes: `enrich_tool_descriptions` now returns its `BullhornMetadata` instance which is stored as `_metadata` in `main()` (avoids double /meta round-trips at runtime); `get_entity_fields` added to `TOOL_ENTITY_MAP` with all supported entities. Sprint 25 completed CR17: added `JobSubmission` to `DEFAULT_FIELDS` in `client.py` with a safe explicit field list (`id,status,dateAdded,candidate,jobOrder,sendingUser`) to fix `errors.allFieldsNotAllowed` errors that occurred when `shortlist_candidates` fetched `fields=*` after writing a JobSubmission. CR16 and CR17 code changes were bundled in one commit (5b269de) since they were interleaved in the same files. Sprint 24 completed CR16: added `exclude_deleted=True` default to `BullhornClient.search()` and `BullhornClient.query()` to blanket-filter soft-deleted records from all searches; removed redundant `isDeleted:0` call-site filters in `list_*` tools and `_shortlist_one`; renamed `_company_name_search_query` to `_company_broad_query` (no longer leaks an `isDeleted:0` filter inconsistently); added regression tests confirming `find_duplicate_companies`, `find_duplicate_contacts`, `create_contact` dedup, `search_entities`, and `query_entities` all exclude deleted records. Sprint 22 completed CR14: refactored `create_job` to a dict-based signature, removed the broken CR13 validation infrastructure, added `joborder_config.py` for per-instance env configuration (`BULLHORN_JOBORDER_ALIASES`, `BULLHORN_JOBORDER_REQUIRED`, `BULLHORN_JOBORDER_DEFAULTS`), and wired env aliases into `FIELD_ALIASES["JobOrder"]` at module load.
+For per-sprint technical detail, see the individual sprint sections below.
 
-**Sprint 14 completion note:** All 14 sprints (Sprints 1-7 original, Sprints 8-14 change requests) are complete for their original scope. One minor discrepancy: `find_duplicate_companies` accepts `website` and `phone` parameters (per FR-3's mention of "optionally other identifying fields") but these are not currently used in matching — results are based on name matching only. FR-3 does not mandate these parameters affect matching, so the behavior is acceptable.
+**Minor gap noted (carried forward):** NFR-4 requires field label resolution in all create operations. US-15 explicitly covers this for `update_record`, but US-1 and US-2 (create operations) have no acceptance criterion for label resolution. This is handled as an implementation note within Sprint 3, Sprint 4, and Sprint 6 tasks.
 
 **CR8-CR12 — hosted deployment and identity:** FR-11 and FR-12 cover HTTP transport, Entra authentication, identity resolution, owner stamping, per-user identity cache, and session persistence. Sprints 15-19 implement this scope.
 
@@ -51,7 +58,9 @@ PRD.md now contains 14 functional requirements (FR-1 through FR-14) and user sto
 | Sprint 29 | **COMPLETE** | CR21: Notes read tools — `get_notes_for_entity` (two-step NoteEntity→batch /entity/Note/<ids>); `search_notes` (full-text Lucene + client-side entity_filter); `query_entities` hard-refuse for Note; CC-tag telemetry stripping; `BullhornClient.get_many()`; docstring guards on `search_entities`, `get_candidate`, `get_job` — 498 tests passing, tagged v0.0.30. Review cycle: C1 fixed missing `AND targetEntityType='{entity}'` in `get_notes_for_entity` NoteEntity query (cross-entity ID leak); M1 fixed `_NOTE_DEFAULT_FIELDS` missing Placement/Lead/Opportunity association fields causing silent empty results in `search_notes` entity_filter — 499 tests passing, tagged v0.0.31. CR22 patch: targetEntityName fix, _NOTE_SEARCH_DEFAULT_FIELDS split, wildcard guard — 502 tests, tagged v0.0.32. CR23 patch: `get_notes_for_entity` and `search_notes` (entity_filter path) rewritten to use `GET /entity/{Entity}/{id}/notes` association endpoint; `BullhornClient.get_many()` removed and replaced with `get_association()` — 502 tests passing, tagged v0.0.33. CR23 review cycle: no critical issues, no moderate issues. Three minor issues noted: (1) `_NOTE_ENTITY_SUBJECT_FIELD` constant in `server.py` is dead code after client-side filter removal; (2) Placement/Lead/Opportunity entity_filter paths in `search_notes` are untested at the server layer (old Placement test removed, no replacement added); (3) Python-side sort behavioral tests (`test_order_by_descending_dateAdded`, `test_order_by_ascending_dateAdded`) removed without server-layer replacement (replaced with parameter-passing test only). |
 | CR26 | **COMPLETE** | `name` field auto-construction for Candidate and ClientContact: Bullhorn REST API does not auto-compute `name` from firstName+lastName (only the UI does); records created via API had `name=null`, breaking list visibility and the edit-screen link. Fix: `_compute_person_name()` helper added; `_strip_contact_title()` now strips LLM-supplied `name` on both Candidate and ClientContact (with warning); MCP injects computed name on `create_candidate`, `create_candidate_from_cv`, `create_contact`, and `update_record` (Candidate/ClientContact branches, with GET fetch for partial-name updates). IMPLEMENTATION-PLAN.md line 512 note updated. 534 tests passing. Review cycle: M1 — `attach_cv` commit path was missing the `_compute_person_name` injection after `_strip_contact_title`; if `firstName` or `lastName` were committed via `attach_cv`, `name` would not be updated to match — an incomplete fix scope (CR26 covered four tools but missed `attach_cv`). Fixed in commit 76c9889. Two regression tests added to `TestAttachCv` covering the "both components present" and "single component with fallback GET" paths. Second review cycle (db78771): `extra_params={"entityId": person_id}` removed from `search_emails` — the Lucene `sender.id OR recipients.id` clause is sufficient; `entityId` was redundant. Review clean: no CRITICAL, no MODERATE. 536 tests passing, tagged v0.0.38. |
 | CR25 | **COMPLETE** | Bug fixes from Pinergy stress test: (1) `get_company` tool for ClientCorporation ID lookup; (2) `_ENTITIES_WITHOUT_ISDELETED` denylist {ClientCorporation, UserMessage} in client.py — centralises isDeleted auto-clause handling, removes CR24 per-call opt-out in search_emails; (3) drop `clientCorporation(id,name)` from `_NOTE_DEFAULT_FIELDS` — Bullhorn now rejects this field on the /entity/{Entity}/{id}/notes association endpoint, breaking all `get_notes_for_entity` calls; (4a) ship `BULLHORN_CANDIDATE_REQUIRED` default list in .env.example (occupation, companyName, email, source); (4b) `add_note` validates action against Note picklist cached at startup via `_load_valid_note_actions()`; (4c) auto-stamp `source=get_mcp_source()` on candidate creation — reads `BULLHORN_MCP_SOURCE` env var, defaults to "Claude" — 519 tests passing, tagged v0.0.35. Review cycle: C1 fixed `create_candidate_from_cv` source-stamping write-path entirely untested — added `test_source_auto_stamped_when_not_provided` and `test_user_supplied_source_wins_in_cv_flow` to `TestCreateCandidateFromCv`; M1 fixed `_load_valid_note_actions` internal logic (metadata loading, option extraction, caching) entirely untested — added four direct unit tests inside `TestAddNote` — 525 tests passing, tagged v0.0.36. |
-| CR28 | **COMPLETE** | Surface pagination metadata on list/search/query tools: 9 user-facing tools now return `{"data": [...], "pagination": {"total", "start", "count", "has_more", "next_start"}}` instead of a bare list. Three new `*_with_meta` client methods (`search_with_meta`, `query_with_meta`, `get_association_with_meta`) return the full Bullhorn envelope; existing bare-list methods delegate to them. New `_paginate_envelope(meta, start, count)` server helper builds the user-facing envelope with explicit `has_more` and `next_start`. `search_emails` gained `start=0` param. 558 tests passing, tagged v0.0.40. Review cycle: M1 fixed — `get_notes_for_entity` must use `raw_page_count` (pre-isDeleted-filter) for `has_more` and `next_start` since Bullhorn's association endpoint returns all notes including deleted ones; using `len(cleaned_notes)` for offset arithmetic causes an infinite-loop `next_start=start` when all notes on a page are deleted. M2 fixed — `_wrap_with_meta` test fixture did `raise se` for non-BaseException side_effects (callables); changed to `return se(*args, **kwargs)`. Key design constraint: `get_notes_for_entity` is the only tool where `pagination.count` may differ from `next_start - start` because server-side isDeleted filtering is impossible on Bullhorn's /entity/{Entity}/{id}/notes association endpoint. Docstring explicitly warns callers to use `next_start` directly. |
+| CR28 | **COMPLETE** | Surface pagination metadata on list/search/query tools: 9 user-facing tools now return `{"data": [...], "pagination": {"total", "start", "count", "has_more", "next_start"}}` instead of a bare list. Three new `*_with_meta` client methods (`search_with_meta`, `query_with_meta`, `get_association_with_meta`) return the full Bullhorn envelope; existing bare-list methods delegate to them. New `_paginate_envelope(meta, start, count)` server helper builds the user-facing envelope with explicit `has_more` and `next_start`. `search_emails` gained `start=0` param. **559 tests passing, tagged v0.0.40.** Review cycle: M1 fixed — `get_notes_for_entity` must use `raw_page_count` (pre-isDeleted-filter) for `has_more` and `next_start` since Bullhorn's association endpoint returns all notes including deleted ones; using `len(cleaned_notes)` for offset arithmetic causes an infinite-loop `next_start=start` when all notes on a page are deleted. M2 fixed — `_wrap_with_meta` test fixture did `raise se` for non-BaseException side_effects (callables); changed to `return se(*args, **kwargs)`. Key design constraint: `get_notes_for_entity` is the only tool where `pagination.count` may differ from `next_start - start` because server-side isDeleted filtering is impossible on Bullhorn's /entity/{Entity}/{id}/notes association endpoint. Docstring explicitly warns callers to use `next_start` directly. |
+| Sprint 30 | **COMPLETE** | CR29: `get_contact` — 563 tests passing, tagged v0.0.41. |
+| Sprint 31 | **PLANNED** | CR30: `get_job_submissions` — JobSubmission pipeline for a job, paginated envelope via `query_with_meta`. Target: **~570 tests, tag v0.0.42.** See Sprint 31 section below. |
 
 ### Sprint 15 post-tag regression note
 
@@ -75,7 +84,7 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note(commenting_person_id)`, `_request_multipart`, `parse_resume_file`, `parse_resume_text`, `attach_file`; `_ENTITY_FIELD` dispatch dict in `add_note` maps each of 7 entity types to its Note association field name
 - `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant extended at module load with env-defined JobOrder aliases via `joborder_config.get_joborder_aliases()`; `FIELD_ALIASES["JobSubmission"] = {}` reserved slot.
-- `src/bullhorn_mcp/server.py` — MCP server with 27 implemented tools: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `search_entities`, `query_entities`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()` helpers; `_NOTE_TARGET_ENTITIES` set (Candidate, ClientContact, ClientCorporation, JobOrder, Placement, Lead, Opportunity); `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()` private helpers.
+- `src/bullhorn_mcp/server.py` — MCP server with **30 implemented tools** (31 after Sprint 30, 32 after Sprint 31): `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `get_company`, `search_entities`, `query_entities`, `search_emails`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`, `get_notes_for_entity`, `search_notes`. **Planned Sprint 30:** `get_contact`. **Planned Sprint 31:** `get_job_submissions`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()`, `_paginate_envelope()` helpers; `_NOTE_TARGET_ENTITIES` set; `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()`, `_strip_cc_telemetry()` private helpers; `_NOTE_DEFAULT_FIELDS`, `_CC_TAG_RE`, `_valid_note_actions` module-level constants/state.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
@@ -99,7 +108,7 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_joborder_config.py` — 10 tests (env config loaders for aliases/required/defaults)
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
-- **Total: 461 tests, all passing**
+- **Total: 563 tests, all passing (v0.0.41)**. Sprint 31 adds ~7 tests (→ ~570).
 
 ---
 
@@ -2406,4 +2415,177 @@ The handler function is `_upload_cv_handler(request)` and is registered via `mcp
 }
 ```
 
-**Tests:** 558 passing (39 new).
+**Tests:** 559 passing (39 new). (One additional test landed post-tag — see verified suite count.)
+
+---
+
+## Sprint 30 — CR29: `get_contact` tool
+
+**Status: COMPLETE**
+**563 tests passing. Tag v0.0.41 applied after review cycle.**
+**User stories:** US-36, FR-18
+**Target tag:** v0.0.41
+**Expected test delta:** 559 → ~563 (+4)
+
+### Context
+
+`get_job`, `get_candidate`, and `get_company` all exist, but there is no `get_contact`. Consultants who want to inspect a single contact by ID must fall back to `query_entities`, which requires knowing Bullhorn SQL syntax. This is a parity gap.
+
+### Implementation patterns (verified against existing code)
+
+| Pattern | Source location |
+|---|---|
+| Tool shape | Mirrors `get_company` at `server.py:543` exactly (signature, error handler, TOOL_ENTITY_MAP entry) |
+| `mock_client` fixture | `tests/test_server.py:14-41` — `get` has no `_with_meta` wrapper; set `mock_client.get.return_value` directly |
+
+### Task T30.1 — `get_contact` tool
+
+**File: `src/bullhorn_mcp/server.py`** — add after `get_company` (~line 561):
+
+```python
+@mcp.tool()
+def get_contact(contact_id: int, fields: str | None = None) -> str:
+    """Get details for a specific client contact by ID.
+
+    Args:
+        contact_id: The ClientContact ID
+        fields: Comma-separated fields to return
+                (default: id,firstName,lastName,name,email,phone,occupation,
+                 status,clientCorporation,owner,dateAdded)
+
+    Returns:
+        JSON object with contact details.
+
+    Note on notes: use get_notes_for_entity("ClientContact", contact_id) for contact notes.
+    """
+    try:
+        client = get_client()
+        result = client.get(entity="ClientContact", entity_id=contact_id, fields=fields)
+        return format_response(result)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+```
+
+**File: `src/bullhorn_mcp/descriptions.py`** — add to `TOOL_ENTITY_MAP`:
+```python
+"get_contact": ["ClientContact"],
+```
+
+**Tests** (`tests/test_server.py`, new class `TestGetContact`, +4 tests):
+- `test_get_contact_default_fields` — verifies `client.get` called with `entity="ClientContact"`, `entity_id=123`, `fields=None`.
+- `test_get_contact_custom_fields` — verifies `fields="id,email"` passed through.
+- `test_get_contact_api_error` — `client.get` raises `BullhornAPIError`; response starts with `"ERROR:"`.
+- `test_get_contact_auth_error` — `client.get` raises `AuthenticationError`; response starts with `"ERROR:"`.
+
+### Verification
+
+After implementation:
+1. `.venv/bin/pytest` — all ~563 tests pass, 0 failures.
+2. `grep -n "get_contact" src/bullhorn_mcp/server.py` — tool appears.
+3. `grep -n "get_contact" src/bullhorn_mcp/descriptions.py` — key in `TOOL_ENTITY_MAP`.
+4. Tag v0.0.41 after review cycle passes.
+
+---
+
+## Sprint 31 — CR30: `get_job_submissions` tool
+
+**Status: PLANNED / INCOMPLETE**
+**User stories:** US-37, FR-18
+**Target tag:** v0.0.42
+**Expected test delta:** ~563 → ~570 (+7)
+
+### Context
+
+There is no dedicated tool to fetch the submission pipeline for a job. Agents must infer they should use `query_entities(entity="JobSubmission", where="jobOrder.id=X")` — which works only if the model knows the Bullhorn entity schema. A dedicated tool makes this reliable across all models.
+
+### Implementation patterns (verified against existing code)
+
+| Pattern | Source location |
+|---|---|
+| Tool shape | Uses `query_with_meta` + `_paginate_envelope`, same as `list_contacts` at `server.py:386` |
+| `_paginate_envelope` helper | `server.py:252` |
+| `query_with_meta` signature | `client.py:276` — `(entity, where, fields, count, start, order_by, exclude_deleted=True)` |
+| `mock_client` fixture | `tests/test_server.py:14-41` — `_wrap_with_meta` closure delegates `query_with_meta.side_effect` to `query.return_value` |
+
+### Task T31.1 — `get_job_submissions` tool
+
+**File: `src/bullhorn_mcp/server.py`** — add alongside the other read tools:
+
+```python
+@mcp.tool()
+def get_job_submissions(
+    job_id: int,
+    status: str | None = None,
+    limit: int = 20,
+    start: int = 0,
+    fields: str | None = None,
+) -> str:
+    """Get all candidate submissions (pipeline) for a specific job.
+
+    Args:
+        job_id: The JobOrder ID to fetch submissions for
+        status: Filter by submission status (e.g., "Shortlisted", "Interviewing",
+                "Offered", "Placed"). Omit to return all statuses.
+        limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset (default 0). Use with limit to page through results.
+        fields: Comma-separated fields to return
+                (default: id,candidate(id,firstName,lastName,email),
+                 status,dateAdded,sendingUser(id,name))
+
+    Returns:
+        JSON object with ``data`` (array of job submissions) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        When ``has_more`` is true, call again with ``start=<next_start>``
+        to fetch the next page.
+
+    Examples:
+        - get_job_submissions(job_id=12345) — All submissions for job 12345
+        - get_job_submissions(job_id=12345, status="Shortlisted") — Shortlisted only
+        - get_job_submissions(job_id=12345, limit=50, start=0) — First 50 results
+    """
+    try:
+        client = get_client()
+
+        where = f"jobOrder.id={job_id}"
+        if status:
+            where += f' AND status="{status}"'
+
+        default_fields = "id,candidate(id,firstName,lastName,email),status,dateAdded,sendingUser(id,name)"
+        meta = client.query_with_meta(
+            entity="JobSubmission",
+            where=where,
+            fields=fields or default_fields,
+            count=limit,
+            start=start,
+        )
+
+        return format_response(_paginate_envelope(meta, start, limit))
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+```
+
+**File: `src/bullhorn_mcp/descriptions.py`** — add to `TOOL_ENTITY_MAP`:
+```python
+"get_job_submissions": ["JobSubmission"],
+```
+
+**Tests** (`tests/test_server.py`, new class `TestGetJobSubmissions`, +7 tests):
+- `test_get_job_submissions_basic` — `query_with_meta` called with `where="jobOrder.id=12345"`, default fields, `count=20`, `start=0`; response has `data` and `pagination` keys.
+- `test_get_job_submissions_status_filter` — `status="Shortlisted"` results in `where='jobOrder.id=12345 AND status="Shortlisted"'`.
+- `test_get_job_submissions_pagination` — `limit=10, start=10` forwarded as `count=10, start=10`; `next_start` in envelope is populated.
+- `test_get_job_submissions_custom_fields` — caller-supplied `fields` overrides the default field string.
+- `test_get_job_submissions_empty` — `query_with_meta` returns `{data: [], total: 0, start: 0, count: 0}`; response shows empty `data` with `has_more: false`.
+- `test_get_job_submissions_api_error` — `query_with_meta` raises `BullhornAPIError`; response starts with `"ERROR:"`.
+- `test_get_job_submissions_auth_error` — `query_with_meta` raises `AuthenticationError`; response starts with `"ERROR:"`.
+
+**Test fixture gotcha:** the fixture delegates `query_with_meta.side_effect` to `query.return_value`. Tests that set `query_with_meta.return_value` directly must also set `mock_client.query_with_meta.side_effect = None` first. Error tests should set `mock_client.query.side_effect = BullhornAPIError(...)` (not on `query_with_meta`) to trigger the error through the closure.
+
+### Verification
+
+After implementation:
+1. `.venv/bin/pytest` — all ~570 tests pass, 0 failures.
+2. `grep -n "get_job_submissions" src/bullhorn_mcp/server.py` — tool appears.
+3. `grep -n "get_job_submissions" src/bullhorn_mcp/descriptions.py` — key in `TOOL_ENTITY_MAP`.
+4. Tag v0.0.42 after review cycle passes.
