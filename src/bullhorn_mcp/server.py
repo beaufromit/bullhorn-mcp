@@ -562,6 +562,30 @@ def get_company(company_id: int, fields: str | None = None) -> str:
 
 
 @mcp.tool()
+def get_contact(contact_id: int, fields: str | None = None) -> str:
+    """Get details for a specific client contact by ID.
+
+    Args:
+        contact_id: The ClientContact ID
+        fields: Comma-separated fields to return
+                (default: id,firstName,lastName,name,email,phone,occupation,
+                 status,clientCorporation,owner,dateAdded)
+
+    Returns:
+        JSON object with contact details.
+
+    Note on notes: use get_notes_for_entity("ClientContact", contact_id) for contact notes.
+    """
+    try:
+        client = get_client()
+        result = client.get(entity="ClientContact", entity_id=contact_id, fields=fields)
+        return format_response(result)
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
 def search_entities(
     entity: str,
     query: str,

@@ -247,6 +247,58 @@ class TestGetCompany:
         assert result.startswith("ERROR:")
 
 
+class TestGetContact:
+    """Tests for get_contact tool."""
+
+    def test_get_contact_default_fields(self, mock_client):
+        """get_contact delegates to client.get with entity=ClientContact and fields=None."""
+        mock_client.get.return_value = {
+            "id": 123,
+            "firstName": "Jane",
+            "lastName": "Doe",
+            "email": "jane@example.com",
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_contact(contact_id=123)
+
+        data = json.loads(result)
+        assert data["id"] == 123
+        assert data["firstName"] == "Jane"
+        mock_client.get.assert_called_with(
+            entity="ClientContact", entity_id=123, fields=None
+        )
+
+    def test_get_contact_custom_fields(self, mock_client):
+        """get_contact passes custom fields to client.get."""
+        mock_client.get.return_value = {"id": 123, "email": "jane@example.com"}
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.get_contact(contact_id=123, fields="id,email")
+
+        mock_client.get.assert_called_with(
+            entity="ClientContact", entity_id=123, fields="id,email"
+        )
+
+    def test_get_contact_api_error(self, mock_client):
+        """get_contact returns ERROR prefix on API failure."""
+        mock_client.get.side_effect = BullhornAPIError("not found")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_contact(contact_id=99999)
+
+        assert result.startswith("ERROR:")
+
+    def test_get_contact_auth_error(self, mock_client):
+        """get_contact returns ERROR prefix on authentication failure."""
+        mock_client.get.side_effect = AuthenticationError("session expired")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_contact(contact_id=123)
+
+        assert result.startswith("ERROR:")
+
+
 class TestSearchEntities:
     """Tests for search_entities tool."""
 
