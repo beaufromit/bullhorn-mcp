@@ -2,7 +2,9 @@
 
 ## 1. Overview
 
-The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, field metadata resolution, hosted HTTP access, authenticated-user owner stamping, and first-class JobOrder create/update workflows.
+The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, field metadata resolution, hosted HTTP access, authenticated-user owner stamping, first-class JobOrder create/update workflows, and JobSubmission (shortlist) write tools.
+
+Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), and a paginated-envelope response format across all list/search/query tools (FR-19).
 
 The MCP serves two classes of consumer:
 
@@ -35,7 +37,7 @@ Until these records are in Bullhorn, downstream tools cannot act on them. Automa
 - Building the Twin.so agent or the chat agent that calls the MCP (those are separate projects).
 - Creating new Bullhorn field types, custom objects, or note action types.
 - Real-time sync or webhook-based triggers.
-- Managing Candidate creation (existing Candidate read tools remain).
+- Candidate deletion, merging, or archiving (creation and CV parsing are now in scope — see FR-15).
 - JobOrder duplicate detection, bulk job import, deletion, merging, or archiving.
 
 ## 5. Context and Workflow
@@ -166,6 +168,70 @@ The MCP shall provide tools for shortlisting candidates to jobs by creating `Job
 - `shortlist_candidates` shall accept a list of candidate IDs for the same job and apply the same logic per candidate, returning a structured response with per-candidate `status: "created" | "duplicate" | "error"` and a summary count.
 - Both tools shall accept an optional `fields` dict for additional `JobSubmission` fields, with labels resolved via the metadata module.
 - The server shall validate `BULLHORN_SHORTLIST_STATUS` against the JobSubmission status picklist on first use and log a warning (not error) if the configured value is absent.
+
+### FR-7 Amendment: Add Notes — Extended Entity Support
+
+The original FR-7 covers ClientContact and ClientCorporation. The `add_note` tool has since been extended (CR20) to support seven entity types: Candidate, ClientContact, ClientCorporation, JobOrder, Placement, Lead, and Opportunity. The tool also accepts a `commenting_person_id` parameter to explicitly identify the note author (stamped as `commentingPerson`). The valid note action list is validated against the Bullhorn Note picklist on first use and cached for the session.
+
+### FR-15: Candidate Creation and CV Parsing
+
+The MCP shall provide tools for creating Candidate records and processing CVs:
+
+- `create_candidate` shall create a new Candidate entity in Bullhorn with the fields supplied by the caller. Required fields are configurable per deployment via the `BULLHORN_CANDIDATE_REQUIRED` environment variable. The `source` field is auto-stamped from `BULLHORN_MCP_SOURCE` (default `"Claude"`) when the caller omits it. `name` is auto-computed from `firstName`/`lastName` — any caller-supplied `name` value is stripped and replaced. The Candidate `title` field is invalid (unlike ClientContact where it is a salutation); `occupation` is the correct field for job title.
+- `find_duplicate_candidates` shall check for existing Candidates matching first/last name or email, returning matches with confidence categories.
+- `parse_cv` shall accept a base64-encoded file (PDF/DOCX/TXT) and return structured candidate field suggestions extracted by Bullhorn's CV-parsing endpoint, without writing any records.
+- `parse_cv_text` shall accept raw CV text (as a string) and return the same structured field suggestions.
+- `create_candidate_from_cv` shall parse a CV and create a Candidate in one operation, applying the same field-injection rules as `create_candidate`.
+- `attach_cv` shall attach a CV file to an existing Candidate record using a two-call commit pattern: the first call returns a preview of parsed fields with `committed: false`; the second call (with `force_all=true` or a `fields_to_update` list) writes the fields and attaches the file.
+
+### FR-16: Note Reading and Search
+
+The MCP shall provide read tools for Bullhorn Note records:
+
+- `get_notes_for_entity(entity, entity_id, count, start, fields)` shall return all notes associated with a given entity record, using the Bullhorn association endpoint `GET /entity/{Entity}/{id}/notes`. Responses are wrapped in the standard pagination envelope (FR-19). Callers must use `next_start` from the pagination block (not `start + count`) because server-side isDeleted filtering of association results is not possible — the `count` in the envelope may be smaller than the page size when deleted notes are filtered client-side.
+- `search_notes(query, entity_filter, count, start, fields)` shall perform full-text Lucene search over Note records using `/search/Note`. The `entity_filter` parameter optionally restricts results to notes linked to a specific entity type and ID (applied client-side as a comment substring match when entity_filter is set). The Lucene path requires the Bullhorn "Advanced Note Searching" feature to be enabled on the tenant.
+- `query_entities(entity="Note")` is explicitly refused with a helpful error; callers must use `get_notes_for_entity` or `search_notes`.
+
+### FR-17: Email Search
+
+The MCP shall provide a `search_emails` tool that searches `UserMessage` records in Bullhorn, representing emails tracked via the Bullhorn Email Integration:
+
+- Accepts `query` (Lucene syntax), `contact_id`, `candidate_id`, `start`, `limit`, and `fields` parameters.
+- Results are sorted by `smtpReceiveDate` descending (most recent first).
+- `UserMessage` is excluded from the automatic `isDeleted` filter (it has no `isDeleted` field); this is handled via the `_ENTITIES_WITHOUT_ISDELETED` denylist in the client.
+- Returns the standard pagination envelope (FR-19).
+
+### FR-18: Single-Record and Pipeline Read Tools
+
+Every primary entity shall have a dedicated by-ID read tool, and the job submission pipeline shall be fetchable by job ID:
+
+- `get_company(company_id, fields)` — returns a single ClientCorporation by ID. Implemented (CR25).
+- `get_contact(contact_id, fields)` — returns a single ClientContact by ID, with default fields `id,firstName,lastName,name,email,phone,occupation,status,clientCorporation,owner,dateAdded`. Implemented (CR29).
+- `get_job_submissions(job_id, status, limit, start, fields)` — returns all JobSubmission records for a given JobOrder, filtered by `jobOrder.id` via `query_with_meta`. The optional `status` parameter appends `AND status="<value>"` to the SQL WHERE clause. Returns the standard pagination envelope. **Planned (CR30).**
+
+All three tools delegate to existing `BullhornClient.get()` or `BullhornClient.query_with_meta()` with no new client-layer logic.
+
+### FR-19: Pagination Metadata Envelope
+
+All list, search, and query tools shall return responses wrapped in a standard pagination envelope instead of a bare list:
+
+```json
+{
+  "data": [ ...records... ],
+  "pagination": {
+    "total": 1234,
+    "start": 0,
+    "count": 50,
+    "has_more": true,
+    "next_start": 50
+  }
+}
+```
+
+- `has_more` is `true` when `start + count < total`, or (when `total` is null) when the returned record count equals the requested page size.
+- `next_start` is the `start` value to supply on the next call to retrieve the following page; omit the call when `has_more` is `false`.
+- **Exception for `get_notes_for_entity`:** because Bullhorn's association endpoint cannot filter deleted notes server-side, `count` in the envelope may be smaller than `next_start - start`. Always use `next_start` directly rather than computing `start + count` yourself.
+- The nine affected tools are: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `search_entities`, `query_entities`, `search_emails`, `search_notes`, and `get_notes_for_entity`.
 
 ## 7. Non-Functional Requirements
 
@@ -360,6 +426,56 @@ As a recruiter, I want to shortlist a single candidate to a job through the conn
 **US-28: Shortlist multiple candidates to the same job**
 As a recruiter, I want to shortlist multiple candidates to the same job in one operation, with clear per-candidate success/duplicate/error reporting, so that I can efficiently process a search result set.
 - **Acceptance**: Calling `shortlist_candidates(job_id=10, candidate_ids=[20, 21, 22])` returns a response with a `results` list (one entry per candidate with `status: "created"|"duplicate"|"error"`) and a `summary` dict with counts. Identity resolution runs exactly once for the batch regardless of list size.
+
+### Candidate Creation and CV Parsing
+
+**US-29: Create a candidate record**
+As an automated agent or recruiter, I want to create a new Candidate record in Bullhorn, so that discovered candidates are captured in the CRM with the correct owner and source attribution.
+- **Acceptance**: Calling `create_candidate` with required fields returns a response containing `changedEntityId` and `changeType: "INSERT"`. The `source` field is auto-stamped when omitted. The `name` field is auto-computed from `firstName`/`lastName`. Providing `occupation` sets the job title correctly.
+
+**US-30: Detect duplicate candidates before creation**
+As an automated agent, before creating a candidate, I want to check whether they already exist in Bullhorn by name or email, so that I avoid duplicate records.
+- **Acceptance**: Calling `find_duplicate_candidates` with a name or email returns matches with confidence categories (exact/likely/possible). If no match exists, returns an empty matches list.
+
+**US-31: Parse a CV and create or attach a candidate**
+As a recruiter, I want to upload or paste a CV and have the MCP extract candidate fields and optionally create or update the candidate, so that CV processing is automated.
+- **Acceptance**: `parse_cv` returns a structured field suggestion object from the base64-encoded file without creating any record. `create_candidate_from_cv` parses the CV and creates the candidate in one step. `attach_cv` first returns a preview (`committed: false`) with parsed field suggestions; on second call with `force_all=true` or `fields_to_update`, the fields are written and the file attached to the existing candidate.
+
+### Note Reading and Search
+
+**US-32: Read all notes for an entity**
+As a consultant, I want to retrieve all notes attached to a specific contact, company, candidate, or job, so that I can review recent activity without opening the Bullhorn UI.
+- **Acceptance**: `get_notes_for_entity("ClientContact", 54321)` returns a paginated envelope of notes for that contact. Pagination uses `next_start` from the response. Deleted notes are excluded client-side.
+
+**US-33: Full-text search notes**
+As a consultant, I want to search notes by keyword across all entities, optionally filtered to a specific entity, so that I can find relevant context quickly.
+- **Acceptance**: `search_notes(query="Twin.so", entity_filter="ClientContact:54321")` returns notes mentioning "Twin.so" linked to contact 54321. Without `entity_filter`, returns matching notes across all entities (requires Advanced Note Searching to be enabled on the Bullhorn tenant).
+
+### Email Search
+
+**US-34: Search tracked emails for a contact or candidate**
+As a recruiter, I want to search emails tracked in Bullhorn's Email Integration for a given contact or candidate, so that I can see recent email history without leaving the chat interface.
+- **Acceptance**: `search_emails(contact_id=54321)` returns tracked emails for that contact, sorted by receive date descending, wrapped in the standard pagination envelope.
+
+### Single-Record and Pipeline Read Tools
+
+**US-35: Get a company by ID**
+As a consultant or agent, I want to retrieve a single ClientCorporation record by its Bullhorn ID, so that I can inspect a specific company's details without constructing a search query.
+- **Acceptance**: `get_company(98765)` returns the ClientCorporation record with default fields. A non-existent or inaccessible ID returns an `ERROR:` string.
+
+**US-36: Get a contact by ID**
+As a consultant or agent, I want to retrieve a single ClientContact record by its Bullhorn ID, so that I can inspect a specific contact's details without constructing a search query.
+- **Acceptance**: `get_contact(54321)` returns the ClientContact record with fields including id, firstName, lastName, email, phone, occupation, status, clientCorporation, owner, and dateAdded. A non-existent ID or API error returns an `ERROR:` string.
+
+**US-37: Get a job's candidate submission pipeline**
+As a recruiter, I want to retrieve all candidate submissions (pipeline) for a specific job, optionally filtered by submission status, so that I can quickly review who is shortlisted without opening the Bullhorn UI.
+- **Acceptance**: `get_job_submissions(job_id=12345)` returns a paginated envelope of JobSubmission records for job 12345, each with candidate name/email, status, dateAdded, and sendingUser. `get_job_submissions(job_id=12345, status="Shortlisted")` returns only shortlisted submissions. Pagination works via `start` and `limit` parameters.
+
+### Pagination
+
+**US-38: Page through large result sets**
+As an agent or consultant, I want all list, search, and query responses to include pagination metadata, so that I can reliably retrieve all records when results exceed the page size.
+- **Acceptance**: Any list/search/query response includes `data` (the records) and `pagination` with `total`, `start`, `count`, `has_more`, and `next_start`. When `has_more` is `true`, calling again with `start=next_start` returns the next page. When `has_more` is `false`, all records have been retrieved.
 
 ## 10. Input/Output Schemas
 
@@ -710,6 +826,80 @@ If omitted, `status` defaults to `"Accepting Candidates"`, `isOpen` defaults to 
     "title": "Senior Software Engineer",
     "publicDescription": "Updated public-facing job description text",
     "customText12": 0
+  }
+}
+```
+
+### Pagination Envelope — Response (all list/search/query tools)
+
+All nine list, search, and query tools wrap their results in this envelope (FR-19 / CR28):
+
+```json
+{
+  "data": [ ...records... ],
+  "pagination": {
+    "total": 1234,
+    "start": 0,
+    "count": 50,
+    "has_more": true,
+    "next_start": 50
+  }
+}
+```
+
+When `has_more` is `true`, call again with `start=next_start`. When `total` is `null` (some Bullhorn endpoints omit it), `has_more` is inferred from whether `count == limit`.
+
+### Get ClientContact — Request
+
+```
+get_contact(contact_id=54321)
+get_contact(contact_id=54321, fields="id,firstName,lastName,email,occupation")
+```
+
+### Get ClientContact — Response
+
+```json
+{
+  "id": 54321,
+  "firstName": "Jane",
+  "lastName": "Doe",
+  "name": "Jane Doe",
+  "email": "jane.doe@acme.com",
+  "phone": "+353 1 234 5679",
+  "occupation": "VP of Engineering",
+  "status": "Active",
+  "clientCorporation": { "id": 98765, "name": "Acme Holdings Ltd" },
+  "owner": { "id": 12345, "firstName": "Maryrose", "lastName": "Lyons" },
+  "dateAdded": 1710000000000
+}
+```
+
+### Get Job Submissions — Request
+
+```
+get_job_submissions(job_id=12345)
+get_job_submissions(job_id=12345, status="Shortlisted", limit=10, start=0)
+```
+
+### Get Job Submissions — Response
+
+```json
+{
+  "data": [
+    {
+      "id": 88001,
+      "candidate": { "id": 20, "firstName": "Alice", "lastName": "Smith", "email": "alice@example.com" },
+      "status": "Shortlisted",
+      "dateAdded": 1710001000000,
+      "sendingUser": { "id": 12345, "name": "Maryrose Lyons" }
+    }
+  ],
+  "pagination": {
+    "total": 1,
+    "start": 0,
+    "count": 1,
+    "has_more": false,
+    "next_start": 1
   }
 }
 ```
