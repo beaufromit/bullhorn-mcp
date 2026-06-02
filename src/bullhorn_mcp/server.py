@@ -621,7 +621,7 @@ def get_job_submissions(
 
         where = f"jobOrder.id={job_id}"
         if status:
-            where += f' AND status="{status}"'
+            where += f" AND status='{status}'"
 
         default_fields = "id,candidate(id,firstName,lastName,email),status,dateAdded,sendingUser(id,name)"
         meta = client.query_with_meta(

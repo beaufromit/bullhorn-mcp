@@ -329,7 +329,7 @@ class TestGetJobSubmissions:
             server.get_job_submissions(job_id=12345, status="Shortlisted")
 
         call_args = mock_client.query_with_meta.call_args
-        assert call_args.kwargs["where"] == 'jobOrder.id=12345 AND status="Shortlisted"'
+        assert call_args.kwargs["where"] == "jobOrder.id=12345 AND status='Shortlisted'"
 
     def test_get_job_submissions_pagination(self, mock_client):
         """limit and start forwarded as count and start; next_start populated when has_more."""
