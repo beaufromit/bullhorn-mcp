@@ -351,7 +351,7 @@ class TestGetJobSubmissions:
 
         data = json.loads(result)
         assert data["pagination"]["has_more"] is True
-        assert data["pagination"]["next_start"] is not None
+        assert data["pagination"]["next_start"] == 20
 
     def test_get_job_submissions_custom_fields(self, mock_client):
         """Caller-supplied fields override the default field string."""
