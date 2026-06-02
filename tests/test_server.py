@@ -299,6 +299,102 @@ class TestGetContact:
         assert result.startswith("ERROR:")
 
 
+class TestGetJobSubmissions:
+    """Tests for get_job_submissions tool."""
+
+    def test_get_job_submissions_basic(self, mock_client):
+        """query_with_meta called with correct args; response has data+pagination."""
+        sample = {"id": 1, "status": "Shortlisted", "candidate": {"id": 10, "firstName": "Jane"}}
+        mock_client.query.return_value = [sample]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_job_submissions(job_id=12345)
+
+        data = json.loads(result)
+        assert "data" in data
+        assert "pagination" in data
+        mock_client.query_with_meta.assert_called_once_with(
+            entity="JobSubmission",
+            where="jobOrder.id=12345",
+            fields="id,candidate(id,firstName,lastName,email),status,dateAdded,sendingUser(id,name)",
+            count=20,
+            start=0,
+        )
+
+    def test_get_job_submissions_status_filter(self, mock_client):
+        """status param appended to WHERE clause with quoted value."""
+        mock_client.query.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.get_job_submissions(job_id=12345, status="Shortlisted")
+
+        call_args = mock_client.query_with_meta.call_args
+        assert call_args.kwargs["where"] == 'jobOrder.id=12345 AND status="Shortlisted"'
+
+    def test_get_job_submissions_pagination(self, mock_client):
+        """limit and start forwarded as count and start; next_start populated when has_more."""
+        sample = {"id": 1, "status": "Shortlisted"}
+        mock_client.query_with_meta.side_effect = None
+        mock_client.query_with_meta.return_value = {
+            "data": [sample] * 10,
+            "total": 100,
+            "start": 10,
+            "count": 10,
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_job_submissions(job_id=12345, limit=10, start=10)
+
+        call_args = mock_client.query_with_meta.call_args
+        assert call_args.kwargs["count"] == 10
+        assert call_args.kwargs["start"] == 10
+
+        data = json.loads(result)
+        assert data["pagination"]["has_more"] is True
+        assert data["pagination"]["next_start"] is not None
+
+    def test_get_job_submissions_custom_fields(self, mock_client):
+        """Caller-supplied fields override the default field string."""
+        mock_client.query.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.get_job_submissions(job_id=12345, fields="id,status")
+
+        call_args = mock_client.query_with_meta.call_args
+        assert call_args.kwargs["fields"] == "id,status"
+
+    def test_get_job_submissions_empty(self, mock_client):
+        """Empty results returned with has_more=false and next_start=null."""
+        mock_client.query_with_meta.side_effect = None
+        mock_client.query_with_meta.return_value = {"data": [], "total": 0, "start": 0, "count": 0}
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_job_submissions(job_id=12345)
+
+        data = json.loads(result)
+        assert data["data"] == []
+        assert data["pagination"]["has_more"] is False
+        assert data["pagination"]["next_start"] is None
+
+    def test_get_job_submissions_api_error(self, mock_client):
+        """BullhornAPIError returns ERROR prefix."""
+        mock_client.query.side_effect = BullhornAPIError("not found")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_job_submissions(job_id=12345)
+
+        assert result.startswith("ERROR:")
+
+    def test_get_job_submissions_auth_error(self, mock_client):
+        """AuthenticationError returns ERROR prefix."""
+        mock_client.query.side_effect = AuthenticationError("session expired")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_job_submissions(job_id=12345)
+
+        assert result.startswith("ERROR:")
+
+
 class TestSearchEntities:
     """Tests for search_entities tool."""
 

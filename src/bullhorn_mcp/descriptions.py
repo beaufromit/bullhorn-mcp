@@ -65,6 +65,7 @@ TOOL_ENTITY_MAP: dict[str, list[str]] = {
     "create_candidate_from_cv": ["Candidate"],
     "attach_cv": ["Candidate"],
     "bulk_import": ["ClientCorporation", "ClientContact"],
+    "get_job_submissions": ["JobSubmission"],
     "shortlist_candidate": ["JobSubmission"],
     "shortlist_candidates": ["JobSubmission"],
     "search_emails": ["UserMessage"],

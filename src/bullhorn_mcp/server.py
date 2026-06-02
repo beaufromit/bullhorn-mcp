@@ -586,6 +586,59 @@ def get_contact(contact_id: int, fields: str | None = None) -> str:
 
 
 @mcp.tool()
+def get_job_submissions(
+    job_id: int,
+    status: str | None = None,
+    limit: int = 20,
+    start: int = 0,
+    fields: str | None = None,
+) -> str:
+    """Get all candidate submissions (pipeline) for a specific job.
+
+    Args:
+        job_id: The JobOrder ID to fetch submissions for
+        status: Filter by submission status (e.g., "Shortlisted", "Interviewing",
+                "Offered", "Placed"). Omit to return all statuses.
+        limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset (default 0). Use with limit to page through results.
+        fields: Comma-separated fields to return
+                (default: id,candidate(id,firstName,lastName,email),
+                 status,dateAdded,sendingUser(id,name))
+
+    Returns:
+        JSON object with ``data`` (array of job submissions) and ``pagination``
+        (``total``, ``start``, ``count``, ``has_more``, ``next_start``).
+        When ``has_more`` is true, call again with ``start=<next_start>``
+        to fetch the next page.
+
+    Examples:
+        - get_job_submissions(job_id=12345) — All submissions for job 12345
+        - get_job_submissions(job_id=12345, status="Shortlisted") — Shortlisted only
+        - get_job_submissions(job_id=12345, limit=50, start=0) — First 50 results
+    """
+    try:
+        client = get_client()
+
+        where = f"jobOrder.id={job_id}"
+        if status:
+            where += f' AND status="{status}"'
+
+        default_fields = "id,candidate(id,firstName,lastName,email),status,dateAdded,sendingUser(id,name)"
+        meta = client.query_with_meta(
+            entity="JobSubmission",
+            where=where,
+            fields=fields or default_fields,
+            count=limit,
+            start=start,
+        )
+
+        return format_response(_paginate_envelope(meta, start, limit))
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
 def search_entities(
     entity: str,
     query: str,

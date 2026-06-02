@@ -4,6 +4,8 @@
 
 **Current baseline:** All sprints through CR28 are implemented and tested. **559 tests passing, tagged v0.0.40.** Sprints 30 (CR29) and 31 (CR30) are PLANNED — not yet implemented.
 
+**Replan validation (2026-06-02):** Re-reconciled PRD, user stories, and source code. 570 tests passing (v0.0.42). All 32 tools present and matching the plan; no skips/TODOs/FIXMEs. Full FR↔US↔tool coverage confirmed.
+
 **PRD reconciliation (June 2026):** PRD.md has been updated to cover all post-CR18 tool drift that previously had no documented requirement. The PRD now contains **19 functional requirements (FR-1 through FR-19)** and user stories **US-1 through US-38** (plus US-7A and US-15A). Summary of new additions:
 - **FR-15** (CR19) — Candidate creation and CV parsing (`create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`)
 - **FR-16** (CR21/CR23) — Note reading and full-text search (`get_notes_for_entity`, `search_notes`)
@@ -60,7 +62,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | CR25 | **COMPLETE** | Bug fixes from Pinergy stress test: (1) `get_company` tool for ClientCorporation ID lookup; (2) `_ENTITIES_WITHOUT_ISDELETED` denylist {ClientCorporation, UserMessage} in client.py — centralises isDeleted auto-clause handling, removes CR24 per-call opt-out in search_emails; (3) drop `clientCorporation(id,name)` from `_NOTE_DEFAULT_FIELDS` — Bullhorn now rejects this field on the /entity/{Entity}/{id}/notes association endpoint, breaking all `get_notes_for_entity` calls; (4a) ship `BULLHORN_CANDIDATE_REQUIRED` default list in .env.example (occupation, companyName, email, source); (4b) `add_note` validates action against Note picklist cached at startup via `_load_valid_note_actions()`; (4c) auto-stamp `source=get_mcp_source()` on candidate creation — reads `BULLHORN_MCP_SOURCE` env var, defaults to "Claude" — 519 tests passing, tagged v0.0.35. Review cycle: C1 fixed `create_candidate_from_cv` source-stamping write-path entirely untested — added `test_source_auto_stamped_when_not_provided` and `test_user_supplied_source_wins_in_cv_flow` to `TestCreateCandidateFromCv`; M1 fixed `_load_valid_note_actions` internal logic (metadata loading, option extraction, caching) entirely untested — added four direct unit tests inside `TestAddNote` — 525 tests passing, tagged v0.0.36. |
 | CR28 | **COMPLETE** | Surface pagination metadata on list/search/query tools: 9 user-facing tools now return `{"data": [...], "pagination": {"total", "start", "count", "has_more", "next_start"}}` instead of a bare list. Three new `*_with_meta` client methods (`search_with_meta`, `query_with_meta`, `get_association_with_meta`) return the full Bullhorn envelope; existing bare-list methods delegate to them. New `_paginate_envelope(meta, start, count)` server helper builds the user-facing envelope with explicit `has_more` and `next_start`. `search_emails` gained `start=0` param. **559 tests passing, tagged v0.0.40.** Review cycle: M1 fixed — `get_notes_for_entity` must use `raw_page_count` (pre-isDeleted-filter) for `has_more` and `next_start` since Bullhorn's association endpoint returns all notes including deleted ones; using `len(cleaned_notes)` for offset arithmetic causes an infinite-loop `next_start=start` when all notes on a page are deleted. M2 fixed — `_wrap_with_meta` test fixture did `raise se` for non-BaseException side_effects (callables); changed to `return se(*args, **kwargs)`. Key design constraint: `get_notes_for_entity` is the only tool where `pagination.count` may differ from `next_start - start` because server-side isDeleted filtering is impossible on Bullhorn's /entity/{Entity}/{id}/notes association endpoint. Docstring explicitly warns callers to use `next_start` directly. |
 | Sprint 30 | **COMPLETE** | CR29: `get_contact` — 563 tests passing, tagged v0.0.41. Review cycle: no critical issues, no moderate issues. One minor (m1): PRD.md FR-18 still labelled `get_contact` as "Planned (CR29)" after implementation — documentation only, fixed in post-review commit. |
-| Sprint 31 | **PLANNED** | CR30: `get_job_submissions` — JobSubmission pipeline for a job, paginated envelope via `query_with_meta`. Target: **~570 tests, tag v0.0.42.** See Sprint 31 section below. |
+| Sprint 31 | **COMPLETE** | CR30: `get_job_submissions` — 570 tests passing, tagged v0.0.42. |
 
 ### Sprint 15 post-tag regression note
 
@@ -84,7 +86,7 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note(commenting_person_id)`, `_request_multipart`, `parse_resume_file`, `parse_resume_text`, `attach_file`; `_ENTITY_FIELD` dispatch dict in `add_note` maps each of 7 entity types to its Note association field name
 - `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant extended at module load with env-defined JobOrder aliases via `joborder_config.get_joborder_aliases()`; `FIELD_ALIASES["JobSubmission"] = {}` reserved slot.
-- `src/bullhorn_mcp/server.py` — MCP server with **31 implemented tools** (32 after Sprint 31): `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `get_company`, `get_contact`, `search_entities`, `query_entities`, `search_emails`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`, `get_notes_for_entity`, `search_notes`. **Planned Sprint 31:** `get_job_submissions`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()`, `_paginate_envelope()` helpers; `_NOTE_TARGET_ENTITIES` set; `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()`, `_strip_cc_telemetry()` private helpers; `_NOTE_DEFAULT_FIELDS`, `_CC_TAG_RE`, `_valid_note_actions` module-level constants/state.
+- `src/bullhorn_mcp/server.py` — MCP server with **32 implemented tools**: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `get_company`, `get_contact`, `get_job_submissions`, `search_entities`, `query_entities`, `search_emails`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`, `get_notes_for_entity`, `search_notes`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()`, `_paginate_envelope()` helpers; `_NOTE_TARGET_ENTITIES` set; `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()`, `_strip_cc_telemetry()` private helpers; `_NOTE_DEFAULT_FIELDS`, `_CC_TAG_RE`, `_valid_note_actions` module-level constants/state.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
@@ -108,7 +110,7 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_joborder_config.py` — 10 tests (env config loaders for aliases/required/defaults)
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
-- **Total: 563 tests, all passing (v0.0.41)**. Sprint 31 adds ~7 tests (→ ~570).
+- **Total: 570 tests, all passing (v0.0.42)**.
 
 ---
 
@@ -2498,7 +2500,7 @@ After implementation:
 
 ## Sprint 31 — CR30: `get_job_submissions` tool
 
-**Status: PLANNED / INCOMPLETE**
+**Status: COMPLETE**
 **User stories:** US-37, FR-18
 **Target tag:** v0.0.42
 **Expected test delta:** ~563 → ~570 (+7)
