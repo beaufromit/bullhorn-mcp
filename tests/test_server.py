@@ -6275,3 +6275,80 @@ class TestQueryEntitiesNoteGuard:
         data = json.loads(result)
         assert isinstance(data["data"], list)
         mock_client.query_with_meta.assert_called_once()
+
+
+class TestUpdateRecordCandidate:
+    """Tests for update_record with Candidate entity (CR31)."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        return meta
+
+    def test_update_candidate_basic(self, mock_client, mock_metadata):
+        """update_record calls client.update with Candidate entity and resolved fields."""
+        mock_client.update.return_value = {
+            "changedEntityId": 11234,
+            "changeType": "UPDATE",
+            "data": {"id": 11234, "occupation": "Head of Engineering"},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_record("Candidate", 11234, {"occupation": "Head of Engineering"})
+
+        mock_client.update.assert_called_once_with("Candidate", 11234, {"occupation": "Head of Engineering"})
+        data = json.loads(result)
+        assert data["changedEntityId"] == 11234
+        assert data["changeType"] == "UPDATE"
+
+    def test_update_candidate_strips_title(self, mock_client, mock_metadata):
+        """update_record strips 'title' from Candidate payload and returns warnings."""
+        captured = {}
+
+        def capture_update(entity, entity_id, fields):
+            captured["fields"] = dict(fields)
+            return {
+                "changedEntityId": 11234,
+                "changeType": "UPDATE",
+                "data": {"id": 11234, "occupation": "CTO"},
+            }
+
+        mock_client.update.side_effect = capture_update
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_record("Candidate", 11234, {"title": "Mr", "occupation": "CTO"})
+
+        data = json.loads(result)
+        assert "title" not in captured["fields"], "title must be stripped from Candidate payload"
+        assert captured["fields"].get("occupation") == "CTO"
+        assert "warnings" in data
+        assert any("title" in w for w in data["warnings"])
+
+    def test_update_candidate_name_recomputed(self, mock_client, mock_metadata):
+        """update_record fetches missing name part and recomputes 'name' when only firstName updated."""
+        mock_client.get.return_value = {"firstName": "Old", "lastName": "Smith"}
+        mock_client.update.return_value = {
+            "changedEntityId": 11234,
+            "changeType": "UPDATE",
+            "data": {"id": 11234},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.update_record("Candidate", 11234, {"firstName": "John"})
+
+        mock_client.get.assert_called_once_with("Candidate", 11234, fields="firstName,lastName")
+        payload = mock_client.update.call_args[0][2]
+        assert payload["name"] == "John Smith"
+
+    def test_update_candidate_api_error(self, mock_client, mock_metadata):
+        """update_record returns ERROR prefix when client.update raises BullhornAPIError."""
+        mock_client.update.side_effect = BullhornAPIError("candidate update failed")
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.update_record("Candidate", 11234, {"occupation": "Engineer"})
+
+        assert result.startswith("ERROR:")

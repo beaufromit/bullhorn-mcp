@@ -6,14 +6,18 @@
 
 **Replan validation (2026-06-02):** Re-reconciled PRD, user stories, and source code. 570 tests passing (v0.0.42). All 32 tools present and matching the plan; no skips/TODOs/FIXMEs. Full FR↔US↔tool coverage confirmed.
 
-**PRD reconciliation (June 2026):** PRD.md has been updated to cover all post-CR18 tool drift that previously had no documented requirement. The PRD now contains **19 functional requirements (FR-1 through FR-19)** and user stories **US-1 through US-38** (plus US-7A and US-15A). Summary of new additions:
+**Replan validation (2026-06-03):** Sprint 31 (CR30) complete. 571 tests passing. Two new CRs (CR31 and CR32) reviewed. PRD.md updated to add **FR-20** (Candidate updates via `update_record`) and **FR-21** (Tearsheet management), plus user stories **US-39 through US-44**. Sprint 32 (CR31) and Sprint 33 (CR32) added to this plan as PLANNED.
+
+**PRD reconciliation (June 2026):** PRD.md has been updated to cover all post-CR18 tool drift that previously had no documented requirement. The PRD now contains **21 functional requirements (FR-1 through FR-21)** and user stories **US-1 through US-44** (plus US-7A and US-15A). Summary of new additions:
 - **FR-15** (CR19) — Candidate creation and CV parsing (`create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`)
 - **FR-16** (CR21/CR23) — Note reading and full-text search (`get_notes_for_entity`, `search_notes`)
 - **FR-17** (CR24) — Email/UserMessage search (`search_emails`)
-- **FR-18** (CR25 + CR29 + CR30 planned) — Single-record and pipeline read tools (`get_company` implemented CR25; `get_contact` implemented CR29; `get_job_submissions` planned Sprint 31)
+- **FR-18** (CR25 + CR29 + CR30) — Single-record and pipeline read tools (`get_company`, `get_contact`, `get_job_submissions` — all implemented)
 - **FR-19** (CR28) — Pagination metadata envelope on all list/search/query tools
 - **FR-7 amendment** (CR20) — `add_note` extended to 7 entity types with `commenting_person_id`
 - **Non-Goal amendment** — The candidate-creation Non-Goal has been updated; candidate creation is now in scope (FR-15)
+- **FR-20** (CR31) — `update_record` Candidate support (docstring + tests only; implementation already present)
+- **FR-21** (CR32) — Tearsheet (Hotlist) management (5 new tools, 2 new client methods)
 
 For per-sprint technical detail, see the individual sprint sections below.
 
@@ -63,6 +67,8 @@ For per-sprint technical detail, see the individual sprint sections below.
 | CR28 | **COMPLETE** | Surface pagination metadata on list/search/query tools: 9 user-facing tools now return `{"data": [...], "pagination": {"total", "start", "count", "has_more", "next_start"}}` instead of a bare list. Three new `*_with_meta` client methods (`search_with_meta`, `query_with_meta`, `get_association_with_meta`) return the full Bullhorn envelope; existing bare-list methods delegate to them. New `_paginate_envelope(meta, start, count)` server helper builds the user-facing envelope with explicit `has_more` and `next_start`. `search_emails` gained `start=0` param. **559 tests passing, tagged v0.0.40.** Review cycle: M1 fixed — `get_notes_for_entity` must use `raw_page_count` (pre-isDeleted-filter) for `has_more` and `next_start` since Bullhorn's association endpoint returns all notes including deleted ones; using `len(cleaned_notes)` for offset arithmetic causes an infinite-loop `next_start=start` when all notes on a page are deleted. M2 fixed — `_wrap_with_meta` test fixture did `raise se` for non-BaseException side_effects (callables); changed to `return se(*args, **kwargs)`. Key design constraint: `get_notes_for_entity` is the only tool where `pagination.count` may differ from `next_start - start` because server-side isDeleted filtering is impossible on Bullhorn's /entity/{Entity}/{id}/notes association endpoint. Docstring explicitly warns callers to use `next_start` directly. |
 | Sprint 30 | **COMPLETE** | CR29: `get_contact` — 563 tests passing, tagged v0.0.41. Review cycle: no critical issues, no moderate issues. One minor (m1): PRD.md FR-18 still labelled `get_contact` as "Planned (CR29)" after implementation — documentation only, fixed in post-review commit. |
 | Sprint 31 | **COMPLETE** | CR30: `get_job_submissions` — 570 tests passing, tagged v0.0.42. Review cycle: no critical issues. One moderate (M1): `test_get_job_submissions_pagination` asserted `next_start is not None` instead of the exact value `20` — fixed to `== 20` to match the established pattern for all other pagination tests. |
+| Sprint 32 | **COMPLETE** | CR31: Extend `update_record` docstring to advertise Candidate support + 4 new tests — 575 tests passing. |
+| Sprint 33 | **PLANNED** | CR32: Tearsheet (Hotlist) management — 5 new tools, 2 new client methods, 20 new tests. |
 
 ### Sprint 15 post-tag regression note
 
@@ -2607,3 +2613,171 @@ After implementation:
 - **M1: `test_get_job_submissions_pagination` used `is not None` instead of exact value** — The assertion `assert pagination["next_start"] is not None` did not verify the computed value; the correct assertion is `== 20` (i.e. `start + limit` when `has_more` is true). Fixed to match the established pattern for all other pagination tests in the file.
 
 570 tests passing, tagged v0.0.42.
+
+---
+
+## Sprint 32: CR31 — Extend update_record to Support Candidate — COMPLETE
+
+**Change request:** CR31.md
+**User stories:** US-39
+**Dependency:** Sprint 31 complete
+**Risk:** Near zero — all logic paths already implemented; docstring and tests only.
+
+**What was delivered:** Updated `update_record` docstring in `server.py` to list `"Candidate"` as a valid entity type alongside `"ClientContact"` and `"ClientCorporation"`. Added Candidate example and noted `title`-stripping behaviour. Added `TestUpdateRecordCandidate` in `tests/test_server.py` with 4 tests: basic update call-through, `title` stripping with warnings, name recomputation via GET when only `firstName` supplied, and `BullhornAPIError` handling. 575 tests passing.
+
+### Background
+
+`update_record` already supports Candidate at the code level:
+- `_strip_contact_title` strips `title` from Candidate payloads (entity check at line 43 of server.py).
+- Name recomputation fires for `entity in ("Candidate", "ClientContact")` (line 1207).
+- `client.update()` and `get_metadata().resolve_fields()` are generic.
+
+The only gap is the docstring — it still lists only `"ClientContact"` and `"ClientCorporation"` as valid entity values, which prevents LLMs from using the tool for Candidate records.
+
+### Tasks
+
+#### T32.1 — Update `update_record` docstring
+**File:** `src/bullhorn_mcp/server.py`
+
+Change:
+- `entity: "ClientContact" or "ClientCorporation"` → `entity: "ClientContact", "ClientCorporation", or "Candidate"`
+- Add a Candidate example: `- update_record("Candidate", 11234, {"occupation": "Head of Engineering", "dateAvailable": 1735689600000})`
+- Add a note mirroring the existing ClientContact note: `title` is stripped from Candidate payloads (Candidate has no `title` field; use `occupation` for job title).
+
+No logic changes.
+
+#### T32.2 — Add `TestUpdateRecordCandidate` tests
+**File:** `tests/test_server.py`
+
+New class `TestUpdateRecordCandidate` with 4 tests:
+
+- `test_update_candidate_basic` — calls `update_record("Candidate", 11234, {"occupation": "Head of Engineering"})`, verifies `client.update` called with `"Candidate"`, `11234`, and resolved fields.
+- `test_update_candidate_strips_title` — passes `{"title": "Mr", "occupation": "CTO"}`; verifies `title` stripped from payload and response contains `warnings`.
+- `test_update_candidate_name_recomputed` — passes `{"firstName": "John", "lastName": "Smith"}`; verifies `client.get` fetches current name fields and `name` is recomputed in the update payload.
+- `test_update_candidate_api_error` — `client.update` raises `BullhornAPIError`; response contains `"ERROR:"`.
+
+**Expected test delta:** +4 tests (571 → 575).
+
+### Verification
+
+1. `.venv/bin/pytest` — 575 tests pass, 0 failures.
+2. `grep -A5 "def update_record" src/bullhorn_mcp/server.py` — docstring includes `"Candidate"`.
+3. Tag v0.0.43 after review cycle passes.
+
+---
+
+## Sprint 33: CR32 — Tearsheet (Hotlist) Management — PLANNED
+
+**Change request:** CR32.md
+**User stories:** US-40, US-41, US-42, US-43, US-44
+**Dependency:** Sprint 32 complete (clean baseline; Sprint 32 is independent but should land first for test numbering)
+**Risk:** Medium — net-new client methods (`add_association` uses PUT, `remove_association` uses DELETE). Verify Bullhorn returns 200 (not 204) on association DELETE before tagging; adjust `_request()` success codes if needed.
+
+### Tasks
+
+#### T33.1 — Add `Tearsheet` to `DEFAULT_FIELDS` in `client.py`
+**File:** `src/bullhorn_mcp/client.py`
+
+Add:
+```python
+"Tearsheet": "id,name,description,owner,dateAdded",
+```
+
+#### T33.2 — Add `add_association` and `remove_association` methods to `BullhornClient`
+**File:** `src/bullhorn_mcp/client.py`
+
+Add two new methods after `get_association`:
+
+```python
+def add_association(
+    self,
+    entity: str,
+    entity_id: int,
+    association: str,
+    ids: list[int],
+) -> dict:
+    id_str = ",".join(str(i) for i in ids)
+    return self._request("PUT", f"/entity/{entity}/{entity_id}/{association}/{id_str}")
+
+def remove_association(
+    self,
+    entity: str,
+    entity_id: int,
+    association: str,
+    ids: list[int],
+) -> dict:
+    id_str = ",".join(str(i) for i in ids)
+    return self._request("DELETE", f"/entity/{entity}/{entity_id}/{association}/{id_str}")
+```
+
+**Risk note:** `_request()` currently accepts 200 and 201 as success codes. If Bullhorn returns 204 for association DELETE, these calls will raise `BullhornAPIError`. Verify during integration testing and add 204 to `_request()` success codes if needed.
+
+**Unit tests** (`tests/test_client.py`, new class `TestAssociationMethods`, 6 tests):
+- `test_add_association_single` — verifies PUT to `/entity/Tearsheet/55/candidates/101`
+- `test_add_association_multiple` — verifies PUT with comma-joined IDs `/entity/Tearsheet/55/candidates/101,102,103`
+- `test_remove_association_single` — verifies DELETE to `/entity/Tearsheet/55/candidates/101`
+- `test_remove_association_multiple` — verifies DELETE with comma-joined IDs
+- `test_add_association_api_error` — 400 response raises `BullhornAPIError`
+- `test_remove_association_api_error` — 400 response raises `BullhornAPIError`
+
+#### T33.3 — Add five tearsheet tools to `server.py`
+**File:** `src/bullhorn_mcp/server.py`
+
+Add the following tools after `get_company` (placement: alongside other `get_`/`list_` tools, before `search_entities`):
+
+**`list_tearsheets`** — `search_with_meta("Tearsheet", query or "", fields, count=limit, start=start, sort="-dateAdded")` → `_paginate_envelope`. Accepts `query`, `limit=20`, `start=0`, `fields`.
+
+**`get_tearsheet`** — Two sequential calls: `client.get("Tearsheet", tearsheet_id)` for metadata; `client.get_association_with_meta("Tearsheet", tearsheet_id, "candidates", fields, count=candidate_limit, start=0)` for members. Merges into `tearsheet["candidates"] = _paginate_envelope(...)`. Accepts `tearsheet_id`, `candidate_limit=200`, `candidate_fields`.
+
+**`create_tearsheet`** — Builds `{"name": name}`, adds `description` if provided, resolves owner from identity (same pattern as `create_company`) or uses explicit `owner: int`. Calls `client.create("Tearsheet", payload)`. Returns `format_response(result)`. Accepts `name`, `description=None`, `owner: int | None = None`.
+
+**`add_to_tearsheet`** — Calls `client.add_association("Tearsheet", tearsheet_id, "candidates", candidate_ids)`, returns `{"tearsheet_id", "added", "count"}`. Accepts `tearsheet_id: int`, `candidate_ids: list[int]`.
+
+**`remove_from_tearsheet`** — Calls `client.remove_association("Tearsheet", tearsheet_id, "candidates", candidate_ids)`, returns `{"tearsheet_id", "removed", "count"}`. Accepts `tearsheet_id: int`, `candidate_ids: list[int]`.
+
+All tools catch `(AuthenticationError, BullhornAPIError)` and return `f"ERROR: {e}"`.
+
+**Unit tests** (`tests/test_server.py`, new class `TestTearsheetTools`, 14 tests):
+- `test_list_tearsheets_default` — `search_with_meta` called with `entity="Tearsheet"`, empty query; response has `data` and `pagination` keys.
+- `test_list_tearsheets_with_query` — query string forwarded correctly.
+- `test_list_tearsheets_pagination` — `limit` and `start` forwarded; `next_start` populated in response.
+- `test_get_tearsheet_returns_metadata_and_members` — `client.get` and `get_association_with_meta` both called; response contains `candidates.data`.
+- `test_get_tearsheet_custom_candidate_fields` — `candidate_fields` forwarded to `get_association_with_meta`.
+- `test_create_tearsheet_basic` — `client.create` called with `name` and resolved owner.
+- `test_create_tearsheet_explicit_owner` — explicit `owner` int used; identity resolution not called.
+- `test_create_tearsheet_identity_resolution_fails` — `resolve_owner` returns None; response contains `identity_resolution_failed`.
+- `test_create_tearsheet_with_description` — description included in payload.
+- `test_add_to_tearsheet_single` — `add_association` called with correct args; response contains `added` list and `count`.
+- `test_add_to_tearsheet_multiple` — multiple IDs forwarded as a list.
+- `test_remove_from_tearsheet_single` — `remove_association` called; response contains `removed` list.
+- `test_remove_from_tearsheet_multiple`
+- `test_tearsheet_tool_api_error` — `BullhornAPIError` surfaces as `"ERROR:"` (covers one representative tool).
+
+#### T33.4 — Register `Tearsheet` in `descriptions.py`
+**File:** `src/bullhorn_mcp/descriptions.py`
+
+Add `"Tearsheet"` to `SUPPORTED_ENTITIES`.
+
+Add to `TOOL_ENTITY_MAP`:
+```python
+"list_tearsheets": ["Tearsheet"],
+"get_tearsheet": ["Tearsheet"],
+"create_tearsheet": ["Tearsheet"],
+"add_to_tearsheet": ["Tearsheet"],
+"remove_from_tearsheet": ["Tearsheet"],
+```
+
+**Expected test delta:** +20 tests (+6 client, +14 server). Total: 575 → 595.
+
+### Integration testing notes
+
+- Verify Bullhorn returns 200 (not 204) for `DELETE /entity/Tearsheet/{id}/candidates/{ids}`. If 204 is returned, add it to `_request()`'s success-code check.
+- Verify `Tearsheet` has an `isDeleted` field. If `list_tearsheets` returns a Bullhorn API error about an unknown field, add `"Tearsheet"` to `_ENTITIES_WITHOUT_ISDELETED` in `client.py` (same fix applied for `ClientCorporation` and `UserMessage`).
+
+### Verification
+
+After implementation:
+1. `.venv/bin/pytest` — all 595 tests pass.
+2. `grep -n "list_tearsheets\|get_tearsheet\|create_tearsheet\|add_to_tearsheet\|remove_from_tearsheet" src/bullhorn_mcp/server.py` — all 5 tools present.
+3. `grep -n "Tearsheet" src/bullhorn_mcp/descriptions.py` — in `SUPPORTED_ENTITIES` and `TOOL_ENTITY_MAP`.
+4. Tag v0.0.44 after review cycle passes.

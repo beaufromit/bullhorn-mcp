@@ -1172,14 +1172,16 @@ def update_job(job_id: int, fields: dict) -> str:
 
 @mcp.tool()
 def update_record(entity: str, entity_id: int, fields: dict) -> str:
-    """Update fields on an existing ClientCorporation or ClientContact record.
+    """Update fields on an existing ClientCorporation, ClientContact, or Candidate record.
 
     Args:
-        entity: "ClientContact" or "ClientCorporation"
+        entity: "ClientContact", "ClientCorporation", or "Candidate"
         entity_id: Bullhorn ID of the record to update
         fields: Dictionary of field names (or display labels) and new values.
                 Field labels are resolved to API names automatically.
                 Company reassignment (changing clientCorporation on a ClientContact) is not supported.
+                For ClientContact and Candidate: 'title' is stripped with a warning — use
+                'occupation' for job title. Candidate has no 'title' field at all.
 
     Returns:
         JSON object with changedEntityId, changeType, and full updated record.
@@ -1188,6 +1190,7 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
         - update_record("ClientContact", 54321, {"occupation": "CTO"})
         - update_record("ClientCorporation", 98765, {"status": "Active Account"})
         - update_record("ClientContact", 54321, {"Consultant": {"id": 99}})
+        - update_record("Candidate", 11234, {"occupation": "Head of Engineering", "dateAvailable": 1735689600000})
     """
     try:
         # CR10 owner stamping intentionally does not apply here — update_record modifies existing records only.

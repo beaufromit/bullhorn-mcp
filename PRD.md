@@ -4,7 +4,7 @@
 
 The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, field metadata resolution, hosted HTTP access, authenticated-user owner stamping, first-class JobOrder create/update workflows, and JobSubmission (shortlist) write tools.
 
-Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), and a paginated-envelope response format across all list/search/query tools (FR-19).
+Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), and tearsheet (hotlist) management tools (FR-21).
 
 The MCP serves two classes of consumer:
 
@@ -232,6 +232,26 @@ All list, search, and query tools shall return responses wrapped in a standard p
 - `next_start` is the `start` value to supply on the next call to retrieve the following page; omit the call when `has_more` is `false`.
 - **Exception for `get_notes_for_entity`:** because Bullhorn's association endpoint cannot filter deleted notes server-side, `count` in the envelope may be smaller than `next_start - start`. Always use `next_start` directly rather than computing `start + count` yourself.
 - The nine affected tools are: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `search_entities`, `query_entities`, `search_emails`, `search_notes`, and `get_notes_for_entity`.
+
+### FR-20: Candidate Record Updates via update_record
+
+The `update_record` tool shall support `"Candidate"` as a valid entity type, in addition to the existing `"ClientContact"` and `"ClientCorporation"` support documented in FR-6. The implementation already applies the correct field-stripping and name-recomputation logic for Candidate payloads; this requirement formalises the advertised interface.
+
+- The tool docstring shall list `"Candidate"` as a valid value for the `entity` parameter, alongside an example.
+- The `title` field is stripped from Candidate payloads with a warning (Candidate has no `title` field; `occupation` is correct for job title).
+- `name` is auto-recomputed from `firstName`/`lastName` on Candidate updates, consistent with the ClientContact behaviour.
+
+### FR-21: Tearsheet (Hotlist) Management
+
+The MCP shall provide tools for managing Tearsheet (Hotlist) records in Bullhorn. Tearsheets are named candidate lists consultants build for client briefs and passive talent pools.
+
+- `list_tearsheets(query, limit, start, fields)` shall search and list Tearsheet records using Lucene query syntax, returning the standard pagination envelope (FR-19).
+- `get_tearsheet(tearsheet_id, candidate_limit, candidate_fields)` shall return a single Tearsheet record by ID together with its candidate members, fetched via the Bullhorn association endpoint. The candidate list is wrapped in the standard pagination envelope.
+- `create_tearsheet(name, description, owner)` shall create a new Tearsheet entity. If `owner` is omitted, the authenticated user is resolved automatically via the identity-resolution flow (FR-12). If identity resolution fails and no explicit owner is provided, the tool returns an `identity_resolution_failed` error and does not create the record.
+- `add_to_tearsheet(tearsheet_id, candidate_ids)` shall add one or more Candidate records to a Tearsheet using the Bullhorn association `PUT` endpoint (`/entity/Tearsheet/{id}/candidates/{ids}`). Multiple candidate IDs resolve to a single API call.
+- `remove_from_tearsheet(tearsheet_id, candidate_ids)` shall remove one or more Candidate records from a Tearsheet using the Bullhorn association `DELETE` endpoint. Multiple candidate IDs resolve to a single API call.
+- `BullhornClient` shall gain two new methods — `add_association` and `remove_association` — for generic TO_MANY association writes (PUT) and deletes (DELETE) on any entity/association pair.
+- `Tearsheet` shall be registered in `descriptions.py` (`SUPPORTED_ENTITIES` and `TOOL_ENTITY_MAP`) so the startup field-reference enrichment covers all five tearsheet tools.
 
 ## 7. Non-Functional Requirements
 
@@ -470,6 +490,34 @@ As a consultant or agent, I want to retrieve a single ClientContact record by it
 **US-37: Get a job's candidate submission pipeline**
 As a recruiter, I want to retrieve all candidate submissions (pipeline) for a specific job, optionally filtered by submission status, so that I can quickly review who is shortlisted without opening the Bullhorn UI.
 - **Acceptance**: `get_job_submissions(job_id=12345)` returns a paginated envelope of JobSubmission records for job 12345, each with candidate name/email, status, dateAdded, and sendingUser. `get_job_submissions(job_id=12345, status="Shortlisted")` returns only shortlisted submissions. Pagination works via `start` and `limit` parameters.
+
+### Candidate Updates
+
+**US-39: Update a Candidate record**
+As a consultant or automated agent, I want to update fields on an existing Candidate record through the `update_record` tool, so that I can correct or enrich candidate data without opening the Bullhorn UI.
+- **Acceptance**: `update_record("Candidate", 11234, {"occupation": "Head of Engineering"})` returns the full updated record. Providing `title` strips it with a warning (Candidate has no `title` field). Updating `firstName` or `lastName` recomputes and saves `name` automatically.
+
+### Tearsheet Management
+
+**US-40: List tearsheets**
+As a consultant, I want to list tearsheets from Bullhorn with optional filtering, so that I can quickly find existing candidate lists from the chat agent.
+- **Acceptance**: `list_tearsheets()` returns a paginated envelope of Tearsheet records. `list_tearsheets(query="name:CFO*")` returns only matching tearsheets.
+
+**US-41: Get a tearsheet and its candidates**
+As a consultant, I want to retrieve a single tearsheet by ID including its candidate members, so that I can review who is on a shortlist without opening the Bullhorn UI.
+- **Acceptance**: `get_tearsheet(55)` returns tearsheet metadata and a `candidates` block containing `data` (candidate list) and `pagination`. The candidate list is fetched via the association endpoint.
+
+**US-42: Create a tearsheet**
+As a consultant or AI-assisted workflow, I want to create a new tearsheet in Bullhorn with a name, optional description, and owner, so that I can start building a new candidate list.
+- **Acceptance**: `create_tearsheet(name="CFO Candidates 2025")` creates a Tearsheet and returns `changedEntityId` and the created record. If `owner` is omitted, the authenticated user is resolved and stamped automatically. If identity resolution fails and no owner is provided, the tool returns `identity_resolution_failed` without creating the record.
+
+**US-43: Add candidates to a tearsheet**
+As a consultant, I want to add one or more candidates to a tearsheet in a single operation, so that I can efficiently build candidate shortlists.
+- **Acceptance**: `add_to_tearsheet(tearsheet_id=55, candidate_ids=[101, 102, 103])` adds all three candidates to tearsheet 55 in one API call. The response confirms the tearsheet ID, added IDs, and count.
+
+**US-44: Remove candidates from a tearsheet**
+As a consultant, I want to remove one or more candidates from a tearsheet, so that I can keep shortlists clean and relevant.
+- **Acceptance**: `remove_from_tearsheet(tearsheet_id=55, candidate_ids=[101])` removes the candidate from the tearsheet. The response confirms the tearsheet ID, removed IDs, and count.
 
 ### Pagination
 
@@ -918,3 +966,5 @@ get_job_submissions(job_id=12345, status="Shortlisted", limit=10, start=0)
 | JobOrder custom fields vary between Bullhorn instances | Validate structured JobOrder fields against metadata/confirmed aliases before create; reject unknown structured fields clearly |
 | Note action string doesn't match a valid Bullhorn action | Return Bullhorn's error response clearly so the caller can correct the action |
 | Intermittent Bullhorn API errors on entity creation | Implement retry logic for known transient errors (e.g. "error persisting an entity" which Bullhorn support acknowledges as intermittent) |
+| Bullhorn association DELETE returns 204 (not 200/201) | `_request()` currently accepts only 200/201 as success. Verify the actual response code for association DELETE during integration testing; add 204 to the accepted codes in `_request()` if needed. |
+| Tearsheet entity may lack `isDeleted` field | If `list_tearsheets` queries fail with a Bullhorn API error, add `"Tearsheet"` to `_ENTITIES_WITHOUT_ISDELETED` (same fix applied previously for `ClientCorporation` and `UserMessage`). |
