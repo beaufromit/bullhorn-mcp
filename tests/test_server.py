@@ -517,7 +517,7 @@ class TestSearchEmails:
         return client
 
     def test_search_emails_basic(self, email_client):
-        """Only person_id set: query is the OR clause, no extra_params, sort is -smtpReceiveDate."""
+        """Only person_id set: query is the OR clause, entityId forwarded, sort is -smtpReceiveDate."""
         from bullhorn_mcp.identity import IdentityResolutionError
         with patch.object(server, "get_client", return_value=email_client), \
              patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
@@ -527,9 +527,20 @@ class TestSearchEmails:
         assert call_args.kwargs["entity"] == "UserMessage"
         assert call_args.kwargs["query"] == "(sender.id:34389 OR recipients.id:34389)"
         assert call_args.kwargs["sort"] == "-smtpReceiveDate"
-        assert call_args.kwargs.get("extra_params") is None
+        # entityId must be forwarded — Bullhorn /search/UserMessage requires it.
+        assert call_args.kwargs["extra_params"] == {"entityId": 34389}
         # Body should not be requested by default.
         assert "comments" not in call_args.kwargs["fields"]
+
+    def test_search_emails_entity_id_matches_person_id(self, email_client):
+        """entityId in extra_params always equals person_id, regardless of other filters."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        with patch.object(server, "get_client", return_value=email_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            server.search_emails(person_id=99999)
+
+        extra = email_client.search_with_meta.call_args.kwargs["extra_params"]
+        assert extra == {"entityId": 99999}
 
     def test_search_emails_with_user_id(self, email_client):
         """user={"id": N} adds an AND clause with user id and skips resolve_caller."""

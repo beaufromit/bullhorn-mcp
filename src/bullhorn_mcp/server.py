@@ -861,6 +861,7 @@ def search_emails(
             count=limit,
             start=start,
             sort="-smtpReceiveDate",
+            extra_params={"entityId": person_id},
         )
 
         return format_response(_paginate_envelope(meta, start, limit))
