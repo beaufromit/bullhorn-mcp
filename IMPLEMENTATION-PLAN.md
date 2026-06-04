@@ -8,6 +8,10 @@
 
 **Replan validation (2026-06-03):** Sprint 31 (CR30) complete. 571 tests passing. Two new CRs (CR31 and CR32) reviewed. PRD.md updated to add **FR-20** (Candidate updates via `update_record`) and **FR-21** (Tearsheet management), plus user stories **US-39 through US-44**. Sprint 32 (CR31) and Sprint 33 (CR32) added to this plan as PLANNED.
 
+**Replan validation (2026-06-03, post-CR31):** Re-reconciled PRD, user stories, and source code. **575 tests passing, tagged v0.0.43.** Sprint 32 (CR31) is COMPLETE. Sprint 33 (CR32) is PLANNED with full task specification (T33.1–T33.4) already documented below. No PRD discrepancies found: all 21 FRs and 46 user stories (US-1 through US-44 plus US-7A and US-15A) map to implemented or planned tools. No skips, TODOs, or FIXMEs in source or tests. No new CRs to add at this time.
+
+**Replan validation (2026-06-04, post-CR32):** Re-reconciled PRD, user stories, and source code. **595 tests passing.** Sprint 33 (CR32) is COMPLETE. No new CRs to add at this time. All 21 FRs and 46 user stories map to implemented tools. 37 tools now present in server.py (32 prior + 5 tearsheet tools).
+
 **PRD reconciliation (June 2026):** PRD.md has been updated to cover all post-CR18 tool drift that previously had no documented requirement. The PRD now contains **21 functional requirements (FR-1 through FR-21)** and user stories **US-1 through US-44** (plus US-7A and US-15A). Summary of new additions:
 - **FR-15** (CR19) — Candidate creation and CV parsing (`create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`)
 - **FR-16** (CR21/CR23) — Note reading and full-text search (`get_notes_for_entity`, `search_notes`)
@@ -68,7 +72,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 30 | **COMPLETE** | CR29: `get_contact` — 563 tests passing, tagged v0.0.41. Review cycle: no critical issues, no moderate issues. One minor (m1): PRD.md FR-18 still labelled `get_contact` as "Planned (CR29)" after implementation — documentation only, fixed in post-review commit. |
 | Sprint 31 | **COMPLETE** | CR30: `get_job_submissions` — 570 tests passing, tagged v0.0.42. Review cycle: no critical issues. One moderate (M1): `test_get_job_submissions_pagination` asserted `next_start is not None` instead of the exact value `20` — fixed to `== 20` to match the established pattern for all other pagination tests. |
 | Sprint 32 | **COMPLETE** | CR31: Extend `update_record` docstring to advertise Candidate support + 4 new tests — 575 tests passing, tagged v0.0.43. Review cycle: no critical issues, no moderate issues. Two minors logged: (m1) CR31.md plan description for `test_update_candidate_name_recomputed` says both firstName and lastName are passed AND that `client.get` is called — these claims are mutually exclusive; the test correctly implements the one-sided case only; (m2) updated docstring groups ClientContact and Candidate for `title`-stripping but omits `namePrefix` as the salutation field for ClientContact (the runtime warning at line 40 already names it). |
-| Sprint 33 | **PLANNED** | CR32: Tearsheet (Hotlist) management — 5 new tools, 2 new client methods, 20 new tests. |
+| Sprint 33 | **COMPLETE** | CR32: Tearsheet (Hotlist) management — 5 new tools (`list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`), 2 new client methods (`add_association`, `remove_association`) — 595 tests passing. |
 
 ### Sprint 15 post-tag regression note
 
@@ -92,7 +96,7 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note(commenting_person_id)`, `_request_multipart`, `parse_resume_file`, `parse_resume_text`, `attach_file`; `_ENTITY_FIELD` dispatch dict in `add_note` maps each of 7 entity types to its Note association field name
 - `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant extended at module load with env-defined JobOrder aliases via `joborder_config.get_joborder_aliases()`; `FIELD_ALIASES["JobSubmission"] = {}` reserved slot.
-- `src/bullhorn_mcp/server.py` — MCP server with **32 implemented tools**: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `get_company`, `get_contact`, `get_job_submissions`, `search_entities`, `query_entities`, `search_emails`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`, `get_notes_for_entity`, `search_notes`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()`, `_paginate_envelope()` helpers; `_NOTE_TARGET_ENTITIES` set; `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()`, `_strip_cc_telemetry()` private helpers; `_NOTE_DEFAULT_FIELDS`, `_CC_TAG_RE`, `_valid_note_actions` module-level constants/state.
+- `src/bullhorn_mcp/server.py` — MCP server with **37 implemented tools**: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `get_company`, `get_contact`, `get_job_submissions`, `search_entities`, `query_entities`, `search_emails`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`, `get_notes_for_entity`, `search_notes`, `list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()`, `_paginate_envelope()` helpers; `_NOTE_TARGET_ENTITIES` set; `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()`, `_strip_cc_telemetry()` private helpers; `_NOTE_DEFAULT_FIELDS`, `_CC_TAG_RE`, `_valid_note_actions` module-level constants/state.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
@@ -116,7 +120,7 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_joborder_config.py` — 10 tests (env config loaders for aliases/required/defaults)
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
-- **Total: 570 tests, all passing (v0.0.42)**.
+- **Total: 575 tests, all passing (v0.0.43)**.
 
 ---
 
@@ -2666,12 +2670,14 @@ New class `TestUpdateRecordCandidate` with 4 tests:
 
 ---
 
-## Sprint 33: CR32 — Tearsheet (Hotlist) Management — PLANNED
+## Sprint 33: CR32 — Tearsheet (Hotlist) Management — COMPLETE
 
 **Change request:** CR32.md
 **User stories:** US-40, US-41, US-42, US-43, US-44
 **Dependency:** Sprint 32 complete (clean baseline; Sprint 32 is independent but should land first for test numbering)
 **Risk:** Medium — net-new client methods (`add_association` uses PUT, `remove_association` uses DELETE). Verify Bullhorn returns 200 (not 204) on association DELETE before tagging; adjust `_request()` success codes if needed.
+
+**What was delivered:** Added `Tearsheet` to `DEFAULT_FIELDS` in `client.py`. Added `add_association()` and `remove_association()` methods to `BullhornClient` (PUT/DELETE to `/entity/{entity}/{entity_id}/{association}/{comma-joined-ids}`). Added 5 MCP tools (`list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`) to `server.py`. Registered `Tearsheet` in `SUPPORTED_ENTITIES` and `TOOL_ENTITY_MAP` in `descriptions.py`. Added `TestAssociationMethods` (6 tests) to `test_client.py` and `TestTearsheetTools` (14 tests) to `test_server.py`. **595 tests passing.**
 
 ### Tasks
 
