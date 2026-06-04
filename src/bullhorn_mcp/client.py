@@ -32,6 +32,7 @@ DEFAULT_FIELDS = {
         "messageFiles(id,name,contentType,fileSize,fileExtension,isExternal),"
         "threadID"
     ),
+    "Tearsheet": "id,name,description,owner,dateAdded",
 }
 
 
@@ -517,6 +518,34 @@ class BullhornClient:
         return self.get_association_with_meta(
             entity, entity_id, association, fields, count, start, order_by
         )["data"]
+
+    def add_association(
+        self,
+        entity: str,
+        entity_id: int,
+        association: str,
+        ids: list[int],
+    ) -> dict[str, Any]:
+        """Add records to a TO_MANY association via PUT.
+
+        e.g. PUT /entity/Tearsheet/{id}/candidates/1,2,3
+        """
+        id_str = ",".join(str(i) for i in ids)
+        return self._request("PUT", f"/entity/{entity}/{entity_id}/{association}/{id_str}")
+
+    def remove_association(
+        self,
+        entity: str,
+        entity_id: int,
+        association: str,
+        ids: list[int],
+    ) -> dict[str, Any]:
+        """Remove records from a TO_MANY association via DELETE.
+
+        e.g. DELETE /entity/Tearsheet/{id}/candidates/1,2,3
+        """
+        id_str = ",".join(str(i) for i in ids)
+        return self._request("DELETE", f"/entity/{entity}/{entity_id}/{association}/{id_str}")
 
     def get_meta(self, entity: str) -> dict[str, Any]:
         """Get metadata/schema for an entity type.

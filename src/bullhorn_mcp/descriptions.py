@@ -22,6 +22,7 @@ SUPPORTED_ENTITIES: list[str] = [
     "Placement",
     "UserMessage",
     "CorporateUser",
+    "Tearsheet",
 ]
 
 # Picklist field names whose options[] are inlined as "Valid values: ..." in
@@ -70,6 +71,11 @@ TOOL_ENTITY_MAP: dict[str, list[str]] = {
     "shortlist_candidates": ["JobSubmission"],
     "search_emails": ["UserMessage"],
     "get_entity_fields": SUPPORTED_ENTITIES,
+    "list_tearsheets": ["Tearsheet"],
+    "get_tearsheet": ["Tearsheet"],
+    "create_tearsheet": ["Tearsheet"],
+    "add_to_tearsheet": ["Tearsheet"],
+    "remove_from_tearsheet": ["Tearsheet"],
 }
 
 

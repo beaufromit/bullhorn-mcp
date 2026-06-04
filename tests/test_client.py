@@ -1375,3 +1375,89 @@ class TestGetAssociationWithMeta:
         result = client.get_association("Candidate", 169020, "notes", fields="id")
 
         assert result == notes
+
+
+class TestAssociationMethods:
+    """Tests for BullhornClient.add_association() and remove_association()."""
+
+    @respx.mock
+    def test_add_association_single(self, mock_auth, mock_session):
+        """add_association() sends PUT to /entity/{entity}/{id}/{association}/{ids}."""
+        expected = {"changeType": "ASSOCIATE"}
+        route = respx.put(
+            f"{mock_session.rest_url}/entity/Tearsheet/55/candidates/101"
+        ).mock(return_value=httpx.Response(200, json=expected))
+
+        client = BullhornClient(mock_auth)
+        result = client.add_association("Tearsheet", 55, "candidates", [101])
+
+        assert route.call_count == 1
+        assert result == expected
+
+    @respx.mock
+    def test_add_association_multiple(self, mock_auth, mock_session):
+        """add_association() comma-joins multiple IDs in the URL path."""
+        expected = {"changeType": "ASSOCIATE"}
+        route = respx.put(
+            f"{mock_session.rest_url}/entity/Tearsheet/55/candidates/101,102,103"
+        ).mock(return_value=httpx.Response(200, json=expected))
+
+        client = BullhornClient(mock_auth)
+        result = client.add_association("Tearsheet", 55, "candidates", [101, 102, 103])
+
+        assert route.call_count == 1
+        assert result == expected
+
+    @respx.mock
+    def test_remove_association_single(self, mock_auth, mock_session):
+        """remove_association() sends DELETE to /entity/{entity}/{id}/{association}/{ids}."""
+        expected = {"changeType": "DISASSOCIATE"}
+        route = respx.delete(
+            f"{mock_session.rest_url}/entity/Tearsheet/55/candidates/101"
+        ).mock(return_value=httpx.Response(200, json=expected))
+
+        client = BullhornClient(mock_auth)
+        result = client.remove_association("Tearsheet", 55, "candidates", [101])
+
+        assert route.call_count == 1
+        assert result == expected
+
+    @respx.mock
+    def test_remove_association_multiple(self, mock_auth, mock_session):
+        """remove_association() comma-joins multiple IDs in the URL path."""
+        expected = {"changeType": "DISASSOCIATE"}
+        route = respx.delete(
+            f"{mock_session.rest_url}/entity/Tearsheet/55/candidates/101,102,103"
+        ).mock(return_value=httpx.Response(200, json=expected))
+
+        client = BullhornClient(mock_auth)
+        result = client.remove_association("Tearsheet", 55, "candidates", [101, 102, 103])
+
+        assert route.call_count == 1
+        assert result == expected
+
+    @respx.mock
+    def test_add_association_api_error(self, mock_auth, mock_session):
+        """add_association() raises BullhornAPIError on non-200/201 response."""
+        respx.put(
+            f"{mock_session.rest_url}/entity/Tearsheet/55/candidates/101"
+        ).mock(return_value=httpx.Response(400, text="Bad Request"))
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError) as exc_info:
+            client.add_association("Tearsheet", 55, "candidates", [101])
+
+        assert "400" in str(exc_info.value)
+
+    @respx.mock
+    def test_remove_association_api_error(self, mock_auth, mock_session):
+        """remove_association() raises BullhornAPIError on non-200/201 response."""
+        respx.delete(
+            f"{mock_session.rest_url}/entity/Tearsheet/55/candidates/101"
+        ).mock(return_value=httpx.Response(400, text="Bad Request"))
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError) as exc_info:
+            client.remove_association("Tearsheet", 55, "candidates", [101])
+
+        assert "400" in str(exc_info.value)

@@ -6352,3 +6352,204 @@ class TestUpdateRecordCandidate:
             result = server.update_record("Candidate", 11234, {"occupation": "Engineer"})
 
         assert result.startswith("ERROR:")
+
+
+class TestTearsheetTools:
+    """Tests for tearsheet (hotlist) tools."""
+
+    def test_list_tearsheets_default(self, mock_client):
+        """list_tearsheets calls search_with_meta with entity=Tearsheet and empty query."""
+        mock_client.search.return_value = [{"id": 1, "name": "CFO Pipeline"}]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_tearsheets()
+
+        data = json.loads(result)
+        assert "data" in data
+        assert "pagination" in data
+        call_kwargs = mock_client.search_with_meta.call_args.kwargs
+        assert call_kwargs["entity"] == "Tearsheet"
+        assert call_kwargs["query"] == ""
+
+    def test_list_tearsheets_with_query(self, mock_client):
+        """list_tearsheets passes query string to search_with_meta."""
+        mock_client.search.return_value = [{"id": 1, "name": "CFO Pipeline"}]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_tearsheets(query="name:CFO*")
+
+        call_kwargs = mock_client.search_with_meta.call_args.kwargs
+        assert call_kwargs["query"] == "name:CFO*"
+
+    def test_list_tearsheets_pagination(self, mock_client):
+        """list_tearsheets forwards limit/start; next_start is populated when there are more results."""
+        # Override side_effect to return a real meta dict with total > count so has_more is True.
+        mock_client.search_with_meta.side_effect = None
+        mock_client.search_with_meta.return_value = {
+            "data": [{"id": i} for i in range(20)],
+            "total": 100,
+            "start": 0,
+            "count": 20,
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_tearsheets(limit=20, start=0)
+
+        call_kwargs = mock_client.search_with_meta.call_args.kwargs
+        assert call_kwargs["count"] == 20
+        assert call_kwargs["start"] == 0
+        data = json.loads(result)
+        assert data["pagination"]["next_start"] == 20
+
+    def test_get_tearsheet_returns_metadata_and_members(self, mock_client):
+        """get_tearsheet fetches tearsheet header then candidates via association."""
+        mock_client.get.return_value = {"id": 55, "name": "Pipeline"}
+        mock_client.get_association.return_value = [{"id": 101, "firstName": "Jane"}]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_tearsheet(tearsheet_id=55)
+
+        mock_client.get.assert_called_with("Tearsheet", 55)
+        assoc_kwargs = mock_client.get_association_with_meta.call_args.kwargs
+        assert assoc_kwargs["entity"] == "Tearsheet"
+        assert assoc_kwargs["entity_id"] == 55
+        assert assoc_kwargs["association"] == "candidates"
+
+        data = json.loads(result)
+        assert "candidates" in data
+        assert data["candidates"]["data"][0]["firstName"] == "Jane"
+
+    def test_get_tearsheet_custom_candidate_fields(self, mock_client):
+        """get_tearsheet forwards custom candidate_fields to get_association_with_meta."""
+        mock_client.get.return_value = {"id": 55, "name": "Pipeline"}
+        mock_client.get_association.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.get_tearsheet(tearsheet_id=55, candidate_fields="id,firstName")
+
+        assoc_kwargs = mock_client.get_association_with_meta.call_args.kwargs
+        assert assoc_kwargs["fields"] == "id,firstName"
+
+    def test_create_tearsheet_basic(self, mock_client):
+        """create_tearsheet auto-resolves owner via resolve_caller when owner omitted."""
+        mock_client.create.return_value = {
+            "changedEntityId": 100,
+            "changeType": "INSERT",
+            "data": {"id": 100, "name": "Test"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", return_value={"id": 77}):
+            result = server.create_tearsheet(name="Test Sheet")
+
+        mock_client.create.assert_called_once_with(
+            "Tearsheet", {"name": "Test Sheet", "owner": {"id": 77}}
+        )
+        data = json.loads(result)
+        assert data["changedEntityId"] == 100
+
+    def test_create_tearsheet_explicit_owner(self, mock_client):
+        """create_tearsheet uses explicit owner and does not call resolve_caller."""
+        mock_client.create.return_value = {
+            "changedEntityId": 101,
+            "changeType": "INSERT",
+            "data": {"id": 101, "name": "Test Sheet"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller") as mock_resolve:
+            server.create_tearsheet(name="Test Sheet", owner=42)
+
+        mock_resolve.assert_not_called()
+        mock_client.create.assert_called_once_with(
+            "Tearsheet", {"name": "Test Sheet", "owner": {"id": 42}}
+        )
+
+    def test_create_tearsheet_identity_resolution_fails(self, mock_client):
+        """create_tearsheet returns identity_resolution_failed when resolve_caller raises."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            result = server.create_tearsheet(name="Test Sheet")
+
+        data = json.loads(result)
+        assert data["error"] == "identity_resolution_failed"
+
+    def test_create_tearsheet_with_description(self, mock_client):
+        """create_tearsheet includes description in payload when provided."""
+        mock_client.create.return_value = {
+            "changedEntityId": 102,
+            "changeType": "INSERT",
+            "data": {"id": 102, "name": "Test Sheet"},
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", return_value={"id": 42}):
+            server.create_tearsheet(name="Test Sheet", description="Senior devs", owner=42)
+
+        mock_client.create.assert_called_once_with(
+            "Tearsheet",
+            {"name": "Test Sheet", "description": "Senior devs", "owner": {"id": 42}},
+        )
+
+    def test_add_to_tearsheet_single(self, mock_client):
+        """add_to_tearsheet calls add_association and returns confirmation dict."""
+        mock_client.add_association.return_value = {}
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.add_to_tearsheet(tearsheet_id=55, candidate_ids=[101])
+
+        mock_client.add_association.assert_called_once_with(
+            "Tearsheet", 55, "candidates", [101]
+        )
+        data = json.loads(result)
+        assert data["added"] == [101]
+        assert data["count"] == 1
+        assert data["tearsheet_id"] == 55
+
+    def test_add_to_tearsheet_multiple(self, mock_client):
+        """add_to_tearsheet handles multiple candidate IDs."""
+        mock_client.add_association.return_value = {}
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.add_to_tearsheet(tearsheet_id=55, candidate_ids=[101, 102, 103])
+
+        mock_client.add_association.assert_called_once_with(
+            "Tearsheet", 55, "candidates", [101, 102, 103]
+        )
+        data = json.loads(result)
+        assert data["count"] == 3
+
+    def test_remove_from_tearsheet_single(self, mock_client):
+        """remove_from_tearsheet calls remove_association and returns confirmation dict."""
+        mock_client.remove_association.return_value = {}
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.remove_from_tearsheet(tearsheet_id=55, candidate_ids=[101])
+
+        mock_client.remove_association.assert_called_once_with(
+            "Tearsheet", 55, "candidates", [101]
+        )
+        data = json.loads(result)
+        assert data["removed"] == [101]
+        assert data["count"] == 1
+
+    def test_remove_from_tearsheet_multiple(self, mock_client):
+        """remove_from_tearsheet handles multiple candidate IDs."""
+        mock_client.remove_association.return_value = {}
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.remove_from_tearsheet(tearsheet_id=55, candidate_ids=[101, 102])
+
+        data = json.loads(result)
+        assert data["count"] == 2
+
+    def test_tearsheet_tool_api_error(self, mock_client):
+        """list_tearsheets returns ERROR prefix when search_with_meta raises BullhornAPIError."""
+        mock_client.search_with_meta.side_effect = BullhornAPIError("API Error")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_tearsheets()
+
+        assert result.startswith("ERROR:")

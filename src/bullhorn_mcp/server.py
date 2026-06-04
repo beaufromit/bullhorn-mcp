@@ -586,6 +586,175 @@ def get_contact(contact_id: int, fields: str | None = None) -> str:
 
 
 @mcp.tool()
+def list_tearsheets(
+    query: str | None = None,
+    limit: int = 20,
+    start: int = 0,
+    fields: str | None = None,
+) -> str:
+    """List tearsheets (hotlists) from Bullhorn.
+
+    Args:
+        query: Lucene query to filter tearsheets (e.g. 'name:CFO*' or 'owner.id:123')
+        limit: Maximum number of results (1-500, default 20)
+        start: Pagination offset (default 0)
+        fields: Comma-separated fields to return
+                (default: id,name,description,owner,dateAdded)
+
+    Returns:
+        JSON object with ``data`` (array of tearsheets) and ``pagination``.
+
+    Examples:
+        - list_tearsheets() - All tearsheets
+        - list_tearsheets(query="name:CFO*") - Tearsheets whose name starts with CFO
+        - list_tearsheets(query="owner.id:99") - Tearsheets owned by CorporateUser 99
+    """
+    try:
+        client = get_client()
+        meta = client.search_with_meta(
+            entity="Tearsheet",
+            query=query or "",
+            fields=fields,
+            count=limit,
+            start=start,
+            sort="-dateAdded",
+        )
+        return format_response(_paginate_envelope(meta, start, limit))
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def get_tearsheet(
+    tearsheet_id: int,
+    candidate_limit: int = 200,
+    candidate_fields: str | None = None,
+) -> str:
+    """Get a tearsheet and its candidate members by ID.
+
+    Args:
+        tearsheet_id: The Tearsheet ID
+        candidate_limit: Maximum number of candidate members to return (default 200)
+        candidate_fields: Comma-separated fields to return for each candidate
+                          (default: id,firstName,lastName,email,occupation,status)
+
+    Returns:
+        JSON object with tearsheet metadata and a ``candidates`` key containing
+        ``data`` (array of candidates) and ``pagination``.
+    """
+    try:
+        client = get_client()
+        default_candidate_fields = "id,firstName,lastName,email,occupation,status"
+
+        tearsheet = client.get("Tearsheet", tearsheet_id)
+        members_meta = client.get_association_with_meta(
+            entity="Tearsheet",
+            entity_id=tearsheet_id,
+            association="candidates",
+            fields=candidate_fields or default_candidate_fields,
+            count=candidate_limit,
+            start=0,
+        )
+        tearsheet["candidates"] = _paginate_envelope(members_meta, 0, candidate_limit)
+        return format_response(tearsheet)
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def create_tearsheet(
+    name: str,
+    description: str | None = None,
+    owner: int | None = None,
+) -> str:
+    """Create a new tearsheet (hotlist) in Bullhorn.
+
+    Args:
+        name: Name of the tearsheet
+        description: Optional description
+        owner: Bullhorn CorporateUser ID to assign as owner.
+               If omitted, the authenticated user is resolved automatically.
+
+    Returns:
+        JSON object with changedEntityId, changeType, and the created tearsheet record.
+    """
+    try:
+        client = get_client()
+        payload: dict[str, Any] = {"name": name}
+        if description:
+            payload["description"] = description
+
+        if owner is not None:
+            payload["owner"] = {"id": owner}
+        else:
+            try:
+                caller = resolve_caller(client)
+                payload["owner"] = {"id": caller["id"]}
+            except IdentityResolutionError:
+                return format_response({
+                    "error": "identity_resolution_failed",
+                    "message": "Could not resolve authenticated user to a Bullhorn CorporateUser. Provide owner explicitly.",
+                })
+
+        result = client.create("Tearsheet", payload)
+        return format_response(result)
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def add_to_tearsheet(tearsheet_id: int, candidate_ids: list[int]) -> str:
+    """Add one or more candidates to a tearsheet.
+
+    Args:
+        tearsheet_id: The Tearsheet ID
+        candidate_ids: List of Candidate IDs to add
+
+    Returns:
+        JSON object confirming the operation and listing the added candidate IDs.
+
+    Examples:
+        - add_to_tearsheet(tearsheet_id=55, candidate_ids=[101, 102, 103])
+    """
+    try:
+        client = get_client()
+        client.add_association("Tearsheet", tearsheet_id, "candidates", candidate_ids)
+        return format_response({
+            "tearsheet_id": tearsheet_id,
+            "added": candidate_ids,
+            "count": len(candidate_ids),
+        })
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def remove_from_tearsheet(tearsheet_id: int, candidate_ids: list[int]) -> str:
+    """Remove one or more candidates from a tearsheet.
+
+    Args:
+        tearsheet_id: The Tearsheet ID
+        candidate_ids: List of Candidate IDs to remove
+
+    Returns:
+        JSON object confirming the operation and listing the removed candidate IDs.
+
+    Examples:
+        - remove_from_tearsheet(tearsheet_id=55, candidate_ids=[101, 102])
+    """
+    try:
+        client = get_client()
+        client.remove_association("Tearsheet", tearsheet_id, "candidates", candidate_ids)
+        return format_response({
+            "tearsheet_id": tearsheet_id,
+            "removed": candidate_ids,
+            "count": len(candidate_ids),
+        })
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
 def get_job_submissions(
     job_id: int,
     status: str | None = None,
