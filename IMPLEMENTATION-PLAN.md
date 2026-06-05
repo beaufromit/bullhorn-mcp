@@ -72,7 +72,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 30 | **COMPLETE** | CR29: `get_contact` — 563 tests passing, tagged v0.0.41. Review cycle: no critical issues, no moderate issues. One minor (m1): PRD.md FR-18 still labelled `get_contact` as "Planned (CR29)" after implementation — documentation only, fixed in post-review commit. |
 | Sprint 31 | **COMPLETE** | CR30: `get_job_submissions` — 570 tests passing, tagged v0.0.42. Review cycle: no critical issues. One moderate (M1): `test_get_job_submissions_pagination` asserted `next_start is not None` instead of the exact value `20` — fixed to `== 20` to match the established pattern for all other pagination tests. |
 | Sprint 32 | **COMPLETE** | CR31: Extend `update_record` docstring to advertise Candidate support + 4 new tests — 575 tests passing, tagged v0.0.43. Review cycle: no critical issues, no moderate issues. Two minors logged: (m1) CR31.md plan description for `test_update_candidate_name_recomputed` says both firstName and lastName are passed AND that `client.get` is called — these claims are mutually exclusive; the test correctly implements the one-sided case only; (m2) updated docstring groups ClientContact and Candidate for `title`-stripping but omits `namePrefix` as the salutation field for ClientContact (the runtime warning at line 40 already names it). |
-| Sprint 33 | **COMPLETE** | CR32: Tearsheet (Hotlist) management — 5 new tools (`list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`), 2 new client methods (`add_association`, `remove_association`) — 595 tests passing. |
+| Sprint 33 | **COMPLETE** | CR32: Tearsheet (Hotlist) management — 5 new tools (`list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`), 2 new client methods (`add_association`, `remove_association`) — 595 tests passing, tagged v0.0.44. Review cycle: M2 fixed — empty `candidate_ids` guard added to `add_to_tearsheet`/`remove_from_tearsheet`; 597 tests after fix. M1 false positive (`resolve_caller` vs `resolve_owner` naming in plan). |
 
 ### Sprint 15 post-tag regression note
 
@@ -2787,3 +2787,11 @@ After implementation:
 2. `grep -n "list_tearsheets\|get_tearsheet\|create_tearsheet\|add_to_tearsheet\|remove_from_tearsheet" src/bullhorn_mcp/server.py` — all 5 tools present.
 3. `grep -n "Tearsheet" src/bullhorn_mcp/descriptions.py` — in `SUPPORTED_ENTITIES` and `TOOL_ENTITY_MAP`.
 4. Tag v0.0.44 after review cycle passes.
+
+### Review cycle findings
+
+**M2 (genuine, fixed):** `add_to_tearsheet` and `remove_from_tearsheet` had no guard against empty `candidate_ids`, which would produce a malformed Bullhorn URL (e.g. `/entity/Tearsheet/55/candidates/`). Fixed with an early-return validation before the try block, consistent with the `shortlist_candidates` pattern. Two tests added (597 total).
+
+**M1 (false positive):** Plan-to-implementation mismatch flagged -- `resolve_caller` vs `resolve_owner`. This was a false positive. `resolve_owner()` is a client method that takes a user identifier string or dict; `resolve_caller()` is the identity function that extracts the authenticated user from the Entra token. The correct pattern for auto-stamping owner is `resolve_caller()` + `{"id": caller["id"]}`, which is the same approach used in `create_company` and `create_contact`. The CR32.md plan used the wrong function name. No code change was needed.
+
+**Tag:** v0.0.44
