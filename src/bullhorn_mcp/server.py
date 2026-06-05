@@ -716,6 +716,11 @@ def add_to_tearsheet(tearsheet_id: int, candidate_ids: list[int]) -> str:
     Examples:
         - add_to_tearsheet(tearsheet_id=55, candidate_ids=[101, 102, 103])
     """
+    if not candidate_ids:
+        return format_response({
+            "error": "invalid_argument",
+            "message": "candidate_ids must be a non-empty list.",
+        })
     try:
         client = get_client()
         client.add_association("Tearsheet", tearsheet_id, "candidates", candidate_ids)
@@ -742,6 +747,11 @@ def remove_from_tearsheet(tearsheet_id: int, candidate_ids: list[int]) -> str:
     Examples:
         - remove_from_tearsheet(tearsheet_id=55, candidate_ids=[101, 102])
     """
+    if not candidate_ids:
+        return format_response({
+            "error": "invalid_argument",
+            "message": "candidate_ids must be a non-empty list.",
+        })
     try:
         client = get_client()
         client.remove_association("Tearsheet", tearsheet_id, "candidates", candidate_ids)

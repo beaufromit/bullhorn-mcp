@@ -6553,3 +6553,21 @@ class TestTearsheetTools:
             result = server.list_tearsheets()
 
         assert result.startswith("ERROR:")
+
+    def test_add_to_tearsheet_empty_list(self, mock_client):
+        """add_to_tearsheet returns invalid_argument error when candidate_ids is empty."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.add_to_tearsheet(tearsheet_id=55, candidate_ids=[])
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_argument"
+        mock_client.add_association.assert_not_called()
+
+    def test_remove_from_tearsheet_empty_list(self, mock_client):
+        """remove_from_tearsheet returns invalid_argument error when candidate_ids is empty."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.remove_from_tearsheet(tearsheet_id=55, candidate_ids=[])
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_argument"
+        mock_client.remove_association.assert_not_called()
