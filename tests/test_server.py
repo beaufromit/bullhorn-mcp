@@ -868,6 +868,14 @@ class TestListPlacements:
         assert data["error"] == "invalid_date"
         assert "until" in data["message"]
 
+    def test_invalid_status_returns_error(self, mock_client):
+        """status containing a single quote returns an error envelope."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(status="Approved' OR '1'='1")
+        data = json.loads(result)
+        assert data["error"] == "invalid_status"
+        assert "single quotes" in data["message"]
+
     def test_since_converted_to_epoch_ms(self, mock_client):
         """since='2025-01-01' is converted to epoch-ms >= clause in WHERE."""
         mock_client.query.return_value = []
