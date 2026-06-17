@@ -509,10 +509,8 @@ def list_companies(
 
 
 # Default field sets for list_placements.
-_PLACEMENT_DEFAULT_FIELDS = (
-    "id,status,employmentType,dateBegin,dateEnd,dateAdded,"
-    "candidate(id,name),jobOrder(id,title),clientCorporation(id,name),customText41"
-)
+# Mirrors DEFAULT_FIELDS["Placement"] in client.py — kept in sync deliberately.
+_PLACEMENT_DEFAULT_FIELDS = DEFAULT_FIELDS["Placement"]
 _PCR_DEFAULT_FIELDS = (
     "id,requestType,requestStatus,status,dateBegin,dateEnd,requestCustomDate1,dateAdded,"
     "placement(id,status,dateBegin,dateEnd,"
@@ -624,6 +622,11 @@ def list_placements(
                 "error": "invalid_date",
                 "message": f"until must be YYYY-MM-DD. Got: {until!r}",
             })
+    if status is not None and "'" in status:
+        return format_response({
+            "error": "invalid_status",
+            "message": f"status must not contain single quotes. Got: {status!r}",
+        })
 
     try:
         client = get_client()
