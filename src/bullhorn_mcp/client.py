@@ -14,7 +14,10 @@ _ENTITIES_WITHOUT_ISDELETED: frozenset[str] = frozenset({"ClientCorporation", "U
 DEFAULT_FIELDS = {
     "JobOrder": "id,title,status,employmentType,dateAdded,startDate,salary,clientCorporation,owner,description,numOpenings,isOpen",
     "Candidate": "id,firstName,lastName,email,phone,status,dateAdded,occupation,skillSet,owner",
-    "Placement": "id,candidate,jobOrder,status,dateBegin,dateEnd,salary,payRate",
+    "Placement": (
+        "id,status,employmentType,dateBegin,dateEnd,dateAdded,"
+        "candidate(id,name),jobOrder(id,title),clientCorporation(id,name),customText41"
+    ),
     "ClientCorporation": "id,name,status,phone,address,dateAdded",
     "ClientContact": "id,firstName,lastName,email,phone,status,dateAdded,clientCorporation,owner",
     "JobSubmission": (
@@ -41,6 +44,31 @@ class BullhornClient:
 
     def __init__(self, auth: BullhornAuth):
         self.auth = auth
+        # Per-entity cache of whether that entity exposes an isDeleted field.
+        # Populated lazily by _entity_has_isdeleted().
+        self._isdeleted_cache: dict[str, bool] = {}
+
+    def _entity_has_isdeleted(self, entity: str) -> bool:
+        """Return True if the entity exposes an isDeleted field on /meta.
+
+        Uses the static denylist as a fast path, then falls back to a
+        /meta lookup (cached per entity per process lifetime). If /meta is
+        unavailable the method returns True (safe default: keep appending the
+        soft-delete clause rather than silently omitting it).
+        """
+        if entity in _ENTITIES_WITHOUT_ISDELETED:
+            return False
+        if entity in self._isdeleted_cache:
+            return self._isdeleted_cache[entity]
+        try:
+            meta = self.get_meta(entity)
+            has = any(f.get("name") == "isDeleted" for f in meta.get("fields", []))
+        except Exception:
+            # /meta unavailable or entity unknown — not cached so a later call
+            # can re-detect; fall back to appending the clause (prior behaviour).
+            return True
+        self._isdeleted_cache[entity] = has
+        return has
 
     def _request(
         self,
@@ -214,7 +242,7 @@ class BullhornClient:
         Returns:
             Dict with keys ``data`` (list), ``total``, ``start``, ``count``.
         """
-        if exclude_deleted and entity not in _ENTITIES_WITHOUT_ISDELETED:
+        if exclude_deleted and self._entity_has_isdeleted(entity):
             query = f"({query}) AND isDeleted:0" if query else "isDeleted:0"
 
         if fields is None:
@@ -289,7 +317,7 @@ class BullhornClient:
         Returns:
             Dict with keys ``data`` (list), ``total``, ``start``, ``count``.
         """
-        if exclude_deleted and entity not in _ENTITIES_WITHOUT_ISDELETED:
+        if exclude_deleted and self._entity_has_isdeleted(entity):
             where = f"({where}) AND isDeleted=false" if where else "isDeleted=false"
 
         if fields is None:

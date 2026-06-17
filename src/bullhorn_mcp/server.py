@@ -249,6 +249,23 @@ def format_response(data: list | dict) -> str:
     return json.dumps(data, indent=2, default=str)
 
 
+def _iso_to_epoch_ms(date_str: str) -> int:
+    """Convert an ISO-8601 date string (YYYY-MM-DD) to UTC midnight epoch milliseconds.
+
+    Args:
+        date_str: Date in YYYY-MM-DD format
+
+    Returns:
+        Epoch milliseconds (int) representing UTC midnight on that date
+
+    Raises:
+        ValueError: If the string cannot be parsed as YYYY-MM-DD
+    """
+    from datetime import datetime, timezone
+    dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
 def _paginate_envelope(meta: dict, start: int, count: int) -> dict:
     """Build the user-facing pagination envelope from a *_with_meta client result."""
     total = meta.get("total")
@@ -486,6 +503,192 @@ def list_companies(
         )
 
         return format_response(_paginate_envelope(meta, start, limit))
+
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
+
+
+# Default field sets for list_placements.
+_PLACEMENT_DEFAULT_FIELDS = (
+    "id,status,employmentType,dateBegin,dateEnd,dateAdded,"
+    "candidate(id,name),jobOrder(id,title),clientCorporation(id,name),customText41"
+)
+_PCR_DEFAULT_FIELDS = (
+    "id,requestType,requestStatus,status,dateBegin,dateEnd,requestCustomDate1,dateAdded,"
+    "placement(id,status,dateBegin,dateEnd,"
+    "candidate(id,name),jobOrder(id,title),clientCorporation(id,name))"
+)
+
+
+@mcp.tool()
+def list_placements(
+    record_type: str = "new",
+    since: str | None = None,
+    until: str | None = None,
+    status: str | None = None,
+    query: str | None = None,
+    limit: int = 20,
+    start: int = 0,
+    fields: str | None = None,
+    order_by: str | None = None,
+) -> str:
+    """List placements and/or contract extensions from Bullhorn CRM.
+
+    This tool handles two distinct start-event types that must never be
+    combined, because they live in different entities and use different date
+    fields:
+
+    | record_type   | Entity                 | "Start" date field   |
+    |---------------|------------------------|----------------------|
+    | "new"         | Placement              | dateBegin            |
+    | "extensions"  | PlacementChangeRequest | requestCustomDate1   |
+
+    Use ``since``/``until`` to filter by that start date.  Placement 10982
+    is a good example: its ``dateBegin`` is Jun 2023 (the original start),
+    but it has 34 Contract Extension change requests each with their own
+    ``requestCustomDate1`` stepping forward monthly.  Querying
+    ``record_type="new", since="2024-01-01"`` correctly excludes it;
+    ``record_type="extensions", since="2024-01-01"`` returns its recent
+    extensions.
+
+    Args:
+        record_type: Which start events to return.
+            "new"        -- new Placement starts (Placement.dateBegin).
+            "extensions" -- Contract Extension events
+                           (PlacementChangeRequest.requestCustomDate1).
+            "both"       -- both, returned as separate top-level keys
+                           "new" and "extensions"; never merged.
+        since: ISO-8601 date lower bound (YYYY-MM-DD, inclusive) applied to
+            the start date field for the chosen record_type.
+        until: ISO-8601 date upper bound (YYYY-MM-DD, inclusive) applied to
+            the start date field.
+        status: Filter by Placement.status (e.g. "Approved"). Applies to
+            "new" only; ignored for "extensions".
+        query: Optional extra raw SQL WHERE fragment appended to the
+            generated clause (e.g. "employmentType='Daily Rate'").
+        limit: Maximum records per type (1-500, default 20).
+        start: Pagination offset.  When record_type="both", applies
+            independently to each type.
+        fields: Comma-separated fields to return.  Overrides the default
+            field set for the chosen type(s).
+        order_by: Sort field.  Defaults to "-dateBegin" for "new" and
+            "-requestCustomDate1" for "extensions".
+
+    Returns:
+        For "new" or "extensions": JSON object with ``data`` (rows tagged
+        with ``record_type``) and ``pagination``
+        (total, start, count, has_more, next_start).
+        For "both": JSON object with top-level keys "new" and "extensions",
+        each containing a full data+pagination envelope.
+
+    Examples:
+        - list_placements()
+          -- recent new placements
+        - list_placements(record_type="new", since="2025-01-01")
+          -- placements that genuinely started in 2025 (extensions excluded)
+        - list_placements(record_type="extensions", since="2025-01-01")
+          -- Contract Extensions with a start date in 2025
+        - list_placements(record_type="both", since="2024-06-01", until="2025-06-17")
+          -- both new placements and extensions that started in the period
+        - list_placements(record_type="new", status="Approved", limit=50)
+        - list_placements(limit=500, start=500)
+          -- page 2 of new placements
+    """
+    _VALID_RECORD_TYPES = {"new", "extensions", "both"}
+    if record_type not in _VALID_RECORD_TYPES:
+        return format_response({
+            "error": "invalid_record_type",
+            "message": (
+                f"record_type must be one of: {', '.join(sorted(_VALID_RECORD_TYPES))}. "
+                f"Got: {record_type!r}"
+            ),
+        })
+
+    # Parse since/until to epoch ms.
+    since_ms: int | None = None
+    until_ms: int | None = None
+    if since is not None:
+        try:
+            since_ms = _iso_to_epoch_ms(since)
+        except ValueError:
+            return format_response({
+                "error": "invalid_date",
+                "message": f"since must be YYYY-MM-DD. Got: {since!r}",
+            })
+    if until is not None:
+        try:
+            # Include the full until day: add 86400000 ms (one day) to midnight.
+            until_ms = _iso_to_epoch_ms(until) + 86_400_000
+        except ValueError:
+            return format_response({
+                "error": "invalid_date",
+                "message": f"until must be YYYY-MM-DD. Got: {until!r}",
+            })
+
+    try:
+        client = get_client()
+
+        def _build_placement_where() -> str:
+            clauses = []
+            if since_ms is not None:
+                clauses.append(f"dateBegin >= {since_ms}")
+            if until_ms is not None:
+                clauses.append(f"dateBegin < {until_ms}")
+            if status is not None:
+                clauses.append(f"status='{status}'")
+            if query:
+                clauses.append(f"({query})")
+            return " AND ".join(clauses) if clauses else "id IS NOT NULL"
+
+        def _build_pcr_where() -> str:
+            clauses = ["requestType='Contract Extension'"]
+            if since_ms is not None:
+                clauses.append(f"requestCustomDate1 >= {since_ms}")
+            if until_ms is not None:
+                clauses.append(f"requestCustomDate1 < {until_ms}")
+            if query:
+                clauses.append(f"({query})")
+            return " AND ".join(clauses)
+
+        def _fetch_new() -> dict:
+            eff_order = order_by or "-dateBegin"
+            eff_fields = fields or _PLACEMENT_DEFAULT_FIELDS
+            meta = client.query_with_meta(
+                entity="Placement",
+                where=_build_placement_where(),
+                fields=eff_fields,
+                count=limit,
+                start=start,
+                order_by=eff_order,
+            )
+            for row in meta["data"]:
+                row["record_type"] = "new"
+            return _paginate_envelope(meta, start, limit)
+
+        def _fetch_extensions() -> dict:
+            eff_order = order_by or "-requestCustomDate1"
+            eff_fields = fields or _PCR_DEFAULT_FIELDS
+            meta = client.query_with_meta(
+                entity="PlacementChangeRequest",
+                where=_build_pcr_where(),
+                fields=eff_fields,
+                count=limit,
+                start=start,
+                order_by=eff_order,
+            )
+            for row in meta["data"]:
+                row["record_type"] = "extension"
+            return _paginate_envelope(meta, start, limit)
+
+        if record_type == "new":
+            return format_response(_fetch_new())
+        if record_type == "extensions":
+            return format_response(_fetch_extensions())
+        # both
+        return format_response({
+            "new": _fetch_new(),
+            "extensions": _fetch_extensions(),
+        })
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"

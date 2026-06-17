@@ -838,6 +838,247 @@ class TestListCompanies:
         assert call_args.kwargs["start"] == 0
 
 
+class TestListPlacements:
+    """Tests for list_placements tool."""
+
+    # --- record_type validation ---
+
+    def test_invalid_record_type_returns_error(self, mock_client):
+        """Unknown record_type returns an error envelope (not an exception)."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(record_type="banana")
+        data = json.loads(result)
+        assert data["error"] == "invalid_record_type"
+
+    # --- date parsing ---
+
+    def test_invalid_since_returns_error(self, mock_client):
+        """Malformed since string returns an error envelope."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(since="not-a-date")
+        data = json.loads(result)
+        assert data["error"] == "invalid_date"
+        assert "since" in data["message"]
+
+    def test_invalid_until_returns_error(self, mock_client):
+        """Malformed until string returns an error envelope."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(until="2025/01/01")
+        data = json.loads(result)
+        assert data["error"] == "invalid_date"
+        assert "until" in data["message"]
+
+    def test_since_converted_to_epoch_ms(self, mock_client):
+        """since='2025-01-01' is converted to epoch-ms >= clause in WHERE."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="new", since="2025-01-01")
+        call_args = mock_client.query_with_meta.call_args
+        # 2025-01-01 UTC midnight = 1735689600000 ms
+        assert "dateBegin >= 1735689600000" in call_args.kwargs["where"]
+
+    def test_until_adds_one_day_to_include_full_day(self, mock_client):
+        """until='2025-01-01' adds 86400000ms so the whole day is included."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="new", until="2025-01-01")
+        call_args = mock_client.query_with_meta.call_args
+        # 2025-01-01 + 1 day = 1735689600000 + 86400000 = 1735776000000
+        assert "dateBegin < 1735776000000" in call_args.kwargs["where"]
+
+    # --- record_type="new" ---
+
+    def test_new_uses_placement_entity(self, mock_client):
+        """record_type='new' queries Placement."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="new")
+        call_args = mock_client.query_with_meta.call_args
+        assert call_args.kwargs["entity"] == "Placement"
+
+    def test_new_default_order_by_date_begin(self, mock_client):
+        """record_type='new' defaults to order by -dateBegin."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="new")
+        call_args = mock_client.query_with_meta.call_args
+        assert call_args.kwargs["order_by"] == "-dateBegin"
+
+    def test_new_rows_tagged_record_type_new(self, mock_client):
+        """Rows returned for record_type='new' carry record_type='new'."""
+        mock_client.query.return_value = [{"id": 1, "status": "Approved"}]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(record_type="new")
+        data = json.loads(result)
+        assert data["data"][0]["record_type"] == "new"
+
+    def test_new_default_fields_exclude_custom_int3(self, mock_client):
+        """Default fields for new placements do not include customInt3."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="new")
+        call_args = mock_client.query_with_meta.call_args
+        assert "customInt3" not in (call_args.kwargs.get("fields") or "")
+
+    def test_new_with_status_filter(self, mock_client):
+        """status param is added to the WHERE clause for new placements."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="new", status="Approved")
+        call_args = mock_client.query_with_meta.call_args
+        assert "status='Approved'" in call_args.kwargs["where"]
+
+    def test_new_no_date_defaults_to_tautology(self, mock_client):
+        """Without since/until/status/query the WHERE is 'id IS NOT NULL'."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="new")
+        call_args = mock_client.query_with_meta.call_args
+        assert call_args.kwargs["where"] == "id IS NOT NULL"
+
+    def test_new_with_extra_query(self, mock_client):
+        """Custom query fragment is appended to the WHERE clause."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="new", query="employmentType='Daily Rate'")
+        call_args = mock_client.query_with_meta.call_args
+        assert "(employmentType='Daily Rate')" in call_args.kwargs["where"]
+
+    def test_new_returns_pagination_envelope(self, mock_client):
+        """record_type='new' returns the standard data+pagination envelope."""
+        mock_client.query.return_value = [{"id": 1}]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(record_type="new")
+        data = json.loads(result)
+        assert "data" in data
+        assert "pagination" in data
+
+    # --- record_type="extensions" ---
+
+    def test_extensions_uses_pcr_entity(self, mock_client):
+        """record_type='extensions' queries PlacementChangeRequest."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="extensions")
+        call_args = mock_client.query_with_meta.call_args
+        assert call_args.kwargs["entity"] == "PlacementChangeRequest"
+
+    def test_extensions_always_filters_request_type(self, mock_client):
+        """requestType='Contract Extension' is always in the WHERE clause."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="extensions")
+        call_args = mock_client.query_with_meta.call_args
+        assert "requestType='Contract Extension'" in call_args.kwargs["where"]
+
+    def test_extensions_date_uses_request_custom_date1(self, mock_client):
+        """since is applied to requestCustomDate1 for extensions."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="extensions", since="2025-01-01")
+        call_args = mock_client.query_with_meta.call_args
+        assert "requestCustomDate1 >= 1735689600000" in call_args.kwargs["where"]
+
+    def test_extensions_default_order_by(self, mock_client):
+        """record_type='extensions' defaults to order by -requestCustomDate1."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="extensions")
+        call_args = mock_client.query_with_meta.call_args
+        assert call_args.kwargs["order_by"] == "-requestCustomDate1"
+
+    def test_extensions_rows_tagged_record_type_extension(self, mock_client):
+        """Rows returned for record_type='extensions' carry record_type='extension'."""
+        mock_client.query.return_value = [{"id": 42, "requestType": "Contract Extension"}]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(record_type="extensions")
+        data = json.loads(result)
+        assert data["data"][0]["record_type"] == "extension"
+
+    def test_extensions_status_param_ignored(self, mock_client):
+        """status param does not appear in the extensions WHERE clause."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="extensions", status="Approved")
+        call_args = mock_client.query_with_meta.call_args
+        # status should not be in the WHERE (it is only for new placements)
+        assert "status='Approved'" not in call_args.kwargs["where"]
+
+    # --- record_type="both" ---
+
+    def test_both_returns_new_and_extensions_keys(self, mock_client):
+        """record_type='both' returns a dict with 'new' and 'extensions' keys."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(record_type="both")
+        data = json.loads(result)
+        assert "new" in data
+        assert "extensions" in data
+
+    def test_both_calls_query_twice(self, mock_client):
+        """record_type='both' calls query_with_meta twice (once per type)."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="both")
+        assert mock_client.query_with_meta.call_count == 2
+
+    def test_both_new_and_extensions_have_envelopes(self, mock_client):
+        """Each sub-result in 'both' has its own data+pagination envelope."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(record_type="both")
+        data = json.loads(result)
+        assert "data" in data["new"]
+        assert "pagination" in data["new"]
+        assert "data" in data["extensions"]
+        assert "pagination" in data["extensions"]
+
+    def test_both_new_rows_tagged_new(self, mock_client):
+        """Rows under 'both' -> 'new' are tagged record_type='new'."""
+        placement_row = {"id": 1, "status": "Approved"}
+        ext_row = {"id": 99, "requestType": "Contract Extension"}
+
+        def side_effect(**kwargs):
+            if kwargs.get("entity") == "Placement":
+                return {"data": [placement_row.copy()], "total": 1, "start": 0, "count": 1}
+            return {"data": [ext_row.copy()], "total": 1, "start": 0, "count": 1}
+
+        mock_client.query_with_meta.side_effect = side_effect
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(record_type="both")
+        data = json.loads(result)
+        assert data["new"]["data"][0]["record_type"] == "new"
+        assert data["extensions"]["data"][0]["record_type"] == "extension"
+
+    # --- error handling ---
+
+    def test_api_error_returns_error_string(self, mock_client):
+        """BullhornAPIError is caught and returned as ERROR: prefix string."""
+        mock_client.query.side_effect = BullhornAPIError("something went wrong")
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(record_type="new")
+        assert result.startswith("ERROR:")
+
+    def test_auth_error_returns_error_string(self, mock_client):
+        """AuthenticationError is caught and returned as ERROR: prefix string."""
+        mock_client.query.side_effect = AuthenticationError("session expired")
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_placements(record_type="new")
+        assert result.startswith("ERROR:")
+
+    # --- pagination ---
+
+    def test_limit_and_start_forwarded(self, mock_client):
+        """limit and start are forwarded as count and start to query_with_meta."""
+        mock_client.query.return_value = []
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_placements(record_type="new", limit=50, start=100)
+        call_args = mock_client.query_with_meta.call_args
+        assert call_args.kwargs["count"] == 50
+        assert call_args.kwargs["start"] == 100
+
+
 class TestSprint1E2E:
     """End-to-end tests for Sprint 1 tools."""
 
@@ -4679,7 +4920,9 @@ class TestCR16DeletedRecordFilter:
                 return_value=httpx.Response(200, json={"data": [{"id": 99}]})
             )
             respx.get(f"{mock_session.rest_url}/meta/ClientContact").mock(
-                return_value=httpx.Response(200, json={"fields": []})
+                return_value=httpx.Response(200, json={
+                    "fields": [{"name": "isDeleted", "type": "SCALAR"}]
+                })
             )
             # No duplicate found → create proceeds; mock the PUT and follow-up GET
             respx.put(f"{mock_session.rest_url}/entity/ClientContact").mock(

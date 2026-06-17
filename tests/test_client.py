@@ -956,6 +956,126 @@ class TestIsDeletedDenylist:
         assert "isDeleted%3Dfalse" in url
 
 
+class TestMetadataDrivenIsDeletedGate:
+    """Tests for the metadata-driven isDeleted detection in search/query.
+
+    These tests mock /meta to verify detection of entities that genuinely
+    lack the isDeleted field (e.g. Placement, PlacementChangeRequest) and
+    confirm that entities which DO have it still get the clause appended.
+    """
+
+    @respx.mock
+    def test_query_skips_isdeleted_when_meta_lacks_field(self, mock_auth, mock_session):
+        """query() omits isDeleted=false when /meta reports the field is absent."""
+        # Mock /meta/Placement to return fields WITHOUT isDeleted
+        respx.get(f"{mock_session.rest_url}/meta/Placement").mock(
+            return_value=httpx.Response(200, json={
+                "entity": "Placement",
+                "fields": [
+                    {"name": "id", "type": "ID"},
+                    {"name": "status", "type": "SCALAR"},
+                    {"name": "dateBegin", "type": "SCALAR"},
+                ],
+            })
+        )
+        route = respx.get(f"{mock_session.rest_url}/query/Placement").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.query("Placement", "dateBegin > 0")
+        url = str(route.calls[0].request.url)
+        assert "isDeleted" not in url
+        assert "dateBegin" in url
+
+    @respx.mock
+    def test_query_appends_isdeleted_when_meta_has_field(self, mock_auth, mock_session):
+        """query() still appends isDeleted=false when /meta confirms the field exists."""
+        respx.get(f"{mock_session.rest_url}/meta/FakeEntity").mock(
+            return_value=httpx.Response(200, json={
+                "entity": "FakeEntity",
+                "fields": [
+                    {"name": "id", "type": "ID"},
+                    {"name": "isDeleted", "type": "SCALAR"},
+                ],
+            })
+        )
+        route = respx.get(f"{mock_session.rest_url}/query/FakeEntity").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.query("FakeEntity", "id > 0")
+        url = str(route.calls[0].request.url)
+        assert "isDeleted%3Dfalse" in url
+
+    @respx.mock
+    def test_search_skips_isdeleted_when_meta_lacks_field(self, mock_auth, mock_session):
+        """search() omits isDeleted:0 when /meta reports the field is absent."""
+        respx.get(f"{mock_session.rest_url}/meta/PlacementChangeRequest").mock(
+            return_value=httpx.Response(200, json={
+                "entity": "PlacementChangeRequest",
+                "fields": [
+                    {"name": "id", "type": "ID"},
+                    {"name": "requestType", "type": "SCALAR"},
+                ],
+            })
+        )
+        route = respx.get(f"{mock_session.rest_url}/search/PlacementChangeRequest").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.search("PlacementChangeRequest", "requestType:Extension")
+        url = str(route.calls[0].request.url)
+        assert "isDeleted" not in url
+
+    @respx.mock
+    def test_meta_result_is_cached(self, mock_auth, mock_session):
+        """_entity_has_isdeleted() fetches /meta once and caches the result."""
+        meta_route = respx.get(f"{mock_session.rest_url}/meta/Placement").mock(
+            return_value=httpx.Response(200, json={
+                "entity": "Placement",
+                "fields": [{"name": "id", "type": "ID"}],
+            })
+        )
+        respx.get(f"{mock_session.rest_url}/query/Placement").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        # Call twice
+        client.query("Placement", "id > 0")
+        client.query("Placement", "id > 1")
+        # /meta should only have been called once
+        assert meta_route.call_count == 1
+
+    @respx.mock
+    def test_meta_error_falls_back_to_appending_clause(self, mock_auth, mock_session):
+        """/meta failure falls back to appending the isDeleted clause (safe default)."""
+        respx.get(f"{mock_session.rest_url}/meta/WeirdEntity").mock(
+            return_value=httpx.Response(500, text="internal error")
+        )
+        route = respx.get(f"{mock_session.rest_url}/query/WeirdEntity").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        client.query("WeirdEntity", "id > 0")
+        url = str(route.calls[0].request.url)
+        # Safe fallback: clause is appended
+        assert "isDeleted%3Dfalse" in url
+
+    @respx.mock
+    def test_denylist_entities_skip_meta_fetch(self, mock_auth, mock_session):
+        """ClientCorporation is in the denylist: /meta is never called for it."""
+        # No /meta route registered — if _entity_has_isdeleted() tried to fetch it
+        # the test would raise a respx.NetworkError (unmatched request).
+        respx.get(f"{mock_session.rest_url}/query/ClientCorporation").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        client = BullhornClient(mock_auth)
+        # Should not raise even though /meta/ClientCorporation is not mocked
+        client.query("ClientCorporation", "status='Active'")
+        url = str(respx.calls.last.request.url)
+        assert "isDeleted" not in url
+
+
 class TestMultipartRequest:
     """Tests for BullhornClient._request_multipart()."""
 
