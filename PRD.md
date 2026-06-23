@@ -294,6 +294,15 @@ All new functionality must have comprehensive unit tests using the existing `res
 
 Bulk operations should process records as efficiently as possible given the one-at-a-time API constraint. Metadata queries should be cached within a session to avoid repeated round-trips for the same entity type.
 
+### NFR-8: Tool Description Context Budget
+
+The startup tool-description enrichment (the `## Field reference` block appended to each tool from Bullhorn `/meta` at startup) shall be selective rather than maximalist, so that the total tool-description payload loaded into a model's context stays small enough to be acceptable on clients that load all tools eagerly (e.g. claude.ai), including conversations that never touch Bullhorn.
+
+- The enriched payload shall preserve the genuinely useful parts of field discovery inline: live field names, required-field flags, inlined picklist values, and configured custom fields (those whose display label differs from the API name).
+- Entity-specific tools shall carry a curated, capped field set for their own entity (full detail). Generic tools that span all entities (`search_entities`, `query_entities`, `update_record`, `get_entity_fields`) shall carry only a compact field-name subset per entity plus a pointer to `get_entity_fields` for the full list.
+- Full per-entity field discovery shall remain available on demand via `get_entity_fields`; trimming the startup payload must not remove any capability.
+- The guidance to call `get_entity_fields` for the full field list shall also appear in the static (pre-enrichment) docstrings of the generic tools, so it survives the enrichment's graceful-fallback path.
+
 ## 8. Constraints and Exclusions
 
 - **No record deletion or merging** — out of scope and explicitly prohibited.

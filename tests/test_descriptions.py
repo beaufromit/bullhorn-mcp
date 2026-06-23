@@ -322,8 +322,7 @@ class TestEnrichToolDescriptions:
         bullet_count = desc.count("\n- `")
         assert bullet_count <= MAX_FIELDS_PER_ENTITY
 
-    @pytest.mark.asyncio
-    async def test_generic_tool_static_docstring_mentions_get_entity_fields(self):
+    def test_generic_tool_static_docstring_mentions_get_entity_fields(self):
         """All 4 GENERIC_DISCOVERY_TOOLS must have 'get_entity_fields' in their static docstrings.
 
         Uses ast.parse on server.py to inspect the raw docstring before any runtime enrichment.

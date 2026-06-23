@@ -59,6 +59,27 @@ uv venv && uv pip install -e ".[dev]"
 .venv/bin/python -m bullhorn_mcp.server
 ```
 
+**Test directly against the live Bullhorn API:**
+
+A `.env` file with real credentials is present. You can write inline Python scripts to call `BullhornClient` directly without going through the MCP layer. Auth is synchronous -- access via the `session` property. Example:
+
+```bash
+.venv/bin/python -c "
+from bullhorn_mcp.config import BullhornConfig
+from bullhorn_mcp.auth import BullhornAuth
+from bullhorn_mcp.client import BullhornClient
+
+config = BullhornConfig.from_env()
+auth = BullhornAuth(config)
+client = BullhornClient(auth)
+
+# e.g. result = client.search('JobOrder', 'isOpen:true', fields=['id','title'], count=5)
+# print(result)
+"
+```
+
+Use this to verify real API behavior -- field names, response shapes, edge cases. **Never use destructive operations** (`create`, `update`, `add_note`, `attach_file`, `parse_resume_file`) against the live API unless the user explicitly asks you to. Read-only methods (`search`, `query`, `get`, `get_association`, `get_meta`) are safe to call freely.
+
 ## Architecture
 
 This is a Python MCP (Model Context Protocol) server that exposes Bullhorn CRM data to AI assistants. The server uses `mcp[server]` via `FastMCP` and communicates over stdio.

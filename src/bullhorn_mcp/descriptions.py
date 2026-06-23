@@ -193,12 +193,6 @@ def build_entity_section(entity: str, fields: list[dict], level: str = "full") -
     if level == "compact":
         # Render only the DEFAULT_FIELDS base names with minimal annotations.
         default_str = DEFAULT_FIELDS.get(entity, "")
-        default_names: set[str] = set()
-        for token in default_str.split(","):
-            token = token.strip()
-            if token:
-                default_names.add(token.split("(")[0].strip())
-
         by_name: dict[str, dict] = {f.get("name", ""): f for f in fields if f.get("name")}
         for name in [t.split("(")[0].strip() for t in default_str.split(",") if t.strip()]:
             f = by_name.get(name)
