@@ -1060,6 +1060,8 @@ def search_entities(
     Filtering by subject-entity ID (e.g. personReference.id:N, jobOrder.id:N) is unreliable
     and should not be used to fetch notes for a specific record. Use get_notes_for_entity
     for record-scoped reads. Use search_notes for full-text keyword search across all notes.
+
+    For the full field list of any entity, call get_entity_fields(entity="<Entity>").
     """
     try:
         client = get_client()
@@ -1114,6 +1116,8 @@ def query_entities(
 
     Note: entity="Note" is not supported — Bullhorn does not expose /query/Note.
     Use get_notes_for_entity for record-scoped reads or search_notes for full-text search.
+
+    For the full field list of any entity, call get_entity_fields(entity="<Entity>").
     """
     if entity == "Note":
         return format_response({
@@ -1576,6 +1580,8 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
         - update_record("ClientCorporation", 98765, {"status": "Active Account"})
         - update_record("ClientContact", 54321, {"Consultant": {"id": 99}})
         - update_record("Candidate", 11234, {"occupation": "Head of Engineering", "dateAvailable": 1735689600000})
+
+    For the full field list of any entity, call get_entity_fields(entity="<Entity>").
     """
     try:
         # CR10 owner stamping intentionally does not apply here — update_record modifies existing records only.
@@ -2695,6 +2701,8 @@ def get_entity_fields(
         - get_entity_fields(entity="ClientContact") - List all fields
         - get_entity_fields(entity="ClientContact", label="Consultant") - Resolve label -> API name
         - get_entity_fields(entity="ClientContact", api_name="recruiterUserID") - Resolve API name -> label
+
+    Returns all fields for any supported entity — use to discover field names before calling update_record, search_entities, query_entities, or create tools.
     """
     try:
         metadata = get_metadata()

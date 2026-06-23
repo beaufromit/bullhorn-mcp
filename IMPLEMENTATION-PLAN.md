@@ -2,7 +2,14 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through CR28 are implemented and tested. **559 tests passing, tagged v0.0.40.** Sprints 30 (CR29) and 31 (CR30) are PLANNED — not yet implemented.
+**Current baseline:** All sprints through Sprint 34 (CR33) are implemented and tested. **630 tests passing, tagged v0.0.45.** Sprint 35 (CR34) is COMPLETE — `select_fields()`, leveled `build_entity_section()`, and `GENERIC_DISCOVERY_TOOLS` implemented; ~80% description token reduction achieved. All 38 MCP tools are present in `server.py`.
+
+**Replan validation (2026-06-23, post-CR33):** Re-reconciled PRD, user stories, and source code with subagent-assisted code search. **630 tests passing, tagged v0.0.45** (`8362aef`). Sprint 34 (CR33) is COMPLETE. Findings:
+- All 21 FRs (FR-1 through FR-21) and 46 user stories (US-1 through US-44 plus US-7A and US-15A) map to implemented tools. No FR↔US↔tool coverage gaps. No skips, TODOs, or FIXMEs in source or tests.
+- **38 tools** confirmed in `server.py` (CR33 added `list_placements`; the prior "37 tools" figure in this plan was stale and is corrected below).
+- **One new DRAFT change request, CR34** (`CR34.md`) — trim the startup tool-description enrichment to cut the tool-description payload from ~111k to ~15k tokens without losing capability. Confirmed via code search that it is **not yet implemented**: `descriptions.py` `build_entity_section(entity, fields)` has no `level` parameter and there is no `select_fields`, `GENERIC_DISCOVERY_TOOLS`, or `MAX_FIELDS_PER_ENTITY`. Added below as **Sprint 35 (PLANNED)**.
+- The CR18 startup enrichment that CR34 trims was never a numbered PRD requirement. To keep the PRD the source of truth for the requirement driving CR34, **PRD.md gained NFR-8 (Tool Description Context Budget)**. No new user stories were added — NFR-8 is a non-functional efficiency requirement with no user-facing behaviour change.
+- CR34 forward-references a future **CR35** (tool consolidation/removal) which has **no specification file yet**; it is noted but not planned. Sequencing note from CR34.md: land CR34 before CR35, as both edit `TOOL_ENTITY_MAP` in `descriptions.py`.
 
 **Replan validation (2026-06-02):** Re-reconciled PRD, user stories, and source code. 570 tests passing (v0.0.42). All 32 tools present and matching the plan; no skips/TODOs/FIXMEs. Full FR↔US↔tool coverage confirmed.
 
@@ -73,7 +80,8 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 31 | **COMPLETE** | CR30: `get_job_submissions` — 570 tests passing, tagged v0.0.42. Review cycle: no critical issues. One moderate (M1): `test_get_job_submissions_pagination` asserted `next_start is not None` instead of the exact value `20` — fixed to `== 20` to match the established pattern for all other pagination tests. |
 | Sprint 32 | **COMPLETE** | CR31: Extend `update_record` docstring to advertise Candidate support + 4 new tests — 575 tests passing, tagged v0.0.43. Review cycle: no critical issues, no moderate issues. Two minors logged: (m1) CR31.md plan description for `test_update_candidate_name_recomputed` says both firstName and lastName are passed AND that `client.get` is called — these claims are mutually exclusive; the test correctly implements the one-sided case only; (m2) updated docstring groups ClientContact and Candidate for `title`-stripping but omits `namePrefix` as the salutation field for ClientContact (the runtime warning at line 40 already names it). |
 | Sprint 33 | **COMPLETE** | CR32: Tearsheet (Hotlist) management — 5 new tools (`list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`), 2 new client methods (`add_association`, `remove_association`) — 595 tests passing, tagged v0.0.44. Review cycle: M2 fixed — empty `candidate_ids` guard added to `add_to_tearsheet`/`remove_from_tearsheet`; 597 tests after fix. M1 false positive (`resolve_caller` vs `resolve_owner` naming in plan). |
-| Sprint 34 | **COMPLETE** | CR33: Metadata-driven isDeleted gate + `list_placements` — 629 tests passing. See CR33.md. Review cycle: M1 fixed — `_PLACEMENT_DEFAULT_FIELDS` in server.py now references `DEFAULT_FIELDS["Placement"]` from client.py at module load time instead of duplicating the string (silent drift risk). M2 fixed — `status` param in `list_placements` validated for single quotes before WHERE construction; matching `test_invalid_status_returns_error` added. **Pattern learnings:** (1) server.py constants that mirror client.py `DEFAULT_FIELDS` entries must reference the source rather than copy the value; (2) structured filter params interpolated into SQL need the same single-quote guard as other input validators, even when a raw `query` param is intentionally accepted; (3) every new `if <param> is not None and <bad>: return error` guard needs a `test_invalid_<param>_returns_error` test in the matching `TestList*` class. 630 tests passing. |
+| Sprint 34 | **COMPLETE** | CR33: Metadata-driven isDeleted gate + `list_placements` — 629 tests passing, **tagged v0.0.45**. See CR33.md. Review cycle: M1 fixed — `_PLACEMENT_DEFAULT_FIELDS` in server.py now references `DEFAULT_FIELDS["Placement"]` from client.py at module load time instead of duplicating the string (silent drift risk). M2 fixed — `status` param in `list_placements` validated for single quotes before WHERE construction; matching `test_invalid_status_returns_error` added. **Pattern learnings:** (1) server.py constants that mirror client.py `DEFAULT_FIELDS` entries must reference the source rather than copy the value; (2) structured filter params interpolated into SQL need the same single-quote guard as other input validators, even when a raw `query` param is intentionally accepted; (3) every new `if <param> is not None and <bad>: return error` guard needs a `test_invalid_<param>_returns_error` test in the matching `TestList*` class. 630 tests passing. |
+| Sprint 35 | **COMPLETE** | CR34: Trim startup tool-description enrichment — select_fields(), leveled build_entity_section(), GENERIC_DISCOVERY_TOOLS; ~80% description token reduction. See Sprint 35 detail. |
 
 ### Sprint 15 post-tag regression note
 
@@ -97,7 +105,7 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note(commenting_person_id)`, `_request_multipart`, `parse_resume_file`, `parse_resume_text`, `attach_file`; `_ENTITY_FIELD` dispatch dict in `add_note` maps each of 7 entity types to its Note association field name
 - `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant extended at module load with env-defined JobOrder aliases via `joborder_config.get_joborder_aliases()`; `FIELD_ALIASES["JobSubmission"] = {}` reserved slot.
-- `src/bullhorn_mcp/server.py` — MCP server with **37 implemented tools**: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `get_job`, `get_candidate`, `get_company`, `get_contact`, `get_job_submissions`, `search_entities`, `query_entities`, `search_emails`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`, `get_notes_for_entity`, `search_notes`, `list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`. Includes `get_client()`, `get_metadata()`, `_shortlist_one()`, `_paginate_envelope()` helpers; `_NOTE_TARGET_ENTITIES` set; `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()`, `_strip_cc_telemetry()` private helpers; `_NOTE_DEFAULT_FIELDS`, `_CC_TAG_RE`, `_valid_note_actions` module-level constants/state.
+- `src/bullhorn_mcp/server.py` — MCP server with **38 implemented tools**: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `list_placements`, `get_job`, `get_candidate`, `get_company`, `get_contact`, `get_job_submissions`, `search_entities`, `query_entities`, `search_emails`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`, `get_notes_for_entity`, `search_notes`, `list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet` (CR33 added `list_placements`). Includes `get_client()`, `get_metadata()`, `_shortlist_one()`, `_paginate_envelope()` helpers; `_NOTE_TARGET_ENTITIES` set; `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()`, `_strip_cc_telemetry()` private helpers; `_NOTE_DEFAULT_FIELDS`, `_CC_TAG_RE`, `_valid_note_actions` module-level constants/state.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
@@ -121,7 +129,7 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_joborder_config.py` — 10 tests (env config loaders for aliases/required/defaults)
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
-- **Total: 575 tests, all passing (v0.0.43)**.
+- **Total: 630 tests, all passing (v0.0.45)**.
 
 ---
 
@@ -2796,3 +2804,108 @@ After implementation:
 **M1 (false positive):** Plan-to-implementation mismatch flagged -- `resolve_caller` vs `resolve_owner`. This was a false positive. `resolve_owner()` is a client method that takes a user identifier string or dict; `resolve_caller()` is the identity function that extracts the authenticated user from the Entra token. The correct pattern for auto-stamping owner is `resolve_caller()` + `{"id": caller["id"]}`, which is the same approach used in `create_company` and `create_contact`. The CR32.md plan used the wrong function name. No code change was needed.
 
 **Tag:** v0.0.44
+
+---
+
+## Sprint 35: CR34 — Trim Startup Tool-Description Enrichment (Context-Weight Reduction) — COMPLETE
+
+**Change request:** CR34.md
+**PRD requirement:** NFR-8 (Tool Description Context Budget)
+**User stories:** none (non-functional efficiency requirement; no user-facing behaviour change)
+**Dependency:** Sprint 34 complete (clean baseline at v0.0.45). Must land **before** any future CR35 (tool consolidation) — both edit `TOOL_ENTITY_MAP` in `descriptions.py`.
+**Risk:** Low-to-medium — description text only, no tool runtime behaviour changes. Main risk is description-presence test churn (existing tests assert on the old maximalist field dump and must be repointed).
+
+### Problem
+
+Measured against the live tenant (deployed server, commit `8362aef`), the startup enrichment in `descriptions.py` produces a **~111k-token** tool-description payload (~118k including parameter schemas). The four generic tools each carry the full field lists of all 10 entities (`search_entities` ~12.97k, `query_entities` ~12.92k, `update_record` ~12.86k, `get_entity_fields` ~12.82k = **~51.6k combined**). Single-entity tools inline every field of their entity uncapped (Candidate 274 fields ~3.0k, Placement 295 fields ~3.2k), repeated across every tool that touches that entity. This loads into model context whenever the connector is enabled, including conversations that never touch Bullhorn, and clients that load tools eagerly (claude.ai) pay it before the user types anything.
+
+The enrichment works as designed; it is maximalist where it should be selective. `get_entity_fields` already exists as the on-demand full-discovery path, so the entire field catalogue does not need preloading.
+
+### Goal
+
+Cut the tool-description payload from ~111k to roughly **~15k tokens** (~80% reduction) without losing capability — full field discovery stays available via `get_entity_fields`. Keep the useful parts of enrichment inline: live field names, required-field flags, inlined picklist values, and configured custom fields.
+
+### Current state (verified 2026-06-23)
+
+- `descriptions.py` defines `SUPPORTED_ENTITIES` (10 entities), `PICKLIST_FIELDS_TO_EXPAND` (`status, employmentType, category, type, source`), `TOOL_ENTITY_MAP` (38 tools mapped), `build_entity_section(entity, fields)` (single render mode, no level), and `enrich_tool_descriptions(mcp, client)`.
+- No `select_fields`, no `GENERIC_DISCOVERY_TOOLS`, no `MAX_FIELDS_PER_ENTITY`, and `build_entity_section` has no `level` parameter. None of CR34 is implemented.
+
+### Tasks
+
+#### T35.1 — Add `select_fields(entity, meta_fields) -> list[dict]` helper
+**File:** `src/bullhorn_mcp/descriptions.py`
+
+Returns a curated, de-duplicated, ordered field list drawn from the live `/meta` fields, in this priority order:
+1. **DEFAULT_FIELDS** for the entity (`from .client import DEFAULT_FIELDS`), in declared order. These are comma-separated strings containing association syntax such as `candidate(id, name)`; parse the base name before `(` to match `/meta` (field is `candidate`, type TO_ONE). Skip any name not present in `/meta`.
+2. **Required fields** (`required: true`).
+3. **Picklist fields** whose name is in `PICKLIST_FIELDS_TO_EXPAND`.
+4. **Configured custom fields**: name matches the Bullhorn custom-field pattern (`custom(Text|Int|Float|Date|Big)\d+`, plus `customObject*`) **AND** `label != name` (an unconfigured custom field keeps its label equal to the API name; a configured one has an admin-set label). Confirmed live: `customText41` → "Candidate Source - This Placement" (kept), bare `customText40` → "customText40" (dropped).
+
+De-duplicate by name preserving first occurrence, then apply a safety cap `MAX_FIELDS_PER_ENTITY = 40`. Order guarantees the cap only trims the lowest-priority custom fields, never required/picklist fields. Entities with no DEFAULT_FIELDS entry (Note, CorporateUser) fall through to steps 2-4.
+
+- **Unit tests** (`tests/test_descriptions.py`):
+  - `test_select_fields_includes_default_fields` — composite names parsed to base, matched against `/meta`.
+  - `test_select_fields_includes_required` and `test_select_fields_includes_picklist`.
+  - `test_select_fields_includes_configured_custom` — `label != name` custom field kept.
+  - `test_select_fields_excludes_unconfigured_custom` — `label == name` custom field dropped.
+  - `test_select_fields_dedupes` — a field qualifying under two rules appears once.
+  - `test_select_fields_respects_cap_priority` — with >40 fields, required/picklist retained and only low-priority customs trimmed.
+  - `test_select_fields_no_default_fields_entry` — Note/CorporateUser fall through cleanly.
+
+#### T35.2 — Add render levels to `build_entity_section`
+**File:** `src/bullhorn_mcp/descriptions.py`
+
+Change signature to `build_entity_section(entity, meta_fields, level)`:
+- **`level="full"`** (entity-specific tools): render the full `select_fields(entity, meta_fields)` result with type, label, `[required]`, and inlined `[Valid values: ...]` for picklist fields. ~300-500 tok/entity.
+- **`level="compact"`** (generic tools): render only the DEFAULT_FIELDS subset as `name (type) — label` lines, **no** picklist value expansion. ~1.2k per generic tool across all 10 entities.
+
+- **Unit tests:**
+  - `test_build_entity_section_full_inlines_picklist_and_required` — `full` contains `[required]` and a `Valid values:` line.
+  - `test_build_entity_section_compact_omits_picklist` — `compact` lists only DEFAULT_FIELDS names/types, no `Valid values:`.
+
+#### T35.3 — Add `GENERIC_DISCOVERY_TOOLS` and rewire `enrich_tool_descriptions`
+**File:** `src/bullhorn_mcp/descriptions.py`
+
+- Add `GENERIC_DISCOVERY_TOOLS = {"search_entities", "query_entities", "update_record", "get_entity_fields"}` (the four tools mapped to all `SUPPORTED_ENTITIES`).
+- In `enrich_tool_descriptions`: for tools in `GENERIC_DISCOVERY_TOOLS`, render every supported entity at `level="compact"` and append a trailing pointer line: `For the full field list of any entity, call get_entity_fields(entity="<Entity>").` For all other tools in `TOOL_ENTITY_MAP`, render their entities at `level="full"`.
+- Per-entity and per-tool try/except graceful-fallback behaviour is unchanged.
+
+- **Unit tests:**
+  - `test_enrich_generic_tools_compact_with_pointer` — a generic tool (e.g. `update_record`) contains compact field names plus the `get_entity_fields` pointer, and **not** a `Valid values:` line.
+  - `test_enrich_entity_tool_full` — an entity tool (e.g. `list_candidates`) contains the full set with a known required field and a `Valid values:` line.
+  - `test_enrich_no_section_exceeds_cap` — no rendered entity section lists more than ~45 fields (cap 40 + footer).
+
+#### T35.4 — Add `get_entity_fields` pointer to static docstrings of the four generic tools
+**File:** `src/bullhorn_mcp/server.py`
+
+Add a one-line `get_entity_fields(entity="<Entity>")` mention to the **static** docstrings of `search_entities`, `query_entities`, `update_record`, and `get_entity_fields`, so the guidance survives the enrichment's try/except fallback path (which appends nothing).
+
+- **Unit test:** extend the existing graceful-fallback test to assert each of the four generic tools' base docstrings mention `get_entity_fields`.
+
+#### T35.5 — Audit and repoint existing description tests
+**File:** `tests/test_descriptions.py` (and any field-presence assertions elsewhere)
+
+Existing tests assert on the old maximalist dump (e.g. presence of a long-tail field on a generic tool, or full field lists). Repoint them to the new compact/full expectations. The graceful-fallback test itself is otherwise unchanged.
+
+### Projected result (from CR34.md)
+
+| Component                  | Before | After (est.) |
+|----------------------------|--------|--------------|
+| Generic tools (4, compact) | ~51.6k | ~5k          |
+| Entity tool sections (full)| ~59.4k | ~10k         |
+| **Description total**      | ~111k  | ~15k         |
+| Parameter schemas          | ~7k    | ~7k          |
+| **Tool payload total**     | ~118k  | ~22k         |
+
+### Verification
+
+1. `.venv/bin/pytest` — all tests pass (expected delta: net new `select_fields`/level tests minus any removed maximalist-dump assertions).
+2. Run the enrichment against the live tenant (script in `CR34-prompt-check.md` Part 1) and confirm: total description payload under ~20k tok; each generic tool under ~1.5k tok and still containing real field names plus the `get_entity_fields` pointer; no entity section exceeds ~45 fields; `list_candidates` retains a `[required]` marker and a `Valid values:` line; `list_placements` retains `customText41` ("Candidate Source - This Placement"); an unconfigured custom field (label == name) is absent.
+3. Confirm the four generic tools' static docstrings mention `get_entity_fields`.
+4. Server-side confirmation (CR34-prompt-check.md Part 2): after `git pull` + `systemctl restart bullhorn-mcp.service`, the deployed total matches the local Part 1 number.
+5. Smoke test: `get_entity_fields` still returns full lists; a normal search/query/update works; `update_record` can still name common fields without first calling `get_entity_fields`.
+6. Tag the next patch version after the review cycle passes.
+
+### Forward reference: CR35 (not yet specified)
+
+CR34.md notes a planned **CR35** for tool consolidation/removal. No `CR35.md` exists yet, so it is **not planned here**. When authored, sequence it after CR34 — both edit `TOOL_ENTITY_MAP` in `descriptions.py`.
