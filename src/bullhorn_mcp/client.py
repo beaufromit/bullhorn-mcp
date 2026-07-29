@@ -39,6 +39,12 @@ DEFAULT_FIELDS = {
     # Note and CorporateUser were absent until CR37, which left their startup
     # field reference rendering empty. Every name below is verified present on
     # /meta and returned by a live get() for the respective entity.
+    # The "Note" entry is LOAD-BEARING for the add_note write path, not just for
+    # enrichment: add_note() reads the new note back via get("Note", id), which
+    # falls back to fields=* without this entry, and this tenant rejects that with
+    # 400 errors.allFieldsNotAllowed — surfacing a failure for a note that was
+    # already written. Do not remove or trim it without re-verifying add_note
+    # live. Pinned by test_add_note_read_back_uses_curated_note_fields.
     "Note": (
         "id,action,comments,dateAdded,commentingPerson,"
         "candidates,clientContacts,jobOrders,placements"

@@ -2,7 +2,7 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 34 (CR33) are implemented and tested. **630 tests passing, tagged v0.0.45.** Sprint 35 (CR34) is COMPLETE — `select_fields()`, leveled `build_entity_section()`, and `GENERIC_DISCOVERY_TOOLS` implemented; ~80% description token reduction achieved. All 38 MCP tools are present in `server.py`.
+**Current baseline:** All sprints through Sprint 36 (CR37) are implemented and tested. **715 tests passing** (last tag v0.0.46 at 648 tests, Sprint 35). Sprint 36 (CR37) is COMPLETE — `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
 
 **Replan validation (2026-06-23, post-CR33):** Re-reconciled PRD, user stories, and source code with subagent-assisted code search. **630 tests passing, tagged v0.0.45** (`8362aef`). Sprint 34 (CR33) is COMPLETE. Findings:
 - All 21 FRs (FR-1 through FR-21) and 46 user stories (US-1 through US-44 plus US-7A and US-15A) map to implemented tools. No FR↔US↔tool coverage gaps. No skips, TODOs, or FIXMEs in source or tests.
@@ -82,6 +82,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 33 | **COMPLETE** | CR32: Tearsheet (Hotlist) management — 5 new tools (`list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`), 2 new client methods (`add_association`, `remove_association`) — 595 tests passing, tagged v0.0.44. Review cycle: M2 fixed — empty `candidate_ids` guard added to `add_to_tearsheet`/`remove_from_tearsheet`; 597 tests after fix. M1 false positive (`resolve_caller` vs `resolve_owner` naming in plan). |
 | Sprint 34 | **COMPLETE** | CR33: Metadata-driven isDeleted gate + `list_placements` — 629 tests passing, **tagged v0.0.45**. See CR33.md. Review cycle: M1 fixed — `_PLACEMENT_DEFAULT_FIELDS` in server.py now references `DEFAULT_FIELDS["Placement"]` from client.py at module load time instead of duplicating the string (silent drift risk). M2 fixed — `status` param in `list_placements` validated for single quotes before WHERE construction; matching `test_invalid_status_returns_error` added. **Pattern learnings:** (1) server.py constants that mirror client.py `DEFAULT_FIELDS` entries must reference the source rather than copy the value; (2) structured filter params interpolated into SQL need the same single-quote guard as other input validators, even when a raw `query` param is intentionally accepted; (3) every new `if <param> is not None and <bad>: return error` guard needs a `test_invalid_<param>_returns_error` test in the matching `TestList*` class. 630 tests passing. |
 | Sprint 35 | **COMPLETE** | CR34: Trim startup tool-description enrichment — select_fields(), leveled build_entity_section(), GENERIC_DISCOVERY_TOOLS; ~80% description token reduction. See Sprint 35 detail. |
+| Sprint 36 | **COMPLETE** | CR37: Make note-field filtering discoverable — `note_action` parameter on `list_contacts`/`list_candidates`/`list_jobs`, empty-route probe warning on the Lucene note path, three enrichment field-selection fixes. Tool count unchanged at 38. **715 tests passing.** See Sprint 36 detail. |
 
 ### Sprint 15 post-tag regression note
 
@@ -2909,3 +2910,37 @@ Existing tests assert on the old maximalist dump (e.g. presence of a long-tail f
 ### Forward reference: CR35 (not yet specified)
 
 CR34.md notes a planned **CR35** for tool consolidation/removal. No `CR35.md` exists yet, so it is **not planned here**. When authored, sequence it after CR34 — both edit `TOOL_ENTITY_MAP` in `descriptions.py`.
+
+## Sprint 36: CR37 — Make Note-Field Filtering Discoverable — COMPLETE
+
+**Change request:** CR37.md
+**PRD requirement:** FR-16 (note retrieval and search)
+**Dependency:** Sprint 35 complete (baseline v0.0.46, 648 tests).
+**Risk:** Medium — the nested `notes.action` dot notation this sprint builds on is undocumented by Bullhorn. Mitigated by a live two-way canary in `.claude/skills/bullhorn-mcp-live-api-method/scripts/smoke_read.py`; `/query/NoteEntity` (CR37 Part 3) is the fully-evidenced fallback design.
+
+**Note on process:** this sprint was written up **after** the build. Pre-build sprint planning was skipped and CR37.md served as the specification. The review cycle flagged the missing section (M3), which is why it exists at the level of detail below rather than as a task breakdown.
+
+### Problem
+
+A user asked for contacts whose notes carry a given action. That is a working query on this tenant (`/search/ClientContact?query=notes.action:"BD Call"` returns 1978), but nothing in the tool surface revealed it. The failure was **discoverability, not capability**. Five compounding causes, per CR37 Part 4: no tool description mentioned nested association fields; the `Note` field reference rendered empty at startup so the `action` picklist never reached the agent; `search_notes` actively misdirected the reader; every wrong guess returned HTTP 200 with `total: 0`, indistinguishable from a genuine empty result; and two of the four plausible entry points cannot work by design.
+
+### What shipped
+
+1. **`note_action` parameter** on `list_contacts`, `list_candidates`, `list_jobs`. Validated against the live `Note.action` picklist via the existing `_load_valid_note_actions(metadata)`; rejects unknown values with the valid list in the error; builds `notes.action:"<value>"` with the quoting handled by the server. Falls back to building the clause unvalidated when `/meta` is unavailable, rather than blocking a working search. Tool count unchanged at 38.
+2. **Empty-route probe** — `BullhornClient.note_search_returns_results()` issues one match-all `/search/Note` query and caches the verdict per process. Wired into `search_notes`' Lucene branch and (added in the review cycle, M2) into `search_entities(entity="Note")`. On a zero-result search with a zero-result probe, the response gains a `warnings` key naming the routes that do return data. This is a **capability detector, not a fault detector**: if `/search/Note` ever starts returning documents, the warning disappears with no code edit.
+3. **Three enrichment field-selection fixes** in `descriptions.py` / `client.py` — `get_meta()` now sends `meta=full` (so `required` is populated at all, a 10-sprint-old latent bug from CR18); `Note` and `CorporateUser` added to `DEFAULT_FIELDS`; `action` added to `PICKLIST_FIELDS_TO_EXPAND`; step 4's custom-field filter tightened to exclude Bullhorn auto-generated labels, plus a step-0 identity seed so `id`/`firstName`/`lastName`/`email` can never be crowded out.
+4. **Docstrings** on the three list tools plus `search_entities` and `search_notes`, teaching the nested pattern, the mandatory quoting rule, that results are parent records (deduplicated, never notes), and that `notes.isDeleted` is unsupported.
+5. **Repo cleanup** (`.claude/skills/`, `PRD.md`, `NEXT_STEPS.md`) — corrected the false belief that `fieldsFromIndex: false` indicates an unconfigured index, and deleted every reference to the ATS "Advanced Note Searching" UI option, which has no bearing on REST.
+
+### Measured outcomes
+
+- **715 tests passing** (648 baseline → 707 at build → 715 after the review cycle). CR37 estimated ~660; the gap is parametrisation, not extra coverage.
+- Token cost of the startup enrichment payload: **48,695 → 56,175 chars (+7,480, ~+1,870 tokens, +15.4%)**, measured live across all 10 `SUPPORTED_ENTITIES`. The increase is dominated by `[required]` markers rendering for the first time (0 → 59) and by the previously empty `Note` section (15 → 755 chars). The tightened custom-field filter pulls the other way (Placement 40 → 25 fields, CorporateUser 30 → 9) and drops 87 fields across all entities, **every one a Bullhorn auto-labelled placeholder**.
+- Live-verified counts for `notes.action:"BD Call"`: ClientContact 1978, Candidate 221, JobOrder 34.
+
+### Review cycle findings
+
+- **M1 fixed** — `DEFAULT_FIELDS["Note"]` turned out to be load-bearing for the `add_note` **write** path, not just for enrichment. `add_note()` ends with `get("Note", note_id)`, which falls back to `fields=*` without a `Note` entry, and this tenant rejects that with `400 errors.allFieldsNotAllowed`. So `add_note` had been raising *after* successfully writing the note — the "write reported failure but the record exists" mode. CR37 fixed it incidentally and nothing pinned it: the existing `add_note` tests mock `/entity/Note/{id}` with respx, which does not match on query parameters, so they passed identically either way. Added `test_add_note_read_back_uses_curated_note_fields`, which asserts the read-back's `fields` param equals `DEFAULT_FIELDS["Note"]` and is not `*`, plus a comment on the constant recording the coupling.
+- **M2 fixed** — the Change 2 probe was wired into `search_notes` only, so `search_entities(entity="Note")` still returned a silent empty envelope through the same `/search/Note` route, and the same diff's docstring made that route *more* likely to be tried. Probe now also fires there (entity match is case- and whitespace-insensitive), gated on an empty result so it costs nothing on the normal path. Six tests added.
+- **M3 fixed** — the whole Part 6 deliverable, including the live canary that is Change 1's only stated risk mitigation, was untracked (`?? .claude/skills/`). Now committed. This section is the other half of that finding.
+- **Pattern learnings:** (1) adding an entity to `DEFAULT_FIELDS` changes `client.get()` for that entity, which puts it on every **write** path that reads its record back — check `add_note`/`update` call sites, not just the enrichment consumer that motivated the change; (2) respx routes do not match on query parameters, so a test asserting a read-back's *behaviour* proves nothing about its *fields* param — assert `route.calls[0].request.url.params` explicitly; (3) when a reliability probe is added to one tool, grep for sibling paths reaching the same endpoint before calling it done; (4) deliverables outside `src/` and `tests/` need an explicit `git status` check before the build commit — an untracked file is invisible to `git diff HEAD~1` and therefore to the review.

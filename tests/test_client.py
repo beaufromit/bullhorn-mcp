@@ -528,6 +528,31 @@ class TestAddNote:
         assert body["comments"] == "Test note"
 
     @respx.mock
+    def test_add_note_read_back_uses_curated_note_fields(self, mock_auth, mock_session):
+        """add_note()'s post-write read-back must not request fields=*.
+
+        This tenant rejects fields=* with 400 errors.allFieldsNotAllowed, so a
+        get("Note", id) that falls back to it raises AFTER the note has already
+        been written. DEFAULT_FIELDS["Note"] is what prevents that, so the
+        coupling is asserted here rather than left to a comment.
+        """
+        respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88920, "changeType": "INSERT"})
+        )
+        read_back = respx.get(f"{mock_session.rest_url}/entity/Note/88920").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88920, "action": "General Note"}})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.add_note("Candidate", 11111, "General Note", "Strong fit")
+
+        requested = read_back.calls[0].request.url.params["fields"]
+        assert requested != "*"
+        assert requested == DEFAULT_FIELDS["Note"]
+        for name in ("id", "action", "comments", "dateAdded"):
+            assert name in requested.split(",")
+
+    @respx.mock
     def test_add_note_with_commenting_person(self, mock_auth, mock_session):
         """add_note() sets commentingPerson when commenting_person_id is passed."""
         route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(

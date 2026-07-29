@@ -1170,8 +1170,10 @@ def search_entities(
 
     On entity="Note": /search/Note returns no documents for any query on this
     account, so it cannot be used to find notes, and filtering by subject-entity ID
-    (e.g. personReference.id:N) is unreliable regardless. Use get_notes_for_entity
-    for a single record's notes, or the nested pattern above to find records.
+    (e.g. personReference.id:N) is unreliable regardless. When that is detected the
+    response carries a ``warnings`` key and the empty ``data`` says nothing about
+    whether matching notes exist. Use get_notes_for_entity for a single record's
+    notes, or the nested pattern above to find records.
 
     Args:
         entity: Entity type (JobOrder, Candidate, Placement, ClientCorporation, ClientContact, etc.)
@@ -1207,7 +1209,22 @@ def search_entities(
             start=start,
         )
 
-        return format_response(_paginate_envelope(meta, start, limit))
+        envelope = _paginate_envelope(meta, start, limit)
+
+        # entity="Note" reaches the same /search/Note route as search_notes'
+        # Lucene branch, so an empty result here is ambiguous in exactly the same
+        # way: either "no matches" or "this route returns no documents at all".
+        # Probe once so the route is never rendered as a factual answer about the
+        # caller's data.
+        if (
+            (entity or "").strip().lower() == "note"
+            and not envelope["data"]
+            and not envelope["pagination"]["total"]
+            and client.note_search_returns_results() is False
+        ):
+            envelope["warnings"] = [_NOTE_INDEX_EMPTY_WARNING]
+
+        return format_response(envelope)
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -1814,8 +1831,8 @@ _NOTE_INDEX_EMPTY_WARNING = (
     "that do return note data: (1) list_contacts / list_candidates / list_jobs "
     'with note_action="<action>", to find the parent records carrying a given '
     'note action; (2) a nested query such as notes.action:"BD Call" via '
-    "search_entities on the parent entity; (3) entity_filter on this tool, or "
-    "get_notes_for_entity(entity, entity_id), for a single record's notes."
+    "search_entities on the parent entity; (3) search_notes with entity_filter, "
+    "or get_notes_for_entity(entity, entity_id), for a single record's notes."
 )
 
 

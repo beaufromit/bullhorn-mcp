@@ -6597,6 +6597,75 @@ class TestSearchNotesEmptyIndexWarning:
         assert "contact bullhorn" not in text
 
 
+class TestSearchEntitiesNoteEmptyIndexWarning:
+    """search_entities(entity="Note") reaches the same route, so it must warn too."""
+
+    def test_warns_on_empty_note_search(self, mock_client):
+        """Otherwise the sibling path still renders an unusable route as an answer."""
+        mock_client.search.return_value = []
+        mock_client.note_search_returns_results.return_value = False
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_entities(entity="Note", query="comments:visa")
+
+        data = json.loads(result)
+        assert data["data"] == []
+        assert data["pagination"]["total"] == 0
+        assert data["warnings"] == [server._NOTE_INDEX_EMPTY_WARNING]
+        mock_client.note_search_returns_results.assert_called_once()
+
+    @pytest.mark.parametrize("entity", ["note", "  Note  "])
+    def test_entity_name_match_is_case_and_space_insensitive(self, mock_client, entity):
+        """The agent supplies this string free-form; casing must not lose the warning."""
+        mock_client.search.return_value = []
+        mock_client.note_search_returns_results.return_value = False
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_entities(entity=entity, query="comments:visa")
+
+        assert "warnings" in json.loads(result)
+
+    def test_does_not_warn_when_probe_finds_documents(self, mock_client):
+        """A usable route means the empty result is a genuine "no matches"."""
+        mock_client.search.return_value = []
+        mock_client.note_search_returns_results.return_value = True
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_entities(entity="Note", query="comments:asdfghjkl")
+
+        assert "warnings" not in json.loads(result)
+
+    def test_does_not_warn_when_probe_verdict_unknown(self, mock_client):
+        """A failed probe is not evidence; assert nothing about the route."""
+        mock_client.search.return_value = []
+        mock_client.note_search_returns_results.return_value = None
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_entities(entity="Note", query="comments:asdfghjkl")
+
+        assert "warnings" not in json.loads(result)
+
+    def test_other_entities_never_probe(self, mock_client):
+        """An empty Candidate search is a real answer; do not spend a probe call."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_entities(entity="Candidate", query="status:Nonexistent")
+
+        mock_client.note_search_returns_results.assert_not_called()
+        assert "warnings" not in json.loads(result)
+
+    def test_does_not_probe_when_note_results_returned(self, mock_client):
+        """Only an empty result is ambiguous."""
+        mock_client.search.return_value = [{"id": 1}]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_entities(entity="Note", query="comments:visa")
+
+        mock_client.note_search_returns_results.assert_not_called()
+        assert "warnings" not in json.loads(result)
+
+
 class TestNoAdvancedNoteSearchingReferences:
     """CR37 Part 6 item B: the ATS UI note-search option has no bearing on REST."""
 
