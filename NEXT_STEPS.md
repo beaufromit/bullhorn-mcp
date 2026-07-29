@@ -42,8 +42,8 @@ Small, verified loose ends. All are already labeled OPEN DEBT in the skill libra
 Justified directly by "AI loop + occasional human." Today the adversarial review loop is the ONLY quality gate and a human eyeball is the only drift detector. Three additions, each its own CR:
 
 1. **Minimal CI.** A GitHub Actions workflow that runs `pytest` on every push. Nothing fancy. It catches environment drift (the Sprint 15 FastMCP breakage class) and push mistakes the local loop cannot. The repo has no `.github/` today.
-2. **A scheduled live canary.** `.claude/skills/bullhorn-mcp-live-api-method/scripts/smoke_read.py` already does the right thing (read-only auth + one search per core entity). Run it on a schedule from the production box and alert on failure. This converts the project's worst incident class (Bullhorn changing behavior server-side, e.g. the notes 500 and the entityId outage) from user-reported to self-detected. Keep it strictly read-only.
-3. **A token-budget regression gate.** `.claude/skills/bullhorn-mcp-run-and-operate/scripts/measure_descriptions.py` measures enriched tool-description size. Record the current number after CR34, set a threshold, and re-run it in the review checklist for any CR that touches docstrings or descriptions.py. CR18's flagged risk materialized once (~118k tokens); do not let it creep back.
+2. **A scheduled live canary.** `scripts/smoke_read.py` already does the right thing (read-only auth + one search per core entity). Run it on a schedule from the production box and alert on failure. This converts the project's worst incident class (Bullhorn changing behavior server-side, e.g. the notes 500 and the entityId outage) from user-reported to self-detected. Keep it strictly read-only.
+3. **A token-budget regression gate.** `scripts/measure_descriptions.py` measures enriched tool-description size. Record the current number after CR34, set a threshold, and re-run it in the review checklist for any CR that touches docstrings or descriptions.py. CR18's flagged risk materialized once (~118k tokens); do not let it creep back.
 
 ## Priority 2: The productization campaign
 
