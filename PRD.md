@@ -189,7 +189,7 @@ The MCP shall provide tools for creating Candidate records and processing CVs:
 The MCP shall provide read tools for Bullhorn Note records:
 
 - `get_notes_for_entity(entity, entity_id, count, start, fields)` shall return all notes associated with a given entity record, using the Bullhorn association endpoint `GET /entity/{Entity}/{id}/notes`. Responses are wrapped in the standard pagination envelope (FR-19). Callers must use `next_start` from the pagination block (not `start + count`) because server-side isDeleted filtering of association results is not possible — the `count` in the envelope may be smaller than the page size when deleted notes are filtered client-side.
-- `search_notes(query, entity_filter, count, start, fields)` shall perform full-text Lucene search over Note records using `/search/Note`. The `entity_filter` parameter optionally restricts results to notes linked to a specific entity type and ID (applied client-side as a comment substring match when entity_filter is set). The Lucene path requires the Bullhorn "Advanced Note Searching" feature to be enabled on the tenant.
+- `search_notes(query, entity_filter, count, start, fields)` shall perform full-text Lucene search over Note records using `/search/Note`. The `entity_filter` parameter optionally restricts results to notes linked to a specific entity type and ID (applied client-side as a comment substring match when entity_filter is set). On this account the Lucene path returns no documents for any query; when that is detected the response carries a `warnings` key naming the routes that do return note data (the `note_action` parameter on the list tools, a nested `notes.action` query on the parent entity, `entity_filter`, or `get_notes_for_entity`).
 - `query_entities(entity="Note")` is explicitly refused with a helpful error; callers must use `get_notes_for_entity` or `search_notes`.
 
 ### FR-17: Email Search
@@ -478,7 +478,7 @@ As a consultant, I want to retrieve all notes attached to a specific contact, co
 
 **US-33: Full-text search notes**
 As a consultant, I want to search notes by keyword across all entities, optionally filtered to a specific entity, so that I can find relevant context quickly.
-- **Acceptance**: `search_notes(query="Twin.so", entity_filter="ClientContact:54321")` returns notes mentioning "Twin.so" linked to contact 54321. Without `entity_filter`, returns matching notes across all entities (requires Advanced Note Searching to be enabled on the Bullhorn tenant).
+- **Acceptance**: `search_notes(query="Twin.so", entity_filter="ClientContact:54321")` returns notes mentioning "Twin.so" linked to contact 54321. Without `entity_filter`, queries the tenant-wide Lucene note route; on this account that route returns no documents, so the response carries a `warnings` key pointing at the routes that do.
 
 ### Email Search
 

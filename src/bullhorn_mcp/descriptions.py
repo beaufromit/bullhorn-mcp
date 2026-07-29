@@ -44,7 +44,14 @@ PICKLIST_FIELDS_TO_EXPAND: set[str] = {
     "category",
     "type",
     "source",
+    # Note.action. Inlining its values lets an agent pick a legal note action (and
+    # a legal note_action filter) without a metadata round trip.
+    "action",
 }
+
+# Identity fields always seeded into a full entity section, so they can never be
+# crowded out of MAX_FIELDS_PER_ENTITY by the custom-field flood.
+_IDENTITY_FIELDS: tuple[str, ...] = ("id", "firstName", "lastName", "name", "email")
 
 # Tools that work across many entity types. They get compact per-entity sections
 # rather than full ones to avoid overwhelming the context window.
@@ -100,16 +107,30 @@ TOOL_ENTITY_MAP: dict[str, list[str]] = {
 }
 
 
+def _is_auto_label(name: str, label: str) -> bool:
+    """Return True if ``label`` is Bullhorn's auto-generated label for ``name``.
+
+    Bullhorn labels every unused custom slot by spacing out its field name, e.g.
+    customFloat23 -> "Custom Float23". Normalising both sides (drop whitespace,
+    lowercase) makes those identical, while a genuinely renamed field such as
+    customText41 -> "Placement Type" stays distinct.
+    """
+    return "".join(label.split()).lower() == "".join(name.split()).lower()
+
+
 def select_fields(entity: str, meta_fields: list[dict]) -> list[dict]:
     """Return a curated, de-duped, capped list of fields for an entity section.
 
     Selection priority:
+      0. Identity fields (_IDENTITY_FIELDS) present in meta_fields, so an entity
+         missing from DEFAULT_FIELDS still renders something useful.
       1. Fields listed in DEFAULT_FIELDS for the entity (base name before "(" is
          used to strip association-syntax qualifiers such as "candidate(id,name)").
       2. Fields marked required in meta_fields.
       3. Fields whose name appears in PICKLIST_FIELDS_TO_EXPAND.
-      4. Custom fields (name matches _CUSTOM_FIELD_RE) that carry a human-readable
-         label different from the field name.
+      4. Custom fields (name matches _CUSTOM_FIELD_RE) that carry a genuinely
+         renamed label — Bullhorn auto-labels every unused custom slot
+         ("Custom Float23" for customFloat23), and those are excluded.
 
     De-duplication is by field name, first-occurrence wins. The resulting list is
     capped at MAX_FIELDS_PER_ENTITY entries.
@@ -145,6 +166,11 @@ def select_fields(entity: str, meta_fields: list[dict]) -> list[dict]:
         seen.add(name)
         selected.append(by_name[name])
 
+    # Step 0: identity fields, always first.
+    for name in _IDENTITY_FIELDS:
+        _add(name)
+
+    # Step 1: DEFAULT_FIELDS for the entity.
     for name in default_names:
         _add(name)
 
@@ -159,11 +185,14 @@ def select_fields(entity: str, meta_fields: list[dict]) -> list[dict]:
         if name in PICKLIST_FIELDS_TO_EXPAND:
             _add(name)
 
-    # Step 4: named custom fields with a human-readable label.
+    # Step 4: custom fields that carry a genuinely renamed label. Bullhorn
+    # auto-labels every unused slot, so "label != name" alone admits hundreds of
+    # empty placeholders and the MAX_FIELDS_PER_ENTITY cap then truncates before
+    # reaching anything useful (CR37 Part 5 bug C).
     for f in meta_fields:
         name = f.get("name", "")
         label = f.get("label", "")
-        if _CUSTOM_FIELD_RE.match(name) and label and label != name:
+        if _CUSTOM_FIELD_RE.match(name) and label and not _is_auto_label(name, label):
             _add(name)
 
     return selected[:MAX_FIELDS_PER_ENTITY]

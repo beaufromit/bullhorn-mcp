@@ -790,6 +790,152 @@ class TestListContacts:
         assert call_args.kwargs["start"] == 0
 
 
+class TestNoteActionFilter:
+    """CR37: the note_action parameter on list_contacts/list_candidates/list_jobs."""
+
+    VALID_ACTIONS = {"BD Call", "Agent added", "Outbound Call"}
+
+    @pytest.fixture
+    def picklist(self):
+        """Patch the Note.action picklist loader to a known value set."""
+        with patch.object(
+            server, "_load_valid_note_actions", return_value=set(self.VALID_ACTIONS)
+        ):
+            yield
+
+    @pytest.mark.parametrize(
+        "tool_name,entity",
+        [
+            ("list_contacts", "ClientContact"),
+            ("list_candidates", "Candidate"),
+            ("list_jobs", "JobOrder"),
+        ],
+    )
+    def test_note_action_builds_quoted_clause(self, mock_client, picklist, tool_name, entity):
+        """The value must be double-quoted: an unquoted multi-word action matches nothing."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            getattr(server, tool_name)(note_action="BD Call")
+
+        call_args = mock_client.search_with_meta.call_args
+        assert call_args.kwargs["query"] == 'notes.action:"BD Call"'
+        assert call_args.kwargs["entity"] == entity
+
+    def test_note_action_combines_with_query_and_status(self, mock_client, picklist):
+        """Combining a note filter with parent filters is the whole point of the parameter."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_contacts(query="lastName:Smith", status="Active", note_action="BD Call")
+
+        query = mock_client.search_with_meta.call_args.kwargs["query"]
+        assert query == '((lastName:Smith) AND status:"Active") AND notes.action:"BD Call"'
+
+    def test_note_action_normalises_case_to_picklist(self, mock_client, picklist):
+        """Lucene matches actions case-insensitively; normalise rather than reject."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_contacts(note_action="bd call")
+
+        assert mock_client.search_with_meta.call_args.kwargs["query"] == 'notes.action:"BD Call"'
+
+    def test_note_action_rejects_unknown_value(self, mock_client, picklist):
+        """An unknown action is rejected with the valid picklist in the error."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_contacts(note_action="Nonexistent Action")
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_note_action"
+        assert data["valid_actions"] == sorted(self.VALID_ACTIONS)
+        mock_client.search_with_meta.assert_not_called()
+
+    @pytest.mark.parametrize("bad_value", ['BD "Call', "BD 'Call", "   "])
+    def test_note_action_rejects_quotes_and_blanks(self, mock_client, picklist, bad_value):
+        """Quote characters would break out of the generated clause."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_contacts(note_action=bad_value)
+
+        assert json.loads(result)["error"] == "invalid_note_action"
+        mock_client.search_with_meta.assert_not_called()
+
+    def test_note_action_builds_clause_when_picklist_unavailable(self, mock_client):
+        """A failed /meta call must not block a working search (CR37 deliverable D)."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "_load_valid_note_actions", return_value=None), \
+             patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_contacts(note_action="Anything At All")
+
+        assert "error" not in json.loads(result)
+        query = mock_client.search_with_meta.call_args.kwargs["query"]
+        assert query == 'notes.action:"Anything At All"'
+
+    def test_omitting_note_action_leaves_query_untouched(self, mock_client, picklist):
+        """No note_action means no nested clause, preserving pre-CR37 behaviour."""
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_contacts(query="lastName:Smith")
+
+        assert mock_client.search_with_meta.call_args.kwargs["query"] == "lastName:Smith"
+
+    @pytest.mark.parametrize(
+        "tool_name", ["list_contacts", "list_candidates", "list_jobs"]
+    )
+    def test_no_generated_query_uses_notes_isdeleted(self, mock_client, picklist, tool_name):
+        """notes.isDeleted returns 0 on every entity, so it must never be generated.
+
+        A future edit adding it for symmetry with the top-level isDeleted
+        auto-append would silently break every note filter.
+        """
+        mock_client.search.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            getattr(server, tool_name)(note_action="BD Call", status="Active")
+
+        query = mock_client.search_with_meta.call_args.kwargs["query"]
+        assert "notes.isDeleted" not in query
+
+    def test_note_guidance_reaches_the_rendered_tool_description(self):
+        """Assert on what the agent RECEIVES, not on the Python docstring.
+
+        FastMCP builds tool.description from the docstring text BEFORE the "Args:"
+        section only; Args entries become parameter-schema descriptions and
+        everything after them (Returns:, Examples:) is dropped. Guidance placed
+        after Examples: therefore never reaches the agent, which is exactly the
+        discoverability failure CR37 exists to fix — so this test reads the
+        rendered description rather than __doc__.
+        """
+        import asyncio
+
+        tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+
+        for name in ("list_contacts", "list_candidates", "list_jobs", "search_entities"):
+            description = tools[name].description or ""
+            assert "notes.action" in description, f"{name} description omits the nested path"
+            assert 'notes.action:"' in description, f"{name} description omits the quoting rule"
+            assert "notes.isDeleted" in description, f"{name} description omits the isDeleted caveat"
+            assert "get_notes_for_entity" in description, f"{name} description omits the notes route"
+
+        for name in ("list_contacts", "list_candidates", "list_jobs"):
+            note_action = tools[name].parameters["properties"]["note_action"]
+            assert "note" in (note_action.get("description") or "").lower()
+
+    def test_search_notes_description_routes_to_working_paths(self):
+        """search_notes must name where to go instead, in the text the agent reads."""
+        import asyncio
+
+        tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+        description = tools["search_notes"].description or ""
+
+        assert "note_action" in description
+        assert 'notes.action:"BD Call"' in description
+        assert "get_notes_for_entity" in description
+        assert "advanced note searching" not in description.lower()
+
+
 class TestListCompanies:
     """Tests for list_companies tool."""
 
@@ -6364,6 +6510,112 @@ class TestSearchNotes:
         call_args = mock_client.search_with_meta.call_args
         fields_arg = call_args.kwargs.get("fields") or call_args.args[2]
         assert "clientCorporation" not in fields_arg
+
+
+class TestSearchNotesEmptyIndexWarning:
+    """CR37 Change 2: distinguish "no matches" from "this route returns nothing"."""
+
+    def test_search_notes_warns_when_index_empty(self, mock_client):
+        """A zero-result Lucene search plus a zero-result probe must warn."""
+        mock_client.search.return_value = []
+        mock_client.note_search_returns_results.return_value = False
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("Auto-added by Application Triage")
+
+        data = json.loads(result)
+        assert data["data"] == []
+        assert data["pagination"]["total"] == 0
+        assert "warnings" in data
+        assert len(data["warnings"]) == 1
+        mock_client.note_search_returns_results.assert_called_once()
+
+    def test_search_notes_does_not_warn_when_probe_finds_documents(self, mock_client):
+        """A usable route means an empty result is a genuine "no matches" — no warning."""
+        mock_client.search.return_value = []
+        mock_client.note_search_returns_results.return_value = True
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("asdfghjkl")
+
+        data = json.loads(result)
+        assert data["data"] == []
+        assert "warnings" not in data
+
+    def test_search_notes_does_not_warn_when_probe_verdict_unknown(self, mock_client):
+        """A failed probe is not evidence; do not assert anything about the route."""
+        mock_client.search.return_value = []
+        mock_client.note_search_returns_results.return_value = None
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("asdfghjkl")
+
+        assert "warnings" not in json.loads(result)
+
+    def test_search_notes_does_not_probe_when_results_returned(self, mock_client, sample_note_records):
+        """The probe costs an API call; only spend it on an ambiguous empty result."""
+        mock_client.search.return_value = [sample_note_records[0]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("strong fit")
+
+        mock_client.note_search_returns_results.assert_not_called()
+        assert "warnings" not in json.loads(result)
+
+    def test_entity_filter_path_never_warns(self, mock_client):
+        """The association route is reliable, so an empty result there is a real answer."""
+        mock_client.get_association.return_value = []
+        mock_client.note_search_returns_results.return_value = False
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes(
+                "nothing", entity_filter={"type": "Candidate", "id": 169020}
+            )
+
+        assert "warnings" not in json.loads(result)
+        mock_client.note_search_returns_results.assert_not_called()
+
+    def test_warning_names_nested_pattern_and_note_action(self, mock_client):
+        """The warning is only useful if it routes the agent somewhere that works."""
+        mock_client.search.return_value = []
+        mock_client.note_search_returns_results.return_value = False
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes("anything")
+
+        warning = json.loads(result)["warnings"][0]
+        assert 'notes.action:"BD Call"' in warning
+        assert "note_action" in warning
+        assert "get_notes_for_entity" in warning
+        assert "entity_filter" in warning
+
+    @pytest.mark.parametrize("banned", ["broken", "misconfigured", "outage", "not enabled"])
+    def test_warning_states_behaviour_without_diagnosing_bullhorn(self, banned):
+        """CR37 wording constraint: state observed behaviour, attribute no fault."""
+        text = server._NOTE_INDEX_EMPTY_WARNING.lower()
+        assert banned not in text
+        assert "contact bullhorn" not in text
+
+
+class TestNoAdvancedNoteSearchingReferences:
+    """CR37 Part 6 item B: the ATS UI note-search option has no bearing on REST."""
+
+    def test_no_tool_docstring_mentions_the_ui_option(self):
+        """It was the text the agent read, and it misdirected every note search."""
+        offenders = []
+        for name in dir(server):
+            obj = getattr(server, name)
+            doc = getattr(obj, "__doc__", None)
+            if callable(obj) and doc and "advanced note searching" in doc.lower():
+                offenders.append(name)
+        assert offenders == []
+
+    def test_server_module_source_is_clean(self):
+        """Covers constants and comments, not just docstrings."""
+        import inspect
+        source = inspect.getsource(server).lower()
+        assert "advanced note searching" not in source
+        assert "contact bullhorn support" not in source
 
 
 class TestCVUploadEndpoint:

@@ -289,19 +289,91 @@ def _paginate_envelope(meta: dict, start: int, count: int) -> dict:
     }
 
 
+def _note_action_clause(note_action: str) -> tuple[str | None, dict | None]:
+    """Build the nested Lucene clause filtering a parent entity by note action.
+
+    Note fields are reachable as nested fields on the parent entity's index
+    (``notes.action``), which returns PARENT records rather than notes. The value
+    must be double-quoted or a multi-word action silently matches nothing, so the
+    quoting is done here rather than left to the caller.
+
+    Validation is best-effort: when the Note.action picklist is unavailable the
+    clause is still built, because blocking a working search on a failed metadata
+    call would turn a degraded server into an unusable one.
+
+    Args:
+        note_action: A Note.action picklist value, e.g. "BD Call".
+
+    Returns:
+        ``(clause, None)`` on success, or ``(None, error_dict)`` if the value is
+        rejected.
+    """
+    value = note_action.strip()
+    if not value:
+        return None, {
+            "error": "invalid_note_action",
+            "message": "note_action must be a non-empty Note action value.",
+        }
+    if '"' in value or "'" in value:
+        return None, {
+            "error": "invalid_note_action",
+            "message": (
+                "note_action must not contain quote characters. Pass the bare "
+                'action value, e.g. note_action="BD Call".'
+            ),
+        }
+
+    valid_actions = _load_valid_note_actions(get_metadata())
+    if valid_actions is not None:
+        # Lucene matches note actions case-insensitively, so accept any casing
+        # and normalise to the picklist's own spelling.
+        by_lower = {a.lower(): a for a in valid_actions}
+        if value.lower() not in by_lower:
+            return None, {
+                "error": "invalid_note_action",
+                "message": (
+                    f"'{value}' is not a valid Note action for this Bullhorn instance."
+                ),
+                "valid_actions": sorted(valid_actions),
+            }
+        value = by_lower[value.lower()]
+
+    return f'notes.action:"{value}"', None
+
+
+def _and_clause(search_query: str, clause: str) -> str:
+    """AND a clause onto a Lucene query, parenthesising the existing query."""
+    return f"({search_query}) AND {clause}" if search_query else clause
+
+
 @mcp.tool()
 def list_jobs(
     query: str | None = None,
     status: str | None = None,
+    note_action: str | None = None,
     limit: int = 20,
     start: int = 0,
     fields: str | None = None,
 ) -> str:
     """List and filter job orders from Bullhorn CRM.
 
+    Filtering by note fields: note fields are searchable as nested fields on this
+    entity's own index, which is the reliable way to answer "which jobs have a note
+    like X". Results are PARENT records, deduplicated, never notes — a job with
+    three "BD Call" notes is returned once, so the total is a job count, not a note
+    count; for the notes themselves use get_notes_for_entity. Prefer the
+    note_action parameter, which validates the value and quotes it. In a raw query,
+    multi-word values MUST be double-quoted: notes.action:"BD Call" matches,
+    notes.action:BD Call matches nothing. Verified paths: notes.action,
+    notes.comments, notes.dateAdded (range style [20260721000000 TO 20260729000000]),
+    notes.commentingPerson.id. notes.isDeleted is unsupported and matches nothing;
+    the top-level isDeleted filter on the job itself still applies.
+
     Args:
         query: Lucene search query (e.g., "title:Engineer AND isOpen:1")
         status: Filter by job status
+        note_action: Return only jobs carrying at least one note with this action
+            (e.g. "BD Call"). Validated against the live Note.action picklist.
         limit: Maximum number of results (1-500, default 20)
         start: Pagination offset — index of the first record to return (default 0).
                Use with limit to page through results: start=0 limit=500 for page 1,
@@ -319,6 +391,7 @@ def list_jobs(
         - list_jobs(query="isOpen:1") - Get open jobs
         - list_jobs(query="title:Software AND employmentType:Direct Hire", limit=10)
         - list_jobs(status="Accepting Candidates")
+        - list_jobs(note_action="BD Call", status="Accepting Candidates")
         - list_jobs(limit=500, start=500) - Get records 501-1000
     """
     try:
@@ -327,7 +400,12 @@ def list_jobs(
         # Build search query
         search_query = query or ""
         if status:
-            search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
+            search_query = _and_clause(search_query, f'status:"{status}"')
+        if note_action:
+            clause, err = _note_action_clause(note_action)
+            if err:
+                return format_response(err)
+            search_query = _and_clause(search_query, clause)
 
         meta = client.search_with_meta(
             entity="JobOrder",
@@ -348,15 +426,31 @@ def list_jobs(
 def list_candidates(
     query: str | None = None,
     status: str | None = None,
+    note_action: str | None = None,
     limit: int = 20,
     start: int = 0,
     fields: str | None = None,
 ) -> str:
     """List and filter candidates from Bullhorn CRM.
 
+    Filtering by note fields: note fields are searchable as nested fields on this
+    entity's own index, which is the reliable way to answer "which candidates have
+    a note like X". Results are PARENT records, deduplicated, never notes — a
+    candidate with three "Agent added" notes is returned once, so the total is a
+    candidate count, not a note count; for the notes themselves use
+    get_notes_for_entity. Prefer the note_action parameter, which validates the
+    value and quotes it. In a raw query, multi-word values MUST be double-quoted:
+    notes.action:"Agent added" matches, notes.action:Agent added matches nothing.
+    Verified paths: notes.action, notes.comments, notes.dateAdded (range style
+    [20260721000000 TO 20260729000000]), notes.commentingPerson.id.
+    notes.isDeleted is unsupported and matches nothing; the top-level isDeleted
+    filter on the candidate itself still applies.
+
     Args:
         query: Lucene search query (e.g., "lastName:Smith" or "skillSet:Python")
         status: Filter by candidate status
+        note_action: Return only candidates carrying at least one note with this
+            action (e.g. "BD Call"). Validated against the live Note.action picklist.
         limit: Maximum number of results (1-500, default 20)
         start: Pagination offset — index of the first record to return (default 0).
                Use with limit to page through results: start=0 limit=500 for page 1,
@@ -374,6 +468,7 @@ def list_candidates(
         - list_candidates(query="skillSet:Python") - Find Python developers
         - list_candidates(query="lastName:Smith AND status:Active")
         - list_candidates(status="Active", limit=50)
+        - list_candidates(note_action="Agent added", status="Active")
         - list_candidates(limit=500, start=500) - Get records 501-1000
     """
     try:
@@ -382,7 +477,12 @@ def list_candidates(
         # Build search query
         search_query = query or ""
         if status:
-            search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
+            search_query = _and_clause(search_query, f'status:"{status}"')
+        if note_action:
+            clause, err = _note_action_clause(note_action)
+            if err:
+                return format_response(err)
+            search_query = _and_clause(search_query, clause)
 
         meta = client.search_with_meta(
             entity="Candidate",
@@ -403,15 +503,30 @@ def list_candidates(
 def list_contacts(
     query: str | None = None,
     status: str | None = None,
+    note_action: str | None = None,
     limit: int = 20,
     start: int = 0,
     fields: str | None = None,
 ) -> str:
     """List and filter client contacts from Bullhorn CRM.
 
+    Filtering by note fields: note fields are searchable as nested fields on this
+    entity's own index, which is the reliable way to answer "which contacts have a
+    note like X". Results are PARENT records, deduplicated, never notes — a contact
+    with three "BD Call" notes is returned once, so the total is a contact count,
+    not a note count; for the notes themselves use get_notes_for_entity. Prefer the
+    note_action parameter, which validates the value and quotes it. In a raw query,
+    multi-word values MUST be double-quoted: notes.action:"BD Call" matches,
+    notes.action:BD Call matches nothing. Verified paths: notes.action,
+    notes.comments, notes.dateAdded (range style [20260721000000 TO 20260729000000]),
+    notes.commentingPerson.id. notes.isDeleted is unsupported and matches nothing;
+    the top-level isDeleted filter on the contact itself still applies.
+
     Args:
         query: Lucene search query (e.g., "lastName:Smith" or "occupation:Manager")
         status: Filter by contact status (e.g., "Active")
+        note_action: Return only contacts carrying at least one note with this
+            action (e.g. "BD Call"). Validated against the live Note.action picklist.
         limit: Maximum number of results (1-500, default 20)
         start: Pagination offset — index of the first record to return (default 0).
                Use with limit to page through results: start=0 limit=500 for page 1,
@@ -429,6 +544,7 @@ def list_contacts(
         - list_contacts(query="lastName:Smith") - Find contacts named Smith
         - list_contacts(query="occupation:Manager AND clientCorporation.name:Acme")
         - list_contacts(status="Active", limit=50)
+        - list_contacts(note_action="BD Call", status="Active") - Contacts with a BD Call note
         - list_contacts(limit=500, start=500) - Get records 501-1000
     """
     try:
@@ -437,7 +553,12 @@ def list_contacts(
         # Build search query
         search_query = query or ""
         if status:
-            search_query = f"({search_query}) AND status:\"{status}\"" if search_query else f"status:\"{status}\""
+            search_query = _and_clause(search_query, f'status:"{status}"')
+        if note_action:
+            clause, err = _note_action_clause(note_action)
+            if err:
+                return format_response(err)
+            search_query = _and_clause(search_query, clause)
 
         meta = client.search_with_meta(
             entity="ClientContact",
@@ -1035,6 +1156,23 @@ def search_entities(
 
     Soft-deleted records (isDeleted=true) are excluded by default.
 
+    Filtering by note fields (Candidate, ClientContact, JobOrder): note fields are
+    searchable as nested fields on the PARENT entity's index and return parent
+    records, deduplicated, never notes. This is the reliable way to answer "which
+    records have a note like X", and it combines freely with parent filters:
+    search_entities(entity="ClientContact", query='notes.action:"BD Call" AND status:Active').
+    Multi-word values MUST be double-quoted: notes.action:"BD Call" matches,
+    notes.action:BD Call matches nothing at all. Verified paths: notes.action,
+    notes.comments, notes.dateAdded (range style [20260721000000 TO 20260729000000]),
+    notes.commentingPerson.id. notes.isDeleted is unsupported and matches nothing.
+    The list_contacts / list_candidates / list_jobs tools expose this as a
+    validated note_action parameter, which is easier to get right.
+
+    On entity="Note": /search/Note returns no documents for any query on this
+    account, so it cannot be used to find notes, and filtering by subject-entity ID
+    (e.g. personReference.id:N) is unreliable regardless. Use get_notes_for_entity
+    for a single record's notes, or the nested pattern above to find records.
+
     Args:
         entity: Entity type (JobOrder, Candidate, Placement, ClientCorporation, ClientContact, etc.)
         query: Lucene search query
@@ -1055,11 +1193,6 @@ def search_entities(
         - search_entities(entity="ClientCorporation", query="name:Acme*")
         - search_entities(entity="JobSubmission", query="jobOrder.id:12345")
         - search_entities(entity="Candidate", query="status:Active", limit=500, start=500)
-
-    Note on entity="Note": /search/Note runs Lucene over the comments text field only.
-    Filtering by subject-entity ID (e.g. personReference.id:N, jobOrder.id:N) is unreliable
-    and should not be used to fetch notes for a specific record. Use get_notes_for_entity
-    for record-scoped reads. Use search_notes for full-text keyword search across all notes.
 
     For the full field list of any entity, call get_entity_fields(entity="<Entity>").
     """
@@ -1669,6 +1802,20 @@ _NOTE_SEARCH_DEFAULT_FIELDS = (
     "leads(id),"
     "opportunities(id),"
     "isDeleted"
+)
+
+# Attached to search_notes results when the match-all probe confirms the Lucene
+# /search/Note route returns nothing on this account, so that an empty result is
+# never mistaken for a factual answer about the caller's data. States observed
+# behaviour and names the working routes; it does not diagnose Bullhorn.
+_NOTE_INDEX_EMPTY_WARNING = (
+    "The Lucene /search/Note route returns no documents for any query on this "
+    "account, so this empty result does not mean no matching notes exist. Routes "
+    "that do return note data: (1) list_contacts / list_candidates / list_jobs "
+    'with note_action="<action>", to find the parent records carrying a given '
+    'note action; (2) a nested query such as notes.action:"BD Call" via '
+    "search_entities on the parent entity; (3) entity_filter on this tool, or "
+    "get_notes_for_entity(entity, entity_id), for a single record's notes."
 )
 
 
@@ -3148,11 +3295,17 @@ def search_notes(
     all notes on a specific record, use get_notes_for_entity instead — it is
     more reliable and efficient for that use case.
 
-    When entity_filter is provided the search is performed against the entity's
-    notes directly (reliable on all tenants). Without entity_filter, Bullhorn's
-    Lucene index is used — this requires the Note search index to be enabled on
-    your tenant; contact Bullhorn support to enable "Advanced Note Searching" if
-    results are unexpectedly empty.
+    When entity_filter is provided the search runs against that record's notes
+    directly and is reliable. Without entity_filter it uses Bullhorn's Lucene
+    /search/Note route, which on this account returns no documents for any query,
+    including phrases present in thousands of notes. When that is detected the
+    response carries a ``warnings`` key, and an empty ``data`` says nothing about
+    whether matching notes exist. Routes that do return data:
+      - list_contacts / list_candidates / list_jobs with note_action="<action>",
+        to find the PARENT records carrying a given note action
+      - a nested query such as notes.action:"BD Call" via search_entities on the
+        parent entity (multi-word values must be double-quoted)
+      - entity_filter below, or get_notes_for_entity, for one record's notes
 
     Args:
         query: Keyword to search for in note comments (case-insensitive substring
@@ -3197,6 +3350,7 @@ def search_notes(
 
     try:
         client = get_client()
+        warnings: list[str] = []
 
         filter_type = (entity_filter or {}).get("type")
         filter_id = (entity_filter or {}).get("id")
@@ -3243,6 +3397,14 @@ def search_notes(
             envelope = _paginate_envelope(note_meta, start, limit)
             pagination = envelope["pagination"]
 
+            # An empty result from this route is ambiguous: it means either "no
+            # matches" or "this route does not return documents on this account".
+            # Probe once to tell the two apart, so an unusable route is never
+            # rendered as a factual answer about the caller's data.
+            if not notes and not pagination["total"]:
+                if client.note_search_returns_results() is False:
+                    warnings.append(_NOTE_INDEX_EMPTY_WARNING)
+
         # Strip CC telemetry
         cleaned_notes = []
         for note in notes:
@@ -3255,7 +3417,10 @@ def search_notes(
                     note["call_metadata"] = tags
             cleaned_notes.append(note)
 
-        return format_response({"data": cleaned_notes, "pagination": pagination})
+        response: dict = {"data": cleaned_notes, "pagination": pagination}
+        if warnings:
+            response["warnings"] = warnings
+        return format_response(response)
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"

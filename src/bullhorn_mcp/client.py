@@ -36,6 +36,14 @@ DEFAULT_FIELDS = {
         "threadID"
     ),
     "Tearsheet": "id,name,description,owner,dateAdded",
+    # Note and CorporateUser were absent until CR37, which left their startup
+    # field reference rendering empty. Every name below is verified present on
+    # /meta and returned by a live get() for the respective entity.
+    "Note": (
+        "id,action,comments,dateAdded,commentingPerson,"
+        "candidates,clientContacts,jobOrders,placements"
+    ),
+    "CorporateUser": "id,firstName,lastName,name,email,phone,occupation,status,username",
 }
 
 
@@ -47,6 +55,36 @@ class BullhornClient:
         # Per-entity cache of whether that entity exposes an isDeleted field.
         # Populated lazily by _entity_has_isdeleted().
         self._isdeleted_cache: dict[str, bool] = {}
+        # Cached verdict of note_search_returns_results(); None until probed.
+        self._note_search_probe: bool | None = None
+
+    def note_search_returns_results(self) -> bool | None:
+        """Return whether the Lucene /search/Note route returns any documents.
+
+        A capability probe, not a health check: it reads the account's current
+        behaviour rather than encoding a belief about it, so a change in either
+        direction is picked up without a code edit. Issues one match-all query
+        (deliberately without the soft-delete clause, since the question is
+        whether the route returns anything at all) and caches the verdict for the
+        process lifetime.
+
+        Returns:
+            True if the route returned a non-zero total, False if it returned
+            zero, or None if the probe itself failed (verdict unknown, not
+            cached, so a later call can retry).
+        """
+        if self._note_search_probe is not None:
+            return self._note_search_probe
+        try:
+            result = self._request(
+                "GET",
+                "/search/Note",
+                {"query": "id:[0 TO 99999999]", "fields": "id", "count": 1},
+            )
+        except Exception:
+            return None
+        self._note_search_probe = bool(result.get("total"))
+        return self._note_search_probe
 
     def _entity_has_isdeleted(self, entity: str) -> bool:
         """Return True if the entity exposes an isDeleted field on /meta.
@@ -584,7 +622,10 @@ class BullhornClient:
         Returns:
             Entity metadata including available fields
         """
-        params = {"fields": "*"}
+        # meta=full is required for Bullhorn to include the property-metadata keys
+        # (required, optional, readOnly, inputType). The default is meta=off, which
+        # omits them entirely — see CR37 Part 5 bug A.
+        params = {"fields": "*", "meta": "full"}
         return self._request("GET", f"/meta/{entity}", params)
 
 

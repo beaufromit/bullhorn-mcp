@@ -459,18 +459,20 @@ class TestSelectFields:
         assert "requiredField" in names
 
     def test_no_default_fields_entry_falls_through(self):
-        """Note has no DEFAULT_FIELDS entry; rules 2-4 still add required/picklist/custom fields."""
+        """An entity absent from DEFAULT_FIELDS still gets fields from rules 0 and 2-4."""
         from bullhorn_mcp.client import DEFAULT_FIELDS
-        assert "Note" not in DEFAULT_FIELDS
+        assert "Lead" not in DEFAULT_FIELDS
 
         meta_fields = [
+            {"name": "id", "label": "ID", "type": "ID", "required": False},
             {"name": "commentingPerson", "label": "Commenting Person", "type": "TO_ONE", "required": True},
             {"name": "employmentType", "label": "Employment Type", "type": "STRING", "required": False,
              "options": [{"value": "Contract", "label": "Contract"}]},
             {"name": "customText5", "label": "My Custom Note Label", "type": "STRING", "required": False},
         ]
-        result = select_fields("Note", meta_fields)
+        result = select_fields("Lead", meta_fields)
         names = [f["name"] for f in result]
+        assert "id" in names
         assert "commentingPerson" in names
         assert "employmentType" in names
         assert "customText5" in names
@@ -483,6 +485,118 @@ class TestSelectFields:
         result = select_fields("Placement", meta_fields)
         names = [f["name"] for f in result]
         assert "candidate" in names
+
+
+class TestSelectFieldsCR37:
+    """CR37: entities that previously selected zero or only placeholder fields."""
+
+    # A realistic /meta shape for an entity Bullhorn serves without any required
+    # flags, alongside the auto-labelled custom slots that used to crowd out the
+    # fields anyone actually needs.
+    @staticmethod
+    def _custom_flood(count: int = 60) -> list[dict]:
+        return [
+            {"name": f"customFloat{i}", "label": f"Custom Float{i}", "type": "DOUBLE"}
+            for i in range(1, count + 1)
+        ]
+
+    def test_select_fields_note_returns_nonempty(self):
+        """Note selected zero fields before CR37, rendering a header-only section."""
+        meta_fields = [
+            {"name": "id", "label": "ID", "type": "ID"},
+            {"name": "action", "label": "Action", "type": "SCALAR",
+             "options": [{"value": "BD Call", "label": "BD Call"}]},
+            {"name": "comments", "label": "Comments", "type": "SCALAR"},
+            {"name": "dateAdded", "label": "Date Added", "type": "SCALAR"},
+        ] + self._custom_flood()
+
+        names = [f["name"] for f in select_fields("Note", meta_fields)]
+
+        assert "id" in names
+        assert "action" in names
+
+    def test_select_fields_corporate_user_includes_identity_fields(self):
+        """The custom-field flood used to push id/firstName/lastName/email out of the cap."""
+        meta_fields = [
+            {"name": "id", "label": "ID", "type": "ID"},
+            {"name": "firstName", "label": "First Name", "type": "STRING"},
+            {"name": "lastName", "label": "Last Name", "type": "STRING"},
+            {"name": "email", "label": "Email", "type": "STRING"},
+            {"name": "status", "label": "Status", "type": "STRING"},
+        ] + self._custom_flood()
+
+        names = [f["name"] for f in select_fields("CorporateUser", meta_fields)]
+
+        for field in ("id", "firstName", "lastName", "email"):
+            assert field in names, f"{field} missing from CorporateUser selection"
+
+    def test_select_fields_excludes_auto_labelled_custom_slots(self):
+        """"Custom Float23" is Bullhorn's auto-label for customFloat23, so it is a placeholder."""
+        meta_fields = [
+            {"name": "customFloat23", "label": "Custom Float23", "type": "DOUBLE"},
+            {"name": "customText41", "label": "Placement Type", "type": "STRING"},
+        ]
+
+        names = [f["name"] for f in select_fields("Candidate", meta_fields)]
+
+        assert "customFloat23" not in names
+        assert "customText41" in names
+
+    def test_identity_fields_seeded_before_default_fields(self):
+        """Rule 0 runs first, so identity fields survive regardless of DEFAULT_FIELDS coverage."""
+        meta_fields = [
+            {"name": "id", "label": "ID", "type": "ID"},
+            {"name": "name", "label": "Name", "type": "STRING"},
+        ] + self._custom_flood()
+
+        names = [f["name"] for f in select_fields("Tearsheet", meta_fields)]
+
+        assert names[0] == "id"
+        assert "name" in names
+
+    def test_action_is_expanded_as_picklist(self):
+        """Note.action's values must reach the agent in the description itself."""
+        assert "action" in PICKLIST_FIELDS_TO_EXPAND
+
+        fields = [
+            {"name": "action", "label": "Action", "type": "SCALAR", "required": True,
+             "options": [{"value": "BD Call"}, {"value": "Agent added"}]},
+        ]
+        result = build_entity_section("Note", fields, level="full")
+
+        assert "Valid values: BD Call, Agent added" in result
+        assert "[required]" in result
+
+    @pytest.mark.parametrize("entity", SUPPORTED_ENTITIES)
+    @pytest.mark.parametrize("level", ["full", "compact"])
+    def test_build_entity_section_never_header_only(self, entity, level):
+        """Every supported entity must render at least one field row at both levels.
+
+        Guards the class of bug behind CR37 Part 5, not just the two instances:
+        a header-only section silently hides a capability from the agent.
+        """
+        # A generic /meta payload: identity fields plus one picklist, no required
+        # flags, which is the shape that produced empty sections for Note.
+        meta_fields = [
+            {"name": "id", "label": "ID", "type": "ID"},
+            {"name": "firstName", "label": "First Name", "type": "STRING"},
+            {"name": "lastName", "label": "Last Name", "type": "STRING"},
+            {"name": "name", "label": "Name", "type": "STRING"},
+            {"name": "email", "label": "Email", "type": "STRING"},
+            {"name": "status", "label": "Status", "type": "STRING",
+             "options": [{"value": "Active"}]},
+        ]
+        fields = select_fields(entity, meta_fields) if level == "full" else meta_fields
+
+        section = build_entity_section(entity, fields, level=level)
+
+        assert len(section.splitlines()) > 1, f"{entity} rendered header-only at {level}"
+
+    def test_every_supported_entity_has_default_fields(self):
+        """DEFAULT_FIELDS drives the compact level entirely, so a gap means an empty section."""
+        from bullhorn_mcp.client import DEFAULT_FIELDS
+        missing = [e for e in SUPPORTED_ENTITIES if e not in DEFAULT_FIELDS]
+        assert missing == [], f"SUPPORTED_ENTITIES missing from DEFAULT_FIELDS: {missing}"
 
 
 class TestBuildEntitySectionLevels:

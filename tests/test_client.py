@@ -169,6 +169,19 @@ class TestBullhornClient:
         assert len(result["fields"]) == 2
 
     @respx.mock
+    def test_get_meta_requests_meta_full(self, mock_auth, mock_session):
+        """get_meta must send meta=full; without it Bullhorn omits the required key."""
+        route = respx.get(f"{mock_session.rest_url}/meta/Note").mock(
+            return_value=httpx.Response(200, json={"entity": "Note", "fields": []})
+        )
+
+        BullhornClient(mock_auth).get_meta("Note")
+
+        url = str(route.calls[0].request.url)
+        assert "meta=full" in url
+        assert "fields=%2A" in url or "fields=*" in url
+
+    @respx.mock
     def test_api_error_handling(self, mock_auth, mock_session):
         """Test handling of API errors."""
         respx.get(f"{mock_session.rest_url}/search/JobOrder").mock(
@@ -1581,3 +1594,59 @@ class TestAssociationMethods:
             client.remove_association("Tearsheet", 55, "candidates", [101])
 
         assert "400" in str(exc_info.value)
+
+
+class TestNoteSearchProbe:
+    """CR37 Change 2: the /search/Note capability probe."""
+
+    @respx.mock
+    def test_probe_returns_false_when_route_returns_nothing(self, mock_auth, mock_session):
+        """A zero total means the route cannot answer questions about note content."""
+        route = respx.get(f"{mock_session.rest_url}/search/Note").mock(
+            return_value=httpx.Response(200, json={"total": 0, "data": []})
+        )
+
+        client = BullhornClient(mock_auth)
+
+        assert client.note_search_returns_results() is False
+        url = str(route.calls[0].request.url)
+        assert "id%3A%5B0+TO+99999999%5D" in url or "id:[0 TO 99999999]" in url
+        # The probe asks whether the route returns anything at all, so it must
+        # not narrow the match-all with the soft-delete clause.
+        assert "isDeleted" not in url
+
+    @respx.mock
+    def test_probe_returns_true_when_route_returns_documents(self, mock_auth, mock_session):
+        """If the route ever starts returning results, the verdict flips with no code edit."""
+        respx.get(f"{mock_session.rest_url}/search/Note").mock(
+            return_value=httpx.Response(200, json={"total": 4213, "data": [{"id": 1}]})
+        )
+
+        assert BullhornClient(mock_auth).note_search_returns_results() is True
+
+    @respx.mock
+    def test_probe_verdict_is_cached(self, mock_auth, mock_session):
+        """One extra call per server lifetime, not one per search."""
+        route = respx.get(f"{mock_session.rest_url}/search/Note").mock(
+            return_value=httpx.Response(200, json={"total": 0, "data": []})
+        )
+
+        client = BullhornClient(mock_auth)
+        for _ in range(3):
+            assert client.note_search_returns_results() is False
+
+        assert route.call_count == 1
+
+    @respx.mock
+    def test_probe_failure_returns_none_and_is_not_cached(self, mock_auth, mock_session):
+        """A failed probe is not evidence either way, so a later call retries."""
+        route = respx.get(f"{mock_session.rest_url}/search/Note").mock(
+            return_value=httpx.Response(500, text="Internal Server Error")
+        )
+
+        client = BullhornClient(mock_auth)
+
+        assert client.note_search_returns_results() is None
+        assert client._note_search_probe is None
+        assert client.note_search_returns_results() is None
+        assert route.call_count == 2
