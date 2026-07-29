@@ -1,139 +1,108 @@
-# Review: CR37 — expose note-field filtering via a `note_action` parameter, warn on the empty Lucene note route, and fix three enrichment field-selection bugs
+# Review: fix the three MODERATE findings from the CR37 review — pin the `DEFAULT_FIELDS["Note"]` → `add_note` coupling, extend the empty-route probe to `search_entities`, and land the untracked Part 6 deliverable
 
-**Commit:** d91e629
+**Commit:** bfb6561
 **Date:** 2026-07-29
-**Files changed:** 10
+**Files changed:** 27 (2 source, 2 test, 2 docs-of-record, 21 newly tracked)
 
-Scope note: `git diff HEAD~1` is non-empty and `HEAD~1` is `8b5f377`, so the reviewed
-diff covers the whole of CR37 in one commit. Suite: 707 passed.
+Scope note: `git diff HEAD~1` is non-empty and `HEAD~1` is `d91e629` (the CR37 build
+commit), so the reviewed diff is exactly the fix commit. Suite: 715 passed
+(707 at CR37, +8 here: 1 client, 7 server counting the ×2 parametrisation).
 
 ## CRITICAL
 
 None.
 
-Checked against all 8 known failure patterns, with the following evidence:
+Checked against all 8 known failure patterns:
 
-- **Pattern 1 (title vs occupation):** no added line in the diff contains "title".
-  The new `CorporateUser` DEFAULT_FIELDS entry correctly uses `occupation`, not `title`.
-- **Patterns 2 and 3 (field injection / DEFAULT_FIELDS in write paths):** no write
-  payload is touched. `add_note`'s POST body (client.py:487-492) is unchanged. The new
-  `DEFAULT_FIELDS` entries reach a write path only through the post-write *read* at
-  client.py:496, which is a read-back, not payload injection. See M1.
+- **Pattern 1 (title vs occupation):** no added or removed line in `src/` or `tests/`
+  contains "title" in any form. Verified by grepping the diff.
+- **Pattern 2 (field injection into write payloads):** no write payload is touched.
+  `add_note`'s PUT body (client.py:487-492) is byte-identical; `create_contact`,
+  `create_company` and `update_record` are not in the diff.
+- **Pattern 3 (DEFAULT_FIELDS in write paths):** this needs stating explicitly,
+  because the diff *documents and pins* a coupling between `DEFAULT_FIELDS["Note"]`
+  and `add_note`, which is a write method. **It is not a recurrence.** Pattern 3
+  guards against DEFAULT_FIELDS keys reaching a request **body**; here the constant
+  is consumed only by the post-write `get("Note", note_id)` at client.py:496, a GET
+  whose `fields` query parameter it supplies. The PUT payload is built solely from
+  caller arguments and is unchanged. The client.py hunk is a comment; it adds no
+  code. Confirmed by reading both the payload construction and the read-back.
 - **Patterns 4 and 5 (owner resolution leakage / CorporateUser query fields):**
-  `resolve_owner` (client.py:515-519) and `identity.py:78` both pass an explicit
-  `fields="id,firstName,lastName,email"`, so the new `CorporateUser` DEFAULT_FIELDS
-  entry cannot reach either query. Verified by inspection of both call sites.
+  `resolve_owner` and `identity.py` are not in the diff and their explicit
+  `fields="id,firstName,lastName,email"` is untouched.
 - **Patterns 6, 7, 8:** `update_record`'s guard ordering, `_process_single_contact`,
-  and `resolve_fields()` alias precedence are untouched by this diff.
+  and `resolve_fields()` alias precedence are all absent from this diff.
 
-Live read-only verification of the assumptions this diff depends on (corp `5v598g`,
-2026-07-29), because a clean diff review is not evidence that live-API assumptions hold:
+Closure of the three findings was verified structurally, not taken on trust:
 
-| Assumption | Result |
+| Finding | Verification |
 |---|---|
-| `get('Note', 2650512)` with the new field list | HTTP 200, all 9 fields returned |
-| Each new Note sub-select bisected individually | all 5 OK; `candidates`/`clientContacts` populate correctly per note type |
-| `get('CorporateUser', 172080)` with the new field list | HTTP 200, all 9 fields returned |
-| `notes.action:"BD Call"` canary | ClientContact 1974, Candidate 221, JobOrder 34 (all > 0) |
-| `note_search_returns_results()` | `False`, matching the CR's premise |
-| `get_meta` with `meta=full` | `required` key present; 1/27 Note fields required; `action` returns 25 options |
+| M1 | `read_back.calls[0].request.url.params["fields"]` asserts the **outgoing request**, not a return value. respx does not match on query parameters, so this is the only assertion shape that can catch the regression; the previous tests could not. |
+| M2 | Enumerated every `client.search_with_meta(` call site in `src/` (8 total). Six hardcode a non-Note entity; the only two that can reach `/search/Note` are `search_entities` (server.py:1204) and `search_notes` (server.py:3406). Both now probe. `get_notes_for_entity` uses the CR23 association endpoint and `query_entities` hard-refuses `entity="Note"` (CR21), so no third path exists. M2 is fully closed, not partially. |
+| M3 | `.claude/skills/` was never gitignored (`git check-ignore` exits 1; only the nested `__pycache__` dirs match). It was merely unstaged. All 18 files are now tracked, including `bullhorn-mcp-live-api-method/scripts/smoke_read.py`, which carries both halves of the two-way canary (match-all probe at line 111, nested `notes.action` assertion at lines 127-140). Re-confirmed CR37 AC 11 and AC 12 by grep: zero "advanced note searching" references in `src/`, `PRD.md` or `.claude/skills/`, and zero occurrences of "broken", "misconfigured", "outage", "not enabled" or "contact Bullhorn" in `server.py`/`client.py`. |
 
 ## MODERATE
 
-- **M1: `DEFAULT_FIELDS["Note"]` is now load-bearing for the `add_note` write path, and nothing pins it** — src/bullhorn_mcp/client.py:42-46, consumed at client.py:496
-
-  `add_note()` ends with `record = self.get("Note", note_id)`, which resolves
-  `fields` from `DEFAULT_FIELDS.get("Note", "*")`. Before this diff there was no
-  `Note` key, so that call sent `fields=*` — and this tenant **rejects it**:
-
-  ```
-  GET /entity/Note/2500755?fields=*
-  → 400 {"errorMessage":"You are not authorized to request all fields.",
-         "errorMessageKey":"errors.allFieldsNotAllowed"}
-  ```
-
-  So `add_note` was raising `BullhornAPIError` *after* successfully writing the
-  note, surfacing `ERROR: API request failed: 400 …` for a write that had already
-  landed — the "write reported failure but the record exists" mode this repo has
-  hit before. This diff incidentally fixes that, and the fix is entirely
-  load-bearing on the new `DEFAULT_FIELDS` entry.
-
-  No test covers the coupling. The existing `add_note` tests (tests/test_client.py:507-630)
-  mock `/entity/Note/{id}` with respx, which does not match on query parameters, so
-  they pass identically with `fields=*` or with the curated list. Consequences: (a) a
-  future edit that removes or trims the `Note` entry — plausible, since the constant
-  reads as a read-only concern and the CR itself framed it as an enrichment change —
-  silently re-breaks `add_note` in production with green tests; (b) the tool's returned
-  `data` narrowed from every Note field to 9, an unasserted contract change on a write
-  tool's response. CR37's rollback section anticipated the `get()` behaviour change but
-  did not identify `add_note` as the caller, and no acceptance criterion covers it.
-
-- **M2: the Change 2 probe is wired into `search_notes` only, so `search_entities(entity="Note")` still returns the silent empty envelope** — src/bullhorn_mcp/server.py:3400-3406
-
-  The warning fires only inside `search_notes`' Lucene branch. `search_entities(entity="Note", query=…)`
-  reaches the same `/search/Note` route through `search_with_meta` and returns
-  `{"data": [], "pagination": {"total": 0, …}}` with no `warnings` key — byte-identical
-  for a phrase present in thousands of notes and for gibberish. That is precisely the
-  ambiguity CR37 Change 2 describes as "an unusable route being rendered as a factual
-  answer about your data", and the same diff's `search_entities` docstring now
-  documents `entity="Note"` behaviour to the agent (server.py:1171-1174), making that
-  route more likely to be tried, not less. CR37 scoped Change 2 to `search_notes`, so
-  this is a design gap rather than a spec violation, but the change the CR calls its
-  highest-value reliability fix is absent from a reachable sibling path.
-
-- **M3: the entire Part 6 deliverable, including the live canary that is Change 1's only stated risk mitigation, is untracked** — `.claude/skills/` (git status: `?? .claude/skills/`)
-
-  The work exists on disk and is correct as far as it can be checked: no file under
-  `.claude/skills/` still references the ATS UI option, and
-  `bullhorn-mcp-live-api-method/scripts/smoke_read.py` carries both halves of the
-  two-way canary (the match-all probe at line 111 and the nested `notes.action`
-  assertion at lines 127-140). But the whole directory is untracked, so none of it is
-  in this commit, none of it is versioned, and none of it is reviewable from the diff.
-  CR37 names the canary as the sole mitigation for its one stated risk — that the dot
-  notation is undocumented by Bullhorn — and an untracked file does not survive a clean
-  checkout by whoever inherits that risk. Acceptance criterion 11 explicitly scopes
-  `.claude/skills/`, so Part 6 is not landed. Separately, IMPLEMENTATION-PLAN.md has no
-  Sprint 36 section, so the 648 → 707 test-count change is unrecorded.
+None.
 
 ## MINOR
 
-- **m1: `note_action=""` and `note_action="   "` behave differently** — the `if note_action:`
-  guard in all three tools (server.py:404, 481, 557) makes the empty string a silent
-  no-op, while a whitespace-only value reaches `_note_action_clause` and returns
-  `invalid_note_action`. The empty-value branch at server.py:311-315 is therefore
-  unreachable from any tool.
+- **m1: the commit silently normalised 56 lines of `tests/test_client.py` from LF to
+  CRLF**, which is why that file shows 137 changed lines for ~25 lines of new test.
+  CR37 appended `TestNoteSearchProbe` with LF endings into a file that is otherwise
+  entirely CRLF (as is every file under `src/` and `tests/`), leaving it mixed:
+  `HEAD~1` was 1596 CRLF of 1652 lines. This commit's edit rewrote it to 1677 of
+  1677. The outcome is correct — the file is now internally consistent and matches
+  the repo — but it was incidental, it inflates the diff, and it means the reviewed
+  `TestNoteSearchProbe` block is unchanged content presented as a rewrite. Worth
+  knowing that the repo has no `.gitattributes`, so the next editor on a different
+  toolchain can reintroduce the same churn.
 
-- **m2: a trailing backslash survives the quote-character check** — `_note_action_clause`
-  (server.py:316-324) rejects `"` and `'` but not `\`, so on the picklist-unavailable
-  path `note_action='BD Call\'` renders `notes.action:"BD Call\"`. Verified live: this
-  returns 400 `errors.badSearch`, not the silent match-everything behaviour CR37 warns
-  about for malformed clauses, so the failure is loud. Baseline check on the same
-  tenant: `notes.action:"BD Call"` → 1974 against an unfiltered 54284, so no broadening.
+- **m2: `test_add_note_read_back_uses_curated_note_fields` includes one
+  self-referential assertion** — tests/test_client.py, `assert requested ==
+  DEFAULT_FIELDS["Note"]` compares the request against the very constant that
+  produced it, so it cannot fail while the plumbing works. The test is still valid:
+  `assert requested != "*"` catches the actual regression M1 described (removing the
+  key entirely, which restores the `fields=*` fallback and the 400), and the
+  four-name loop catches trimming `id`/`action`/`comments`/`dateAdded`. But a trim
+  of the association sub-selects (`candidates`, `clientContacts`, `jobOrders`,
+  `placements`) passes silently. That does not break `add_note`, so it is a narrower
+  guard than the assertion count suggests, not a hole.
 
-- **m3: acceptance criterion 10 (token-cost delta) is not recorded anywhere in the
-  commit.** Measured for this review by running both the old and new selection paths
-  over live `/meta` for all 10 `SUPPORTED_ENTITIES`: total appended enrichment payload
-  48,695 → 56,175 chars, **+7,480 chars (~+1,870 tokens, +15.4%)**. The increase is
-  dominated by `[required]` markers, which now render for the first time (0 → 59
-  occurrences, Bug A), and by the previously empty `Note` (15 → 755 chars) and compact
-  `CorporateUser` (24 → 298) sections. The tightened custom-field filter pulls the other
-  way (Placement 40 → 25 selected fields, CorporateUser 30 → 9). Checked that the filter
-  costs nothing real: of the 87 fields it drops across all entities, **every one is a
-  Bullhorn auto-labelled placeholder** — no genuinely renamed custom field is hidden.
-  AC 5, 6 and 7 also confirmed live: the Note section renders `action` with all 25
-  values, CorporateUser carries `id`/`firstName`/`lastName`/`email`, and no entity
-  renders header-only at either level.
+- **m3: `test_entity_name_match_is_case_and_space_insensitive` asserts a path that
+  may be unreachable in production.** `search_entities` passes the raw `entity`
+  string to `search_with_meta`, so `entity="  Note  "` issues `GET /search/  Note  `
+  and `entity="note"` issues `GET /search/note`. Whether Bullhorn accepts either is
+  not verified anywhere in the repo; if it 400s, the call raises before the
+  normalised comparison at server.py:1218 is ever evaluated. The defensiveness costs
+  nothing, but the test's claim of coverage is stronger than the evidence for it.
 
-- **m4: test count is materially above the CR's own estimate.** CR37 predicted ~660
-  ("Flag it if materially different rather than adjusting quietly"); actual is 707.
-  The gap is parametrisation, not extra test functions — `test_build_entity_section_never_header_only`
-  alone expands to 20 cases across 10 entities × 2 levels — so this is bookkeeping, not
-  a coverage discrepancy.
+- **m4: nothing pins that `search_entities` passes the entity string to
+  `search_with_meta` unnormalised.** The new code normalises only for the
+  comparison, deliberately. A future edit that hoists `(entity or "").strip()` into
+  the `search_with_meta(entity=...)` argument for tidiness would change the outgoing
+  URL for every entity, and every existing test would still pass.
 
-- **m5: `_and_clause(search_query, clause)` annotates `clause` as `str`** (server.py:344)
-  but every caller passes the `str | None` first element of `_note_action_clause`'s
-  tuple. Runtime-safe because the `err` check returns first; a type checker would flag it.
+- **m5: the commit tracks three files beyond the M3 finding's scope** — `CR36.md`,
+  `NEXT_STEPS.md`, `support-ticket-notes.md`. Two are named CR37 Part 6 artifacts
+  and belong with it. `CR36.md` is an unrelated DRAFT housekeeping CR. Mitigating:
+  `git add -A` is the command PROMPT_iterate Step 3 prescribes, 36 other `CRx.md`
+  files are tracked so this matches convention, and no file content was modified —
+  only its tracked status. Logged for awareness rather than as scope creep.
+
+- **m6: the new Sprint 36 section quotes an exact live count that has already
+  drifted** — IMPLEMENTATION-PLAN.md records `notes.action:"BD Call"` on
+  ClientContact as 1978 (CR37's figure); the previous review measured 1974 on the
+  same tenant six days later. The canary in `smoke_read.py` correctly asserts `> 0`
+  rather than an exact number; the plan text does not carry that caveat, so a future
+  reader may treat a drifted figure as a regression signal.
+
+- **m7: the `warnings` key is documented in the docstring prose but not in the
+  `Returns:` block** of `search_entities` (server.py:1171-1175 vs 1187-1192). This
+  is correct rather than an omission — FastMCP passes only the text before `Args:`
+  to the agent and silently drops `Returns:` — and it matches how `search_notes`
+  documents the same key. Noted so it is not "fixed" into the dead section later.
 
 ## Verdict
 
-NO CRITICAL ISSUES. 3 MODERATE issue(s) must be resolved before pushing.
+NO CRITICAL ISSUES. This diff is clear to push.
