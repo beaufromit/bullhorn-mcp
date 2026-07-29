@@ -39,3 +39,7 @@ htmlcov/
 
 # Local files (not for repo)
 CASE_STUDY.md
+
+# Claude Code skill library — local working context, not a repo deliverable.
+# (.claude/commands/ stays tracked: it holds the shared review protocol.)
+.claude/skills/
