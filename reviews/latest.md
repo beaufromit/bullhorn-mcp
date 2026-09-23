@@ -1,8 +1,8 @@
-# Review: fixes CR38 review minors m1 (malformed Perplexity 200 body), m2 (untested error branches), m4 (.env.example spacing)
+# Review: aligns the `search_people` docstring with its filtered return behavior
 
-**Commit:** 46adb31
+**Commit:** 4f1c6a8
 **Date:** 2026-09-23
-**Files changed:** 6
+**Files changed:** 2
 
 ## CRITICAL
 
@@ -14,7 +14,7 @@ None.
 
 ## MINOR
 
-- **m1: `search_people` docstring still says it returns the raw `results` list** (`src/bullhorn_mcp/perplexity.py`, `search_people`). The function now drops non-dict entries and raises `invalid_response` on a non-list `results`, so "return the raw `results` list" no longer describes the behavior.
+None.
 
 ## Verdict
 
