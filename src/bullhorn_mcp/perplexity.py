@@ -27,7 +27,9 @@ def search_people(
     max_results: int = 10,
     timeout: float = 30.0,
 ) -> list[dict]:
-    """POST /search with search_type='people' and return the raw `results` list.
+    """POST /search with search_type='people' and return the `results` list.
+
+    Non-dict entries are dropped; a non-list `results` raises invalid_response.
 
     `query` is always sent as a list. The API merges multi-query results into one
     ranked list capped at max_results, and does not paginate (offset and page are
