@@ -2,7 +2,7 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is BUILT at 734 tests passing (2026-09-23), awaiting its review cycle; target v0.0.50.** Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools).
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools).
 
 **Replan validation (2026-09-23, post-CR36):** Re-reconciled PRD, user stories, CRs, and source code. **719 tests passing, tagged v0.0.48** (`.venv/bin/pytest -q`: 719 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **New CR39** (escape apostrophes in CorporateUser lookups, owner-APPROVED 2026-09-23, assumptions A1 to A3 confirmed). It follows up Sprint 37 review minor m3. The PRD is already amended: FR-2 and FR-12 each gained an apostrophe sentence marked "Planned (CR39)". The existing user stories cover the behaviour: **US-4** (owner by consultant name) and **US-23** (Entra identity to CorporateUser). No new user story is needed, because this is an input-domain correction to existing stories, not a new capability.
@@ -101,7 +101,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 36 | **COMPLETE** | CR37: Make note-field filtering discoverable — `note_action` parameter on `list_contacts`/`list_candidates`/`list_jobs`, empty-route probe warning on the Lucene note path, three enrichment field-selection fixes. Tool count unchanged at 38. **715 tests passing, tagged v0.0.47.** See Sprint 36 detail. |
 | Sprint 37 | **COMPLETE (v0.0.48)** | CR36: Housekeeping. Declares `fastmcp` dependency, single-quote guards on `get_job_submissions` status / `resolve_owner` / `resolve_caller`, collapse duplicated note constants, docs-of-record sync. **719 tests passing.** T37.7 closed (bf91c18). One review cycle, clean. See Sprint 37 detail. |
 | Sprint 37B | **COMPLETE** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Tagged v0.0.49 after 1 clean review cycle. See Sprint 37B detail. |
-| Sprint 38 | **BUILT (review pending)** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. **734 tests passing.** Target tag v0.0.50 after the review cycle. See Sprint 38 detail. |
+| Sprint 38 | **COMPLETE** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. **743 tests passing.** Tagged v0.0.50. See Sprint 38 detail. |
 
 ### Sprint 15 post-tag regression note
 
@@ -152,7 +152,7 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
 - `tests/test_descriptions.py`, `tests/test_candidate_config.py`: enrichment and candidate env-config tests (per-file counts above are historical; not re-counted)
 - `tests/test_perplexity.py` (CR38): 4 tests for `search_people` (payload and bearer header, 401, 400, transport error)
-- **Total: 734 tests, all passing (Sprint 38 build, measured 2026-09-23; review pending, target v0.0.50)**.
+- **Total: 743 tests, all passing (Sprint 38 complete, tagged v0.0.50, 2026-09-23)**.
 
 ---
 
@@ -3140,7 +3140,7 @@ Previous: 719 (Sprint 37 actual). Rewritten in place: 2 (net 0). Added: 1 (`test
 
 ---
 
-## Sprint 38: CR38 `people_search_perplexity` (external people search via Perplexity) - BUILT (review pending)
+## Sprint 38: CR38 `people_search_perplexity` (external people search via Perplexity) - COMPLETE
 
 **Change request:** CR38.md (APPROVED for implementation, owner, 2026-09-23)
 **PRD requirement:** FR-22 (External People Search via Perplexity)
@@ -3212,7 +3212,8 @@ The tool must **not** be added to `SUPPORTED_ENTITIES` or `TOOL_ENTITY_MAP`.
 - [x] Server imports with the key unset, and `list_tools()` reports 39 tools.
 - [x] One manual live smoke (read-only, owner-approved in CR38 acceptance criteria): `people_search_perplexity(["financial controller Dublin"], max_results=5)` returned 5 formatted LinkedIn results, all Financial Controllers in Dublin, none with `date`, and the key does not appear in the output (run 2026-09-23).
 - [x] `grep -rn "PERPLEXITY_API_KEY" src/` shows only the call-time `os.getenv` (plus the error-message string), and nothing in `config.py`.
-- [x] Local commit `feat: CR38 people_search_perplexity ...`. Still to do: review cycle, push, and tag **v0.0.50** after the review cycle passes (v0.0.49 goes to CR39, Sprint 37B). Post-tag: flip CR38 Status to COMPLETE.
+- [x] Local commit `feat: CR38 people_search_perplexity ...` (`a745417`).
+- [x] Review cycle (3 cycles, last one clean), push, and tag **v0.0.50** (v0.0.49 went to CR39, Sprint 37B). Post-tag: flip CR38 Status to COMPLETE.
 
 ### Expected test count after Sprint 38
 
@@ -3225,4 +3226,17 @@ Previous: 720 (Sprint 37B actual). Added 14 (T38.1 4, T38.2 8, T38.4 2). **Expec
 - **The enrichment isolation test asserts `get_tool` is never called for the tool**, not just that the description is unchanged. It also asserts enrichment did run for `list_candidates`, so the test cannot pass vacuously if enrichment breaks.
 - **`.env.example` is CRLF and had no trailing newline.** The appended block completes the last line, which shows as a one-line change to `UPLOAD_SECRET` in the diff. Nothing else changed.
 - **Built directly, not with parallel subagents.** The sprint was about 80 lines of source across two files with a dependency (the tool imports the module), the same call made for Sprint 37B.
+
+### Review cycle findings
+
+- **Cycle 1 (reviewed `a745417`, 734 tests):** 0 CRITICAL, 0 MODERATE, 4 MINOR. The owner asked for the minors to be fixed too.
+- **Fix commit `46adb31`:**
+  - **m1:** `search_people` now raises `invalid_response` when `results` is not a list and drops non-dict entries. `people_search_perplexity` coerces a non-string snippet to `""`. Before this, a malformed 200 body raised `AttributeError`/`TypeError` instead of returning `perplexity_error` JSON.
+  - **m2:** added tests for the `invalid_response` branches, the `HTTP <status>` fallback (non-JSON body, and a body with no `error` key), and key redaction when the upstream message echoes the key.
+  - **m4:** blank line before the CR38 section in `.env.example`.
+  - +9 tests (734 to 743).
+- **m3 not fixed, accepted:** the CR39 T37B.3 bookkeeping was bundled into the CR38 feature commit. Fixing it would mean rewriting commit `a745417`.
+- **Cycle 2:** one MINOR (the docstring said "raw results list"), fixed in `4f1c6a8`.
+- **Cycle 3: clean** (`5eaa3bb`). 743 tests passing. Tagged v0.0.50.
+- **Learning:** `tests/test_server.py` is CRLF. Lines inserted via a Python script with `newline=""` were LF and had to be converted. Check line endings on every inserted block, not only on whole-file rewrites.
 
