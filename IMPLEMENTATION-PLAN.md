@@ -2,7 +2,15 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 36 (CR37) are implemented and tested. **715 tests passing** (last tag v0.0.46 at 648 tests, Sprint 35). Sprint 36 (CR37) is COMPLETE — `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
+**Current baseline:** All sprints through Sprint 36 (CR37) are implemented and tested. **715 tests passing, tagged v0.0.47** (re-measured 2026-09-23). **Next up: Sprint 37 (CR36 housekeeping, PLANNED), then Sprint 38 (CR38 `people_search_perplexity`, PLANNED).** Sprint 36 (CR37) is COMPLETE — `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
+
+**Replan validation (2026-09-23, post-CR37):** Re-reconciled PRD, user stories, CRs, and source code. **715 tests passing, tagged v0.0.47** (`.venv/bin/pytest -q`: 715 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
+- **New CR38** (`people_search_perplexity`, FR-22). FR-22 had been added to PRD.md without a user story. After checking with the owner, **PRD.md gained US-45** (new "External Candidate Sourcing" section) and FR-22 was added to the §1 Overview scope paragraph. The owner approved CR38 (Status flipped to APPROVED). Code search confirms it is unimplemented: no `perplexity` reference in `src/`, `tests/`, `.env.example`, or `pyproject.toml`. Planned as **Sprint 38**.
+- **CR36 (housekeeping, DRAFT since 2026-07-04) was never planned and is entirely unimplemented.** Verified: no `fastmcp` in `pyproject.toml`; unguarded quote interpolation at `server.py:1130` (`get_job_submissions` status), `client.py:523` (`resolve_owner`), and `identity.py:79` (`resolve_caller`); `_NOTE_SEARCH_DEFAULT_FIELDS` still duplicates `_NOTE_DEFAULT_FIELDS`; `_NOTE_ENTITY_SUBJECT_FIELD` is dead; `CR34.md` Status still DRAFT; PRD FR-18 still "Planned (CR30)"; the merged remote branch still exists. After checking with the owner, CR36 was approved for planning as **Sprint 37, ahead of CR38** (carried-over work first). Its `.claude/skills/` commit item was **dropped**, because the owner's 2026-07-29 decision to gitignore that folder superseded it. Amendments were written back into CR36.md.
+- Coverage: 22 FRs (FR-1 to FR-22) and 47 user stories (US-1 to US-45, plus US-7A and US-15A) map to implemented or planned tools. There are no user stories without a requirement.
+- CR35 (tool consolidation) remains reserved and unspecced. CR38 adds a tool (38 to 39) against the consolidation goal. CR38's scope boundaries accept this as a single thin primitive, with orchestration kept in client-side skills.
+- `bha-expired-list-ids.md` (untracked) is a BHA list-export data note for the GDPR-expired investigation. It is not a CR and has no PRD requirement. Nothing is planned; CR38 explicitly excludes it.
+- Stale plan numbers were fixed: the header baseline (it said "last tag v0.0.46") and the Architecture Overview total (it said 630 / v0.0.45).
 
 **Replan validation (2026-06-23, post-CR33):** Re-reconciled PRD, user stories, and source code with subagent-assisted code search. **630 tests passing, tagged v0.0.45** (`8362aef`). Sprint 34 (CR33) is COMPLETE. Findings:
 - All 21 FRs (FR-1 through FR-21) and 46 user stories (US-1 through US-44 plus US-7A and US-15A) map to implemented tools. No FR↔US↔tool coverage gaps. No skips, TODOs, or FIXMEs in source or tests.
@@ -82,7 +90,9 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 33 | **COMPLETE** | CR32: Tearsheet (Hotlist) management — 5 new tools (`list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`), 2 new client methods (`add_association`, `remove_association`) — 595 tests passing, tagged v0.0.44. Review cycle: M2 fixed — empty `candidate_ids` guard added to `add_to_tearsheet`/`remove_from_tearsheet`; 597 tests after fix. M1 false positive (`resolve_caller` vs `resolve_owner` naming in plan). |
 | Sprint 34 | **COMPLETE** | CR33: Metadata-driven isDeleted gate + `list_placements` — 629 tests passing, **tagged v0.0.45**. See CR33.md. Review cycle: M1 fixed — `_PLACEMENT_DEFAULT_FIELDS` in server.py now references `DEFAULT_FIELDS["Placement"]` from client.py at module load time instead of duplicating the string (silent drift risk). M2 fixed — `status` param in `list_placements` validated for single quotes before WHERE construction; matching `test_invalid_status_returns_error` added. **Pattern learnings:** (1) server.py constants that mirror client.py `DEFAULT_FIELDS` entries must reference the source rather than copy the value; (2) structured filter params interpolated into SQL need the same single-quote guard as other input validators, even when a raw `query` param is intentionally accepted; (3) every new `if <param> is not None and <bad>: return error` guard needs a `test_invalid_<param>_returns_error` test in the matching `TestList*` class. 630 tests passing. |
 | Sprint 35 | **COMPLETE** | CR34: Trim startup tool-description enrichment — select_fields(), leveled build_entity_section(), GENERIC_DISCOVERY_TOOLS; ~80% description token reduction. See Sprint 35 detail. |
-| Sprint 36 | **COMPLETE** | CR37: Make note-field filtering discoverable — `note_action` parameter on `list_contacts`/`list_candidates`/`list_jobs`, empty-route probe warning on the Lucene note path, three enrichment field-selection fixes. Tool count unchanged at 38. **715 tests passing.** See Sprint 36 detail. |
+| Sprint 36 | **COMPLETE** | CR37: Make note-field filtering discoverable — `note_action` parameter on `list_contacts`/`list_candidates`/`list_jobs`, empty-route probe warning on the Lucene note path, three enrichment field-selection fixes. Tool count unchanged at 38. **715 tests passing, tagged v0.0.47.** See Sprint 36 detail. |
+| Sprint 37 | **PLANNED** | CR36: Housekeeping. Declares `fastmcp` dependency, single-quote guards on `get_job_submissions` status / `resolve_owner` / `resolve_caller`, collapse duplicated note constants, docs-of-record sync, operational cleanup. Expected ~719 tests. See Sprint 37 detail. |
+| Sprint 38 | **PLANNED** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. Expected ~733 tests. See Sprint 38 detail. |
 
 ### Sprint 15 post-tag regression note
 
@@ -130,7 +140,8 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_joborder_config.py` — 10 tests (env config loaders for aliases/required/defaults)
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
-- **Total: 630 tests, all passing (v0.0.45)**.
+- `tests/test_descriptions.py`, `tests/test_candidate_config.py`: enrichment and candidate env-config tests (per-file counts above are historical; not re-counted)
+- **Total: 715 tests, all passing (v0.0.47, measured 2026-09-23)**. Sprint 38 will add `tests/test_perplexity.py`.
 
 ---
 
@@ -2950,3 +2961,157 @@ A user asked for contacts whose notes carry a given action. That is a working qu
   Net effect: CR37 Change 1's only stated mitigation for the undocumented `notes.action` dot notation is now versioned, reviewable, and survives a clean checkout — which is what M3 was actually asking for. Verified by running `scripts/smoke_read.py` live post-move: `SMOKE PASS`, all 8 entity checks green, `/search/Note` match-all still `total=0`, nested `notes.action` on ClientContact `total=1974`. **Process learning:** the review named the symptom (untracked file) and the first fix took its framing at face value by tracking the whole directory. The better question — why is this file *there* — came from the owner, not the loop. When a finding says "X is not tracked", check whether X is in the right place before making the location permanent. The other half of M3 — the missing Sprint 36 section — is this section, and stands.
 - **Second cycle: clean.** NO CRITICAL ISSUES, MODERATE none. Seven minors logged, none actioned per PROMPT_iterate constraint 1. Tagged v0.0.47 at 715 tests.
 - **Pattern learnings:** (1) adding an entity to `DEFAULT_FIELDS` changes `client.get()` for that entity, which puts it on every **write** path that reads its record back — check `add_note`/`update` call sites, not just the enrichment consumer that motivated the change; (2) respx routes do not match on query parameters, so a test asserting a read-back's *behaviour* proves nothing about its *fields* param — assert `route.calls[0].request.url.params` explicitly; (3) when a reliability probe is added to one tool, enumerate every call site of the underlying client method before calling it done (here: 8 `search_with_meta` call sites, of which exactly 2 can reach `/search/Note`); (4) deliverables outside `src/` and `tests/` need an explicit `git status` check before the build commit — an untracked file is invisible to `git diff HEAD~1` and therefore to the review; (5) **every file under `src/` and `tests/` is CRLF and there is no `.gitattributes`.** CR37 appended an LF-only test class into a CRLF file, and the next edit silently normalised 56 lines, inflating that file's diff from ~25 to 137 lines. Check `grep -c $'\r'` against `wc -l` after appending to a test file, or the churn lands in someone else's review.
+
+---
+
+## Sprint 37: CR36 Housekeeping (verified loose ends from the 2026-07 handover audit) - PLANNED
+
+**Change request:** CR36.md (APPROVED for planning 2026-09-23, with replan amendments recorded in the CR)
+**PRD requirement:** NFR-3 (Error Handling and Resilience: quote guards return structured errors instead of malformed queries), NFR-6 (Testability: a fresh install must import and run the suite). The doc-sync items keep the PRD and plan the source of truth; no new FR/US.
+**User stories:** none (housekeeping; no user-facing behaviour change for any valid input)
+**Dependency:** Sprint 36 complete (baseline **v0.0.47, 715 tests**). Lands **before** Sprint 38 (CR38) because the replan rules prioritise carried-over work.
+**Risk:** Low. Guards reject only inputs that already produce malformed WHERE clauses. The constant merge must not change the value `search_notes` sends.
+
+### Current state (verified by code search 2026-09-23, nothing implemented)
+
+- `pyproject.toml`: no `fastmcp` in `[project] dependencies`, so a fresh `uv pip install -e ".[dev]"` fails the server import.
+- `server.py:1129-1130` `get_job_submissions`: `where += f" AND status='{status}'"` with no quote guard. The template guard already exists in `list_placements` (`server.py:746`) with its test `TestListPlacements::test_invalid_status_returns_error` (`tests/test_server.py:1017`).
+- `client.py:523` `resolve_owner`: `where=f"name='{owner}'"` unguarded.
+- `identity.py:79` `resolve_caller`: `where=f"email='{email}'"` unguarded.
+- `server.py:1800-1822`: `_NOTE_SEARCH_DEFAULT_FIELDS` is byte-identical to `_NOTE_DEFAULT_FIELDS`. Its only consumer is `search_notes` (`server.py:3405`). `_NOTE_ENTITY_SUBJECT_FIELD` (`server.py:1790`) has no references outside its definition in `src/` or `tests/`.
+- Docs drift: `CR34.md` Status still `DRAFT (awaiting approval)`. `PRD.md:210` FR-18 still `**Planned (CR30).**`. The README tool listing is not the 38-tool surface. The Architecture Overview total says 630 / v0.0.45.
+- Remote branch `origin/claude/fix-api-url-formatting-jn0DQ` still exists.
+- **Dropped item:** committing `.claude/skills/`. Superseded by the 2026-07-29 gitignore decision (see CR36.md replan amendments).
+
+### Tasks
+
+#### T37.1, Declare `fastmcp` as a dependency
+**File:** `pyproject.toml`
+Add `fastmcp` to `[project] dependencies` with a bound that includes the installed version and blocks the next major (check `.venv/bin/pip show fastmcp` first; CR36 cites 3.2.4, so for example `fastmcp>=3.2,<4`). The upper bound exists because of the Sprint 15 breakage from an unpinned major.
+- **Verification (not a unit test):** in a scratch dir, fresh clone, then `uv venv && uv pip install -e ".[dev]" && .venv/bin/python -c "import bullhorn_mcp.server"` succeeds. Record the result in the sprint's Actual section.
+
+#### T37.2, Quote guard on `get_job_submissions` `status`
+**File:** `src/bullhorn_mcp/server.py`
+Before building the WHERE clause, return the same structured error JSON and wording pattern as `list_placements` (`"status must not contain single quotes. Got: ..."`). No HTTP call on rejection.
+- **Unit test** (`tests/test_server.py::TestGetJobSubmissions`): `test_invalid_status_returns_error`. Asserts the error JSON and that `query_with_meta` was not called.
+
+#### T37.3, Quote guard on `resolve_owner`
+**File:** `src/bullhorn_mcp/client.py`
+Reject an owner name containing `'` with `ValueError` naming the offending value, before any request. Check the callers (`create_contact`, `create_company`, `create_job`, `create_tearsheet`, bulk) surface the ValueError through their existing error path. Do not add new handling if they already catch it.
+- **Unit test** (`tests/test_client.py::TestResolveOwner`): `test_owner_with_single_quote_raises`. Uses a respx route that must stay uncalled.
+
+#### T37.4, Quote guard on `resolve_caller` email claim
+**File:** `src/bullhorn_mcp/identity.py`
+An email claim containing `'` raises `IdentityResolutionError` before the CorporateUser query. The cache must not be populated.
+- **Unit test** (`tests/test_identity.py::TestResolveCaller`): `test_email_with_single_quote_raises`. The token mock must include `sub` (known fixture trap) and assert `client.query` is not called.
+
+#### T37.5, Collapse the duplicated note constants and delete dead code
+**File:** `src/bullhorn_mcp/server.py`
+Replace the `_NOTE_SEARCH_DEFAULT_FIELDS` literal with `_NOTE_SEARCH_DEFAULT_FIELDS = _NOTE_DEFAULT_FIELDS`, or point `search_notes` at `_NOTE_DEFAULT_FIELDS` and delete the name. Pick one, and update the "keep in sync" comment to say why. Delete `_NOTE_ENTITY_SUBJECT_FIELD` after re-running `grep -rn "_NOTE_ENTITY_SUBJECT_FIELD" src/ tests/`.
+- **Unit test** (`tests/test_server.py`, next to the existing note-constant tests): `test_note_search_fields_are_note_default_fields`. Asserts identity (`is`) if the alias is kept, or that only one constant remains.
+- Existing `search_notes` / `get_notes_for_entity` tests must pass **unmodified**.
+
+#### T37.6, Docs of record sync
+**Files:** `CR34.md`, `PRD.md`, `README.md`, `IMPLEMENTATION-PLAN.md`
+- `CR34.md` Status: `COMPLETE (shipped v0.0.46)`.
+- `PRD.md` FR-18 line 210: `**Planned (CR30).**` becomes `**Delivered (CR30).**`.
+- `README.md`: bring the tool listing to the actual 38-tool surface, or restructure it as tool families with a pointer to the live descriptions. Owner's call at build time; the smaller diff is preferred.
+- `IMPLEMENTATION-PLAN.md`: Architecture Overview test total and header baseline set to this sprint's measured count.
+- Doc edits need no tests, but they are reviewed (docs-are-the-interface rule).
+
+#### T37.7, Operational items (rollout, not a diff)
+- Owner records the CASE_STUDY.md git-history decision ("accepted: history retained" or "schedule a rewrite"). The build agent writes it into this section once given. **Do not rewrite history in this sprint.**
+- Delete the merged remote branch `origin/claude/fix-api-url-formatting-jn0DQ`. This is an outward-facing action, so confirm with the owner before `git push origin --delete`.
+
+### Verification
+
+- [ ] `.venv/bin/pytest` green. All 715 pre-existing tests pass with zero modifications.
+- [ ] Fresh-clone install check from T37.1 passes.
+- [ ] `grep -n "status='{status}'" src/bullhorn_mcp/server.py` shows the guard directly above the interpolation.
+- [ ] `grep -rn "_NOTE_ENTITY_SUBJECT_FIELD" src tests` returns nothing.
+- [ ] One live read-only smoke (`.venv/bin/python scripts/smoke_read.py`) passes, so the constant merge did not change `search_notes` output.
+- [ ] Local commit `fix: CR36 housekeeping ...`, then review cycle, push, and tag **v0.0.48** after the review cycle passes.
+
+### Expected test count after Sprint 37
+
+Previous: 715. Added 4 (T37.2 1, T37.3 1, T37.4 1, T37.5 1). **Expected: 719.** Actual: _to be recorded_.
+
+---
+
+## Sprint 38: CR38 `people_search_perplexity` (external people search via Perplexity) - PLANNED
+
+**Change request:** CR38.md (APPROVED for implementation, owner, 2026-09-23)
+**PRD requirement:** FR-22 (External People Search via Perplexity)
+**User stories:** US-45 (Find people outside Bullhorn by role and location)
+**Dependency:** Sprint 37 complete (expected baseline v0.0.48, ~719 tests). Independent of CR36 in code: both touch `server.py`, but in unrelated regions.
+**Risk:** Low-to-medium. This is the first non-Bullhorn outbound dependency (CR38 R1, R2). It is contained by full isolation: its own module and error type, and no shared client, auth, or config.
+
+### Current state (verified by code search 2026-09-23)
+
+- No `perplexity` reference anywhere in `src/`, `tests/`, `.env.example`, or `pyproject.toml`. Nothing is implemented.
+- `PERPLEXITY_API_KEY` is present in `.env` (gitignored). The live evidence in the CR38 appendix was gathered with it.
+- `httpx` and `python-dotenv` are already dependencies, so no `pyproject.toml` change is needed.
+- `server.py` already imports `os` (line 8) and defines `format_response` (line 247).
+- Tool count before this sprint: **38**. After: **39**.
+
+### Tasks
+
+#### T38.1, `perplexity.py` module
+**File:** `src/bullhorn_mcp/perplexity.py` (new)
+`PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search"`, `class PerplexityError(Exception)`, `search_people(api_key, queries, max_results=10, timeout=30.0) -> list[dict]`, exactly as CR38 Part 2 specifies:
+- Body `{"query": queries, "search_type": "people", "max_results": max_results}`. Always send `query` as a list.
+- Header `Authorization: Bearer <api_key>`, using the `with httpx.Client(timeout=...)` idiom from `client.py`.
+- Non-200: parse `{"error": {"message", "type", "code"}}` and raise `PerplexityError(f"{type}: {message}")`. Fall back to the status code if the body is not that shape. `httpx.HTTPError` is wrapped in `PerplexityError`. The key must never appear in an exception message or log line.
+- No import of `BullhornClient`, `BullhornAuth`, or `BullhornConfig`.
+- **Unit tests** (`tests/test_perplexity.py`, new, respx):
+  - `test_search_people_happy_path`: returns the `results` list. Asserts the exact JSON body and the bearer header.
+  - `test_search_people_401_raises_with_api_message`: the message contains `invalid_api_key`, and the key string is absent from `str(exc)`.
+  - `test_search_people_400_raises`: a validation error body raises `PerplexityError`.
+  - `test_search_people_transport_error_wrapped`: `httpx.ConnectError` becomes `PerplexityError`.
+
+#### T38.2, `people_search_perplexity` MCP tool
+**File:** `src/bullhorn_mcp/server.py`
+`people_search_perplexity(queries: list[str], max_results: int = 10) -> str`, per CR38 Part 2:
+- **Docstring:** the CR38 Part 3 "Final description text" verbatim, placed **before** `Args:` (FastMCP drops everything after `Args:`). Add a one-line no-pagination note ("re-call with a higher `max_results` or vary the query; there is no paging") before `Args:` as well.
+- **Validation before any HTTP call:** empty list returns `queries_required`. More than 5 returns `too_many_queries`. Any blank or whitespace-only entry returns an error. `max_results` is clamped to 1..50.
+- **Key:** `os.getenv("PERPLEXITY_API_KEY")` is read **at call time**, never at import. A falsy value returns `perplexity_key_not_configured`.
+- **Upstream failure:** `PerplexityError` returns `{"error": "perplexity_error", "message": str(e)}`.
+- **Output** via `format_response`: `queries`, `count`, `note` (merged and capped across queries; external source, not Bullhorn), and `results` with `title`, `url`, `snippet` (truncated to ~300 chars with an ellipsis), `last_updated`, and `date` only when present. Unknown extra keys from the API are tolerated (R2).
+- **Unit tests** (`tests/test_server.py::TestPeopleSearchPerplexity`, respx, `monkeypatch.setenv` for the key):
+  - `test_happy_path_formats_results`: `count`, `results`, `note` present; long snippet truncated with an ellipsis; `date` absent when the API omits it.
+  - `test_five_queries_accepted`: the request body `query` is the 5-item list.
+  - `test_empty_queries_returns_error_no_http`: `queries_required`, respx route `.called is False`.
+  - `test_six_queries_returns_error_no_http`: `too_many_queries`, route not called.
+  - `test_blank_entry_returns_error_no_http`
+  - `test_missing_key_returns_error_no_http`: `monkeypatch.delenv`, `perplexity_key_not_configured`.
+  - `test_upstream_401_surfaces_clean_error`: `perplexity_error`, and the key string is absent from the output.
+  - `test_max_results_clamped`: 0 sends 1 and 100 sends 50 (assert on the request body, per the payload-assertion law).
+
+#### T38.3, `.env.example` placeholder
+**File:** `.env.example`
+Add the commented line `# PERPLEXITY_API_KEY=  # required only for people_search_perplexity (external candidate sourcing)`.
+
+#### T38.4, Enrichment isolation
+**File:** `src/bullhorn_mcp/descriptions.py` (**no change expected**)
+The tool must **not** be added to `SUPPORTED_ENTITIES` or `TOOL_ENTITY_MAP`.
+- **Unit tests** (`tests/test_descriptions.py`):
+  - `test_people_search_perplexity_not_in_tool_entity_map`
+  - `test_enrichment_leaves_people_search_description_unchanged`: after `enrich_tool_descriptions` runs against mocked `/meta`, the tool's description has no `## Field reference` block.
+- Also check that any existing test asserting the full tool inventory or tool count (for example `test_server_has_tools`, or a `TOOL_ENTITY_MAP` coverage test that iterates all registered tools) is updated **deliberately** from 38 to 39, or taught to exempt non-entity tools. Do not weaken it to a `>=` check.
+
+#### T38.5, Docs and startup check
+- Run `.venv/bin/python -c "import bullhorn_mcp.server"` with `PERPLEXITY_API_KEY` unset to confirm there is no import-time regression.
+- Optionally run `scripts/measure_descriptions.py` to confirm the payload delta is only this tool's ~90-word description (CR38 R4).
+- Update the Architecture Overview (new module `perplexity.py`, 39 tools, new test file) and the README tool listing (38 to 39).
+
+### Verification
+
+- [ ] `.venv/bin/pytest` green. Sprint 37's tests plus all earlier tests are unchanged, except for any tool-count assertion updated deliberately (T38.4).
+- [ ] Server imports with the key unset.
+- [ ] One manual live smoke (read-only, owner-approved in CR38 acceptance criteria): `people_search_perplexity(["financial controller Dublin"], max_results=5)` returns 5 formatted results, and the key does not appear in the output.
+- [ ] `grep -rn "PERPLEXITY_API_KEY" src/` shows only the call-time `os.getenv`, and nothing in `config.py`.
+- [ ] Local commit `feat: CR38 people_search_perplexity ...`, then review cycle, push, and tag **v0.0.49** after the review cycle passes. Post-tag: flip CR38 Status to COMPLETE.
+
+### Expected test count after Sprint 38
+
+Previous: ~719 (Sprint 37 actual). Added 14 (T38.1 4, T38.2 8, T38.4 2). **Expected: ~733.** Actual: _to be recorded_.

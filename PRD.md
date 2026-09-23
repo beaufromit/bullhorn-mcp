@@ -4,7 +4,7 @@
 
 The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, field metadata resolution, hosted HTTP access, authenticated-user owner stamping, first-class JobOrder create/update workflows, and JobSubmission (shortlist) write tools.
 
-Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), and tearsheet (hotlist) management tools (FR-21).
+Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), tearsheet (hotlist) management tools (FR-21), and a read-only external people search via Perplexity for sourcing candidates not yet in Bullhorn (FR-22).
 
 The MCP serves two classes of consumer:
 
@@ -252,6 +252,17 @@ The MCP shall provide tools for managing Tearsheet (Hotlist) records in Bullhorn
 - `remove_from_tearsheet(tearsheet_id, candidate_ids)` shall remove one or more Candidate records from a Tearsheet using the Bullhorn association `DELETE` endpoint. Multiple candidate IDs resolve to a single API call.
 - `BullhornClient` shall gain two new methods — `add_association` and `remove_association` — for generic TO_MANY association writes (PUT) and deletes (DELETE) on any entity/association pair.
 - `Tearsheet` shall be registered in `descriptions.py` (`SUPPORTED_ENTITIES` and `TOOL_ENTITY_MAP`) so the startup field-reference enrichment covers all five tearsheet tools.
+
+### FR-22: External People Search via Perplexity
+
+The MCP shall provide a `people_search_perplexity` tool for finding people (candidate leads) who are not yet in Bullhorn, using Perplexity's dedicated people index. This is the first non-Bullhorn outbound integration and is strictly read-only.
+
+- `people_search_perplexity(queries, max_results)` shall query Perplexity's Search API people index (`POST /search` with `search_type="people"`) and return matched individual profiles, each with `title`, `url`, `snippet`, and `last_updated` (with `date` when Perplexity supplies it), snippets truncated for compactness.
+- `queries` shall be a list of 1 to 5 population-shaped query strings (role plus location or sector); `max_results` shall default to 10 and be clamped to 1..50. The people index does not paginate, so broader coverage comes from a higher `max_results` or additional queries, not from paging.
+- The Perplexity credential shall be read from the `PERPLEXITY_API_KEY` environment variable, never hardcoded or logged, and shall not be part of `BullhornConfig`. A missing key shall return a clean error at call time and shall never crash the server at import.
+- The integration shall be isolated from the Bullhorn client and authentication (its own module and error type) so a Perplexity failure cannot affect Bullhorn tools, and a Bullhorn failure cannot affect it.
+- The tool has no Bullhorn entity and shall not be registered in the `descriptions.py` startup enrichment.
+- The tool description shall steer usage: it is strongest for sourcing or mapping populations of people; for a single named individual, a general web search is preferred first, with this tool as a fallback. Multi-query market-mapping orchestration and cross-referencing against Bullhorn are out of scope for this requirement and belong to client-side skills.
 
 ## 7. Non-Functional Requirements
 
@@ -533,6 +544,12 @@ As a consultant, I want to remove one or more candidates from a tearsheet, so th
 **US-38: Page through large result sets**
 As an agent or consultant, I want all list, search, and query responses to include pagination metadata, so that I can reliably retrieve all records when results exceed the page size.
 - **Acceptance**: Any list/search/query response includes `data` (the records) and `pagination` with `total`, `start`, `count`, `has_more`, and `next_start`. When `has_more` is `true`, calling again with `start=next_start` returns the next page. When `has_more` is `false`, all records have been retrieved.
+
+### External Candidate Sourcing
+
+**US-45: Find people outside Bullhorn by role and location**
+As a consultant, I want to find people matching a role and a location or sector who are not yet in Bullhorn, so that I can source new candidate leads without leaving the chat.
+- **Acceptance**: `people_search_perplexity(queries=["financial controller Dublin"], max_results=20)` returns up to 20 people-index results, each with `title`, `url`, a truncated `snippet`, and `last_updated`, plus a note that the list is merged across queries and comes from an external source. 1 to 5 queries are accepted; an empty list, a blank entry, or more than 5 queries returns a clean error without calling Perplexity. `max_results` is clamped to 1..50. A missing `PERPLEXITY_API_KEY` returns a clean error at call time and the server still starts. An upstream Perplexity failure returns a clean error with the key absent from the output. The tool makes no Bullhorn calls and writes nothing.
 
 ## 10. Input/Output Schemas
 
