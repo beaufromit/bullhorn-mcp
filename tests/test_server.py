@@ -2486,11 +2486,25 @@ class TestAddNote:
         data = json.loads(result)
         assert data["error"] == "company_notes_live_on_contacts"
         assert data["contacts"][0]["id"] == 145635
+        assert data["contacts_truncated"] is False
         mock_client.add_note.assert_not_called()
         mock_client.query.assert_called_once_with(
-            "ClientContact", "clientCorporation.id=10666",
-            fields="id,firstName,lastName,occupation,email", count=50,
+            "ClientContact", "clientCorporation.id=10666 AND status<>'Archive'",
+            fields="id,firstName,lastName,occupation,email", count=51,
+            order_by="lastName",
         )
+
+    def test_company_target_contact_list_truncated_at_50(self, mock_client):
+        """CR40 review m1: more than 50 contacts returns the first 50 and
+        flags the list as truncated."""
+        mock_client.query.return_value = [{"id": i} for i in range(51)]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.add_note("ClientCorporation", 10666, "General Note", "test")
+
+        data = json.loads(result)
+        assert len(data["contacts"]) == 50
+        assert data["contacts_truncated"] is True
+        mock_client.add_note.assert_not_called()
 
     def test_person_id_ignored_for_person_targets(self, mock_client):
         """CR40: person_id is only meaningful for JobOrder/Placement/Opportunity;
@@ -6537,7 +6551,12 @@ class TestGetNotesForEntity:
 
     def test_other_entities_still_use_notes(self, mock_client, sample_note_records):
         """CR40/T39.3: non-ClientCorporation entities keep using the notes association."""
-        mock_client.get_association.return_value = [sample_note_records[0]]
+        mock_client.get_association_with_meta.side_effect = None
+        mock_client.get_association_with_meta.return_value = {
+            "data": [sample_note_records[0]],
+            "start": 0,
+            "count": 1,
+        }
 
         with patch.object(server, "get_client", return_value=mock_client):
             server.get_notes_for_entity("JobOrder", 51437)

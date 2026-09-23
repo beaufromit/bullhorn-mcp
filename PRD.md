@@ -174,7 +174,7 @@ The MCP shall provide tools for shortlisting candidates to jobs by creating `Job
 
 ### FR-7 Amendment: Add Notes — Extended Entity Support
 
-The original FR-7 covers ClientContact and ClientCorporation. The `add_note` tool has since been extended (CR20) to support seven entity types: Candidate, ClientContact, ClientCorporation, JobOrder, Placement, Lead, and Opportunity. The note author (`commentingPerson`) is stamped automatically from the resolved caller (the logged-in consultant, FR-12); the tool has no author parameter. The valid note action list is validated against the Bullhorn Note picklist on first use and cached for the session.
+The original FR-7 covers ClientContact and ClientCorporation. The `add_note` tool has since been extended (CR20) to support seven entity types: Candidate, ClientContact, ClientCorporation, JobOrder, Placement, Lead, and Opportunity. CR40 later removed ClientCorporation as a target (FR-7 Amendment 2), leaving six. The note author (`commentingPerson`) is stamped automatically from the resolved caller (the logged-in consultant, FR-12); the tool has no author parameter. The valid note action list is validated against the Bullhorn Note picklist on first use and cached for the session.
 
 ### FR-7 Amendment 2: Add Notes, Person Reference and Supported Targets
 
@@ -184,7 +184,7 @@ Bullhorn rejects any Note without a `personReference` (a Person: Candidate, Clie
 - **JobOrder, Placement, Opportunity**: the logged-in consultant (the same CorporateUser stamped as `commentingPerson`). The note is linked to the record through the matching TO_MANY field (`jobOrders`, `placements`, `opportunities`) in the create body, so it appears in that record's notes. It is never attached to the record's client contact or candidate implicitly, so job notes do not accumulate on a contact's timeline.
 - If the caller's identity cannot be resolved, the record's `owner` is used instead. If there is no owner either, the tool returns a `no_linked_person` error and writes nothing.
 - An optional `person_id` argument lets the caller attach a JobOrder, Placement or Opportunity note to a specific person instead of the consultant.
-- **ClientCorporation is not a note target.** Bullhorn has no company-level Note; the Note entity has no company field, and the notes shown on a company are the notes of its contacts. `add_note` on a ClientCorporation shall return a `company_notes_live_on_contacts` error that lists the company's active contacts, write nothing, and point to `update_record` for the company's "Company Comments" field.
+- **ClientCorporation is not a note target.** Bullhorn has no company-level Note; the Note entity has no company field, and the notes shown on a company are the notes of its contacts. `add_note` on a ClientCorporation shall return a `company_notes_live_on_contacts` error that lists the company's active (non-archived) contacts, write nothing, and point to `update_record` for the company's "Company Comments" field.
 - Bullhorn's `ATTEMPT_TO_SET_TO_MANY` warning in the create response is expected and shall not be treated as a failure.
 
 ### FR-15: Candidate Creation and CV Parsing

@@ -1856,7 +1856,8 @@ def add_note(entity: str, entity_id: int, action: str, comments: str, person_id:
     notes to a specific person instead. ClientCorporation is not a note
     target: Bullhorn has no company-level note, so calling this with
     entity="ClientCorporation" writes nothing and instead returns the
-    company's contacts. Add the note to one of those contacts, or use
+    company's non-archived contacts (up to 50, contacts_truncated is true if
+    there are more). Add the note to one of those contacts, or use
     update_record to set the company's "Company Comments" field.
 
     Args:
@@ -1893,10 +1894,13 @@ def add_note(entity: str, entity_id: int, action: str, comments: str, person_id:
         if entity == "ClientCorporation":
             contacts = client.query(
                 "ClientContact",
-                f"clientCorporation.id={entity_id}",
+                f"clientCorporation.id={entity_id} AND status<>'Archive'",
                 fields="id,firstName,lastName,occupation,email",
-                count=50,
+                count=51,
+                order_by="lastName",
             )
+            contacts_truncated = len(contacts) > 50
+            contacts = contacts[:50]
             return format_response({
                 "error": "company_notes_live_on_contacts",
                 "message": (
@@ -1906,6 +1910,7 @@ def add_note(entity: str, entity_id: int, action: str, comments: str, person_id:
                     'set the company\'s "Company Comments" field.'
                 ),
                 "contacts": contacts,
+                "contacts_truncated": contacts_truncated,
             })
 
         valid_actions = _load_valid_note_actions(get_metadata())
