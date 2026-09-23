@@ -109,7 +109,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 37 | **COMPLETE (v0.0.48)** | CR36: Housekeeping. Declares `fastmcp` dependency, single-quote guards on `get_job_submissions` status / `resolve_owner` / `resolve_caller`, collapse duplicated note constants, docs-of-record sync. **719 tests passing.** T37.7 closed (bf91c18). One review cycle, clean. See Sprint 37 detail. |
 | Sprint 37B | **COMPLETE** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Tagged v0.0.49 after 1 clean review cycle. See Sprint 37B detail. |
 | Sprint 38 | **COMPLETE** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. **743 tests passing.** Tagged v0.0.50. See Sprint 38 detail. |
-| Sprint 39 | **BUILT (awaiting review)** | CR40: `add_note` always sends `personReference` (JobOrder, Placement and Opportunity attach to the logged-in consultant via the TO_MANY link; Lead to itself), adds `person_id`, and replaces ClientCorporation notes with a `company_notes_live_on_contacts` redirect. `get_notes_for_entity` and `search_notes` read `clientContactNotes` for companies (FR-7 Amendment 2, FR-16 Amendment; US-46, US-47). Tool count unchanged at 39. Target v0.0.51. See Sprint 39 detail. |
+| Sprint 39 | **COMPLETE** | CR40: `add_note` always sends `personReference` (JobOrder, Placement and Opportunity attach to the logged-in consultant via the TO_MANY link; Lead to itself), adds `person_id`, and replaces ClientCorporation notes with a `company_notes_live_on_contacts` redirect. `get_notes_for_entity` and `search_notes` read `clientContactNotes` for companies (FR-7 Amendment 2, FR-16 Amendment; US-46, US-47). Tool count unchanged at 39. Target v0.0.51. See Sprint 39 detail. Reviewed (2 cycles; owner asked for minors fixed too), tagged v0.0.51, 762 tests. |
 
 ### Sprint 15 post-tag regression note
 
@@ -3248,7 +3248,7 @@ Previous: 720 (Sprint 37B actual). Added 14 (T38.1 4, T38.2 8, T38.4 2). **Expec
 - **Cycle 3: clean** (`5eaa3bb`). 743 tests passing. Tagged v0.0.50.
 - **Learning:** `tests/test_server.py` is CRLF. Lines inserted via a Python script with `newline=""` were LF and had to be converted. Check line endings on every inserted block, not only on whole-file rewrites.
 
-## Sprint 39: CR40 add_note sets personReference; company notes read and write path - BUILT (awaiting review)
+## Sprint 39: CR40 add_note sets personReference; company notes read and write path - COMPLETE
 
 **Change request:** CR40.md (APPROVED, owner, 2026-09-23; replan decisions written back 2026-09-23)
 **PRD requirement:** FR-7 Amendment 2 (Person Reference and Supported Targets), FR-16 Amendment (Company Notes, extended at replan to cover `search_notes`), FR-7 Amendment wording fix (author is auto-stamped)
@@ -3270,7 +3270,7 @@ Previous: 720 (Sprint 37B actual). Added 14 (T38.1 4, T38.2 8, T38.4 2). **Expec
 
 - **A1. Person resolution lives in `server.py`,** because it owns `resolve_caller`. `client.add_note` gains `person_reference_id: int | None = None`. It is required for JobOrder, Placement and Opportunity (`ValueError` if None) and ignored for Candidate, ClientContact and Lead, which reference themselves. CR40 said "client.py" for the table; the payload table is still implemented there.
 - **A2. Precedence** for JobOrder, Placement and Opportunity: `person_id` argument, then resolved caller, then the record `owner`, then the `no_linked_person` error. `commentingPerson` behaviour is unchanged: it is set to the caller when the caller resolves, and is absent otherwise (including when the owner fallback is used).
-- **A3. "Active contacts" means non-deleted contacts** of the company, fetched with `client.query("ClientContact", "clientCorporation.id=<id>", fields="id,firstName,lastName,occupation,email", count=50)`. The automatic isDeleted gate applies. It is capped at 50 (company 10666 has 19).
+- **A3. "Active contacts" means non-deleted contacts** of the company, fetched with `client.query("ClientContact", "clientCorporation.id=<id>", fields="id,firstName,lastName,occupation,email", count=50)`. The automatic isDeleted gate applies. It is capped at 50 (company 10666 has 19). Superseded at review (M1, owner decision): archived contacts are excluded with `status<>'Archive'`, ordered by lastName, 51 fetched, 50 returned with `contacts_truncated`.
 - **A4. The company redirect is checked before action validation,** so it costs no Note metadata call and makes no write.
 - **A5. The owner lookup** is one `client.get(entity, entity_id, fields="id,owner(id)")`. A missing or null owner gives `no_linked_person`. A failed GET (for example a 404) goes through the existing `ERROR:` path.
 
@@ -3348,13 +3348,13 @@ In stdio mode (no Entra token) the caller does not resolve, so a local live run 
 
 ### Verification
 
-- [ ] `.venv/bin/pytest` green. Every changed pre-existing test is listed in the build notes with the reason.
-- [ ] `grep -n '"jobOrder"' src/bullhorn_mcp/client.py` shows no TO_ONE in the note payload; `grep -n "clientCorporation" src/bullhorn_mcp/client.py` shows it is gone from add_note.
-- [ ] Server imports cleanly, and `list_tools()` still reports 39 tools.
-- [ ] Line endings: `client.py`, `test_client.py` and `test_server.py` are CRLF; `server.py` is LF. Check inserted blocks, not only whole files.
-- [ ] T39.5 live acceptance run (owner-approved), with results recorded here.
-- [ ] Local commit `fix: CR40 add_note personReference and company notes ...`. No push.
-- [ ] Review cycle clean, push, tag **v0.0.51**.
+- [x] `.venv/bin/pytest` green. Every changed pre-existing test is listed in the build notes with the reason.
+- [x] `grep -n '"jobOrder"' src/bullhorn_mcp/client.py` shows no TO_ONE in the note payload; `grep -n "clientCorporation" src/bullhorn_mcp/client.py` shows it is gone from add_note.
+- [x] Server imports cleanly, and `list_tools()` still reports 39 tools.
+- [x] Line endings: `client.py`, `test_client.py` and `test_server.py` are CRLF; `server.py` is LF. Check inserted blocks, not only whole files.
+- [x] T39.5 live acceptance run (owner-approved), with results recorded here.
+- [x] Local commit `fix: CR40 add_note personReference and company notes ...`. No push.
+- [x] Review cycle clean, push, tag **v0.0.51**.
 
 ### Expected test count after Sprint 39
 
@@ -3377,3 +3377,15 @@ Previous: 743 (Sprint 38 actual). Added about 18 new (T39.1 8, T39.2 7, T39.3 3)
   4. `add_note("ClientContact", 145635, ...)` created note **2653739** with `personReference` = 145635, unchanged behaviour.
   Both acceptance notes are left in place as test data.
 - Observation (pre-existing, not a CR40 regression): with no resolved caller, Bullhorn stamps `commentingPerson` as the API user (CorporateUser 170787 "Rest API"), not the owner. A2 kept `commentingPerson` unchanged by design. Also, the `add_note` read-back uses the default Note fields, which omit `personReference`, so the tool response does not show whose timeline the note landed on. Candidate follow-ups for the owner, not fixed here.
+
+### Review cycle findings
+
+- **Cycle 1 (reviewed `0775f8f` + `33e2bce`):**
+  - **M1:** the company redirect listed archived contacts, although FR-7 Amendment 2 / US-47 say "active contacts" (assumption A3 had defined active as non-deleted). The owner chose to exclude archived in code: the query is now `clientCorporation.id=<id> AND status<>'Archive'`.
+  - **m1:** the contact list was unordered and silently capped at 50. Now `order_by="lastName"`, fetch 51, return 50, and a `contacts_truncated` flag.
+  - **m2:** PRD FR-7 Amendment still listed ClientCorporation as a target. A sentence was added noting CR40 removed it.
+  - **m3:** `test_other_entities_still_use_notes` configured `get_association` while asserting on `get_association_with_meta`. It now sets `get_association_with_meta` directly (side_effect cleared).
+  - New test `test_company_target_contact_list_truncated_at_50`. PRD wording is now "active (non-archived) contacts".
+  - Fixed in commit `00e040a`. Live read-only check: the company 10666 redirect returns 19 contacts (was 22), `contacts_truncated` false, no write.
+- **Cycle 2 (`00e040a`): clean.** One MINOR logged for awareness only: the ClientContact status picklist on this tenant is Active, Archive, Left Company, Private, so "Left Company" contacts still appear in the redirect list. This is consistent with the owner's chosen fix and was not changed.
+- **Learning:** a plan assumption that redefines a PRD term (A3 "active" = non-deleted) must be written back into the PRD at replan, or the review will flag the mismatch. Also check a status filter against the live picklist (`/meta` options) before deciding what "active" means.
