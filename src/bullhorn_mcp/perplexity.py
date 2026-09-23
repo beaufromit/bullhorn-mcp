@@ -54,6 +54,10 @@ def search_people(
         raise PerplexityError(message.replace(api_key, "***") if api_key else message)
 
     try:
-        return response.json().get("results", []) or []
+        results = response.json().get("results", []) or []
     except (ValueError, AttributeError):
         raise PerplexityError("invalid_response: body is not a JSON object") from None
+    if not isinstance(results, list):
+        raise PerplexityError("invalid_response: results is not a list")
+    # Drop malformed entries rather than fail the whole call.
+    return [item for item in results if isinstance(item, dict)]

@@ -3482,7 +3482,9 @@ def people_search_perplexity(
 
     results = []
     for item in raw:
-        snippet = item.get("snippet") or ""
+        snippet = item.get("snippet")
+        if not isinstance(snippet, str):
+            snippet = ""
         if len(snippet) > _PERPLEXITY_SNIPPET_CHARS:
             snippet = snippet[:_PERPLEXITY_SNIPPET_CHARS].rstrip() + "..."
         row = {

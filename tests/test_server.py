@@ -7247,6 +7247,22 @@ class TestPeopleSearchPerplexity:
         assert "invalid_api_key" in out["message"]
         assert self.API_KEY not in raw
 
+    def test_malformed_results_return_error_json_not_exception(self, respx_mock):
+        self._route(respx_mock, body={"results": {"x": 1}})
+        out = json.loads(server.people_search_perplexity(["financial controller Dublin"]))
+        assert out["error"] == "perplexity_error"
+        assert "invalid_response" in out["message"]
+
+    def test_non_dict_entries_and_non_string_snippet_tolerated(self, respx_mock):
+        self._route(respx_mock, body={"results": [
+            "junk",
+            {"title": "Jane Smith", "url": "https://linkedin.com/in/js", "snippet": 12345},
+        ]})
+        out = json.loads(server.people_search_perplexity(["financial controller Dublin"]))
+        assert out["count"] == 1
+        assert out["results"][0]["title"] == "Jane Smith"
+        assert out["results"][0]["snippet"] == ""
+
     def test_max_results_clamped(self, respx_mock):
         route = self._route(respx_mock)
         server.people_search_perplexity(["q"], max_results=0)

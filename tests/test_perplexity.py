@@ -60,3 +60,63 @@ class TestSearchPeople:
 
         with pytest.raises(PerplexityError, match="transport_error: ConnectError"):
             search_people(API_KEY, ["x"])
+
+    @respx.mock
+    def test_search_people_non_json_200_raises_invalid_response(self):
+        respx.post(PERPLEXITY_SEARCH_URL).mock(return_value=httpx.Response(200, text="<html>oops</html>"))
+
+        with pytest.raises(PerplexityError, match="invalid_response: body is not a JSON object"):
+            search_people(API_KEY, ["x"])
+
+    @respx.mock
+    def test_search_people_json_array_200_raises_invalid_response(self):
+        respx.post(PERPLEXITY_SEARCH_URL).mock(return_value=httpx.Response(200, json=["a", "b"]))
+
+        with pytest.raises(PerplexityError, match="invalid_response: body is not a JSON object"):
+            search_people(API_KEY, ["x"])
+
+    @respx.mock
+    def test_search_people_results_not_a_list_raises_invalid_response(self):
+        respx.post(PERPLEXITY_SEARCH_URL).mock(return_value=httpx.Response(200, json={"results": {"x": 1}}))
+
+        with pytest.raises(PerplexityError, match="invalid_response: results is not a list"):
+            search_people(API_KEY, ["x"])
+
+    @respx.mock
+    def test_search_people_drops_non_dict_entries(self):
+        good = {"title": "Jane Smith", "url": "https://linkedin.com/in/js"}
+        respx.post(PERPLEXITY_SEARCH_URL).mock(
+            return_value=httpx.Response(200, json={"results": ["a", None, 3, good]})
+        )
+
+        assert search_people(API_KEY, ["x"]) == [good]
+
+    @respx.mock
+    def test_search_people_non_json_error_body_falls_back_to_status(self):
+        respx.post(PERPLEXITY_SEARCH_URL).mock(return_value=httpx.Response(502, text="Bad Gateway"))
+
+        with pytest.raises(PerplexityError) as exc_info:
+            search_people(API_KEY, ["x"])
+
+        assert str(exc_info.value) == "HTTP 502"
+
+    @respx.mock
+    def test_search_people_error_body_without_error_key_falls_back_to_status(self):
+        respx.post(PERPLEXITY_SEARCH_URL).mock(return_value=httpx.Response(500, json={"detail": "boom"}))
+
+        with pytest.raises(PerplexityError) as exc_info:
+            search_people(API_KEY, ["x"])
+
+        assert str(exc_info.value) == "HTTP 500"
+
+    @respx.mock
+    def test_search_people_redacts_key_echoed_in_upstream_message(self):
+        respx.post(PERPLEXITY_SEARCH_URL).mock(return_value=httpx.Response(401, json={
+            "error": {"message": f"Invalid API key: {API_KEY}", "type": "invalid_api_key", "code": 401}
+        }))
+
+        with pytest.raises(PerplexityError) as exc_info:
+            search_people(API_KEY, ["x"])
+
+        assert API_KEY not in str(exc_info.value)
+        assert "Invalid API key: ***" in str(exc_info.value)
