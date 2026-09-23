@@ -2,7 +2,7 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 36 (CR37) are implemented, tested, and tagged (v0.0.47). **Sprint 37 (CR36 housekeeping) is BUILT at 719 tests passing** (measured 2026-09-23), with a local commit awaiting its review cycle and tag v0.0.48. **Next up: the Sprint 37 review cycle, then Sprint 38 (CR38 `people_search_perplexity`, PLANNED).** Sprint 36 (CR37) is COMPLETE — `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
+**Current baseline:** All sprints through Sprint 37 (CR36 housekeeping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Next up: Sprint 38 (CR38 `people_search_perplexity`, PLANNED).** Sprint 36 (CR37) is COMPLETE — `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
 
 **Replan validation (2026-09-23, post-CR37):** Re-reconciled PRD, user stories, CRs, and source code. **715 tests passing, tagged v0.0.47** (`.venv/bin/pytest -q`: 715 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **New CR38** (`people_search_perplexity`, FR-22). FR-22 had been added to PRD.md without a user story. After checking with the owner, **PRD.md gained US-45** (new "External Candidate Sourcing" section) and FR-22 was added to the §1 Overview scope paragraph. The owner approved CR38 (Status flipped to APPROVED). Code search confirms it is unimplemented: no `perplexity` reference in `src/`, `tests/`, `.env.example`, or `pyproject.toml`. Planned as **Sprint 38**.
@@ -91,7 +91,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 34 | **COMPLETE** | CR33: Metadata-driven isDeleted gate + `list_placements` — 629 tests passing, **tagged v0.0.45**. See CR33.md. Review cycle: M1 fixed — `_PLACEMENT_DEFAULT_FIELDS` in server.py now references `DEFAULT_FIELDS["Placement"]` from client.py at module load time instead of duplicating the string (silent drift risk). M2 fixed — `status` param in `list_placements` validated for single quotes before WHERE construction; matching `test_invalid_status_returns_error` added. **Pattern learnings:** (1) server.py constants that mirror client.py `DEFAULT_FIELDS` entries must reference the source rather than copy the value; (2) structured filter params interpolated into SQL need the same single-quote guard as other input validators, even when a raw `query` param is intentionally accepted; (3) every new `if <param> is not None and <bad>: return error` guard needs a `test_invalid_<param>_returns_error` test in the matching `TestList*` class. 630 tests passing. |
 | Sprint 35 | **COMPLETE** | CR34: Trim startup tool-description enrichment — select_fields(), leveled build_entity_section(), GENERIC_DISCOVERY_TOOLS; ~80% description token reduction. See Sprint 35 detail. |
 | Sprint 36 | **COMPLETE** | CR37: Make note-field filtering discoverable — `note_action` parameter on `list_contacts`/`list_candidates`/`list_jobs`, empty-route probe warning on the Lucene note path, three enrichment field-selection fixes. Tool count unchanged at 38. **715 tests passing, tagged v0.0.47.** See Sprint 36 detail. |
-| Sprint 37 | **BUILT (awaiting review)** | CR36: Housekeeping. Declares `fastmcp` dependency, single-quote guards on `get_job_submissions` status / `resolve_owner` / `resolve_caller`, collapse duplicated note constants, docs-of-record sync. **719 tests passing.** T37.7 operational items pending owner. See Sprint 37 detail. |
+| Sprint 37 | **COMPLETE (v0.0.48)** | CR36: Housekeeping. Declares `fastmcp` dependency, single-quote guards on `get_job_submissions` status / `resolve_owner` / `resolve_caller`, collapse duplicated note constants, docs-of-record sync. **719 tests passing.** T37.7 closed (bf91c18). One review cycle, clean. See Sprint 37 detail. |
 | Sprint 38 | **PLANNED** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. Expected ~733 tests. See Sprint 38 detail. |
 
 ### Sprint 15 post-tag regression note
@@ -141,7 +141,7 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
 - `tests/test_descriptions.py`, `tests/test_candidate_config.py`: enrichment and candidate env-config tests (per-file counts above are historical; not re-counted)
-- **Total: 719 tests, all passing (Sprint 37 build, measured 2026-09-23; last tag v0.0.47)**. Sprint 38 will add `tests/test_perplexity.py`.
+- **Total: 719 tests, all passing (Sprint 37, measured 2026-09-23; last tag v0.0.48)**. Sprint 38 will add `tests/test_perplexity.py`.
 
 ---
 
@@ -2964,7 +2964,7 @@ A user asked for contacts whose notes carry a given action. That is a working qu
 
 ---
 
-## Sprint 37: CR36 Housekeeping (verified loose ends from the 2026-07 handover audit) - BUILT (awaiting review cycle)
+## Sprint 37: CR36 Housekeeping (verified loose ends from the 2026-07 handover audit) - COMPLETE (v0.0.48)
 
 **Change request:** CR36.md (APPROVED for planning 2026-09-23, with replan amendments recorded in the CR)
 **PRD requirement:** NFR-3 (Error Handling and Resilience: quote guards return structured errors instead of malformed queries), NFR-6 (Testability: a fresh install must import and run the suite). The doc-sync items keep the PRD and plan the source of truth; no new FR/US.
@@ -3030,7 +3030,7 @@ Replace the `_NOTE_SEARCH_DEFAULT_FIELDS` literal with `_NOTE_SEARCH_DEFAULT_FIE
 - [x] `grep -n "status='{status}'" src/bullhorn_mcp/server.py` shows the guard directly above the interpolation.
 - [x] `grep -rn "_NOTE_ENTITY_SUBJECT_FIELD" src tests` returns nothing.
 - [x] One live read-only smoke (`.venv/bin/python scripts/smoke_read.py`) passes, so the constant merge did not change `search_notes` output.
-- [ ] Local commit `fix: CR36 housekeeping ...`, then review cycle, push, and tag **v0.0.48** after the review cycle passes.
+- [x] Local commit `fix: CR36 housekeeping ...`, then review cycle, push, and tag **v0.0.48** after the review cycle passes.
 
 ### Expected test count after Sprint 37
 
@@ -3044,6 +3044,18 @@ Previous: 715. Added 4 (T37.2 1, T37.3 1, T37.4 1, T37.5 1). **Expected: 719. Ac
 - **T37.6:** README restructured into tool families listing all 38 tools, checked by diffing the list against the `@mcp.tool` defs. **Not changed (out of T37.6 scope, noted for a future doc sync):** the README "Supported write targets" list still shows only ClientCorporation / ClientContact / JobOrder / Note, although Candidate, JobSubmission (shortlist) and Tearsheet writes now exist, and the "Features" bullets predate CR19+.
 - **T37.7:** remote branch `origin/claude/fix-api-url-formatting-jn0DQ` (tip `64ad4b5`, confirmed merged into `origin/main`) **deleted 2026-09-23** with owner approval. **CASE_STUDY.md: accepted, history retained** (owner, 2026-09-23). The owner's requirement is that the file is not in the repo going forward, and that already holds: it was reverted in `c570499` (Jan 2026), is absent from the tree and index, and `.gitignore:41` blocks it from being re-added. A history rewrite was rejected because it cannot remove the content: this repo is a public GitHub fork of `osherai/bullhorn-mcp-python`, whose public history still holds `cdca5f8`, and fork networks share objects, so the SHA stays reachable. The cost would have been rewriting 135 of 137 commits and all 47 tags, plus a force-push. T37.7 is closed.
 - **Learning, line endings:** the memory/plan claim that "every file under `src/` and `tests/` is CRLF" is **wrong**. It is per-file: `client.py`, `test_client.py`, `test_server.py` and `pyproject.toml` (mostly) are CRLF, while `server.py`, `identity.py` and `test_identity.py` are LF. Check `git show HEAD:<file> | grep -c $'\r'` for the specific file before editing, and match it.
+
+### Review cycle findings
+
+- **Cycle 1 (reviewed `7142cbb` + `bf91c18` as `git diff HEAD~2`): clean.** 0 CRITICAL, 0 MODERATE. Six minors logged, not fixed per PROMPT_iterate constraint 1:
+  - **m1:** a `resolve_owner` quote-rejection `ValueError` surfaces under the `owner_not_found` / `user_not_found` error code, so the caller sees "not found" for what is really a rejected input. The comment at `server.py:1415` is now incomplete.
+  - **m2:** the `resolve_owner` docstring `Raises:` section does not mention the quote rejection.
+  - **m3:** the reject-only choice hard-locks names and emails containing an apostrophe (e.g. O'Brien), a real population on an Irish tenant. Any caller whose Entra email contains an apostrophe cannot use the write paths that need `resolve_caller`. Not a regression (the old query was malformed for these inputs anyway). Candidate for a future CR: escape instead of reject.
+  - **m4:** two test docstrings call the `/query` WHERE clause "Lucene".
+  - **m5:** the sprint status row still said T37.7 was pending after `bf91c18` closed it. Fixed by this update.
+  - **m6:** the README "Supported write targets" and "Features" sections are still stale (out of T37.6 scope, already noted in the build notes above).
+- Tagged v0.0.48 at 719 tests (2026-09-23).
+- **Learning:** the reviewer flagged m3 as the most consequential minor. Recommend the owner consider it for a CR.
 
 ---
 
