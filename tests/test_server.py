@@ -7156,3 +7156,100 @@ class TestTearsheetTools:
         data = json.loads(result)
         assert data["error"] == "invalid_argument"
         mock_client.remove_association.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Sprint 38: CR38 people_search_perplexity (external, not Bullhorn)
+# ---------------------------------------------------------------------------
+
+class TestPeopleSearchPerplexity:
+    """people_search_perplexity validates before any HTTP call and never leaks the key."""
+
+    API_KEY = "pplx-test-secret-key"
+
+    @pytest.fixture(autouse=True)
+    def _key(self, monkeypatch):
+        monkeypatch.setenv("PERPLEXITY_API_KEY", self.API_KEY)
+
+    def _route(self, respx_mock, status=200, body=None):
+        import httpx
+        from bullhorn_mcp.perplexity import PERPLEXITY_SEARCH_URL
+        if body is None:
+            body = {"results": []}
+        return respx_mock.post(PERPLEXITY_SEARCH_URL).mock(
+            return_value=httpx.Response(status, json=body)
+        )
+
+    def test_happy_path_formats_results(self, respx_mock):
+        long_snippet = "x" * 500
+        route = self._route(respx_mock, body={"results": [
+            {"title": "Jane Smith - FC", "url": "https://linkedin.com/in/js",
+             "snippet": long_snippet, "last_updated": "2026-09-11", "extra_key": "tolerated"},
+            {"title": "Tom Byrne", "url": "https://linkedin.com/in/tb",
+             "snippet": "short", "last_updated": "2026-08-01", "date": "2025-07-17"},
+        ]})
+
+        out = json.loads(server.people_search_perplexity(["financial controller Dublin"]))
+
+        assert route.called
+        assert out["queries"] == ["financial controller Dublin"]
+        assert out["count"] == 2
+        assert "not Bullhorn" in out["note"]
+        first, second = out["results"]
+        assert first["snippet"] == "x" * 300 + "..."
+        assert "date" not in first
+        assert "extra_key" not in first
+        assert first["last_updated"] == "2026-09-11"
+        assert second["snippet"] == "short"
+        assert second["date"] == "2025-07-17"
+
+    def test_five_queries_accepted(self, respx_mock):
+        route = self._route(respx_mock)
+        queries = ["a", "b", "c", "d", "e"]
+
+        out = json.loads(server.people_search_perplexity(queries))
+
+        assert out["count"] == 0
+        assert json.loads(route.calls.last.request.content)["query"] == queries
+
+    def test_empty_queries_returns_error_no_http(self, respx_mock):
+        route = self._route(respx_mock)
+        out = json.loads(server.people_search_perplexity([]))
+        assert out["error"] == "queries_required"
+        assert route.called is False
+
+    def test_six_queries_returns_error_no_http(self, respx_mock):
+        route = self._route(respx_mock)
+        out = json.loads(server.people_search_perplexity(["a", "b", "c", "d", "e", "f"]))
+        assert out["error"] == "too_many_queries"
+        assert route.called is False
+
+    def test_blank_entry_returns_error_no_http(self, respx_mock):
+        route = self._route(respx_mock)
+        out = json.loads(server.people_search_perplexity(["financial controller", "   "]))
+        assert out["error"] == "blank_query"
+        assert route.called is False
+
+    def test_missing_key_returns_error_no_http(self, respx_mock, monkeypatch):
+        monkeypatch.delenv("PERPLEXITY_API_KEY")
+        route = self._route(respx_mock)
+        out = json.loads(server.people_search_perplexity(["financial controller Dublin"]))
+        assert out["error"] == "perplexity_key_not_configured"
+        assert route.called is False
+
+    def test_upstream_401_surfaces_clean_error(self, respx_mock):
+        self._route(respx_mock, status=401, body={
+            "error": {"message": "Invalid API key provided.", "type": "invalid_api_key", "code": 401}
+        })
+        raw = server.people_search_perplexity(["financial controller Dublin"])
+        out = json.loads(raw)
+        assert out["error"] == "perplexity_error"
+        assert "invalid_api_key" in out["message"]
+        assert self.API_KEY not in raw
+
+    def test_max_results_clamped(self, respx_mock):
+        route = self._route(respx_mock)
+        server.people_search_perplexity(["q"], max_results=0)
+        assert json.loads(route.calls.last.request.content)["max_results"] == 1
+        server.people_search_perplexity(["q"], max_results=100)
+        assert json.loads(route.calls.last.request.content)["max_results"] == 50

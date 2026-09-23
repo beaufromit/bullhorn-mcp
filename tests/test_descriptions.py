@@ -652,3 +652,38 @@ class TestBuildEntitySectionLevels:
         result_default = build_entity_section("Candidate", fields)
         result_full = build_entity_section("Candidate", fields, level="full")
         assert result_default == result_full
+
+
+class TestPeopleSearchPerplexityIsolation:
+    """CR38: the Perplexity tool has no Bullhorn entity, so enrichment must skip it."""
+
+    def test_people_search_perplexity_not_in_tool_entity_map(self):
+        assert "people_search_perplexity" not in TOOL_ENTITY_MAP
+
+    @pytest.mark.asyncio
+    async def test_enrichment_leaves_people_search_description_unchanged(self):
+        tool_names = list(TOOL_ENTITY_MAP) + ["people_search_perplexity"]
+        tools = {}
+        for name in tool_names:
+            t = Mock()
+            t.description = f"Static description for {name}."
+            tools[name] = t
+        requested = []
+
+        async def get_tool(name):
+            requested.append(name)
+            return tools[name]
+
+        mcp = Mock()
+        mcp.get_tool = get_tool
+        client = Mock()
+        client.get_meta.side_effect = lambda entity: {"entity": entity, "fields": SAMPLE_FIELDS}
+
+        await enrich_tool_descriptions(mcp, client)
+
+        # Guard the test itself: enrichment did run for the entity tools.
+        assert "## Field reference" in tools["list_candidates"].description
+        assert "people_search_perplexity" not in requested
+        assert tools["people_search_perplexity"].description == (
+            "Static description for people_search_perplexity."
+        )

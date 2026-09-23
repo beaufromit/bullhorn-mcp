@@ -25,6 +25,7 @@ from .fuzzy import score_company_match, categorize_score, score_contact_match
 from .bulk import BulkImporter
 from .identity import resolve_caller, IdentityResolutionError
 from .descriptions import enrich_tool_descriptions
+from .perplexity import search_people, PerplexityError
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -3428,6 +3429,82 @@ def search_notes(
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
+
+
+_PERPLEXITY_MAX_QUERIES = 5
+_PERPLEXITY_SNIPPET_CHARS = 300
+
+
+@mcp.tool()
+def people_search_perplexity(
+    queries: list[str],
+    max_results: int = 10,
+) -> str:
+    """Searches a dedicated index for individual profiles and employee data. Returns information including names, job titles, companies, and profile URLs. Use this tool ONLY when the user specifically wants individual employee lookups, career history, or people who match work-related criteria (e.g., listing employees at a company by location). This tool is strongest for sourcing or mapping multiple people who match criteria: population-shaped queries (role plus location or sector) return many precise matches. For a single specific named individual or a company's specific office-holder, prefer a general web search first and fall back to this tool if the results are unsatisfactory. Results are a snapshot and may not reflect a person's current role.
+
+    There is no paging: to see more people, re-call with a higher max_results or vary the query.
+
+    Args:
+        queries: 1 to 5 search queries, e.g. ["financial controller Dublin"].
+            Results across all queries come back as one merged, ranked list.
+        max_results: Total results across all queries (1-50, default 10)
+    """
+    # CR38: external source, isolated from Bullhorn. Validate before any HTTP call.
+    if not queries:
+        return format_response({
+            "error": "queries_required",
+            "message": "Provide at least one query.",
+        })
+    if len(queries) > _PERPLEXITY_MAX_QUERIES:
+        return format_response({
+            "error": "too_many_queries",
+            "message": f"At most {_PERPLEXITY_MAX_QUERIES} queries per call. Got: {len(queries)}",
+        })
+    if any(not isinstance(q, str) or not q.strip() for q in queries):
+        return format_response({
+            "error": "blank_query",
+            "message": "Every query must be a non-empty string.",
+        })
+    max_results = max(1, min(50, max_results))
+
+    # Read at call time, never at import: a missing key must not stop the server.
+    api_key = os.getenv("PERPLEXITY_API_KEY")
+    if not api_key:
+        return format_response({
+            "error": "perplexity_key_not_configured",
+            "message": "PERPLEXITY_API_KEY is not set on the server.",
+        })
+
+    try:
+        raw = search_people(api_key, queries, max_results=max_results)
+    except PerplexityError as e:
+        return format_response({"error": "perplexity_error", "message": str(e)})
+
+    results = []
+    for item in raw:
+        snippet = item.get("snippet") or ""
+        if len(snippet) > _PERPLEXITY_SNIPPET_CHARS:
+            snippet = snippet[:_PERPLEXITY_SNIPPET_CHARS].rstrip() + "..."
+        row = {
+            "title": item.get("title"),
+            "url": item.get("url"),
+            "snippet": snippet,
+            "last_updated": item.get("last_updated"),
+        }
+        # People mode usually omits date; only surface it when present.
+        if item.get("date"):
+            row["date"] = item["date"]
+        results.append(row)
+
+    return format_response({
+        "queries": queries,
+        "count": len(results),
+        "note": (
+            "Results are a single merged, ranked list across all queries, capped at "
+            "max_results total. Source: Perplexity people index (external, not Bullhorn)."
+        ),
+        "results": results,
+    })
 
 
 async def _upload_cv_handler(request: Request) -> Response:

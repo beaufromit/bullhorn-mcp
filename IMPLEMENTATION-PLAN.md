@@ -2,7 +2,7 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). Next after that: Sprint 38 (CR38 `people_search_perplexity`, PLANNED, target v0.0.50).** Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is BUILT at 734 tests passing (2026-09-23), awaiting its review cycle; target v0.0.50.** Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools).
 
 **Replan validation (2026-09-23, post-CR36):** Re-reconciled PRD, user stories, CRs, and source code. **719 tests passing, tagged v0.0.48** (`.venv/bin/pytest -q`: 719 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **New CR39** (escape apostrophes in CorporateUser lookups, owner-APPROVED 2026-09-23, assumptions A1 to A3 confirmed). It follows up Sprint 37 review minor m3. The PRD is already amended: FR-2 and FR-12 each gained an apostrophe sentence marked "Planned (CR39)". The existing user stories cover the behaviour: **US-4** (owner by consultant name) and **US-23** (Entra identity to CorporateUser). No new user story is needed, because this is an input-domain correction to existing stories, not a new capability.
@@ -101,7 +101,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 36 | **COMPLETE** | CR37: Make note-field filtering discoverable — `note_action` parameter on `list_contacts`/`list_candidates`/`list_jobs`, empty-route probe warning on the Lucene note path, three enrichment field-selection fixes. Tool count unchanged at 38. **715 tests passing, tagged v0.0.47.** See Sprint 36 detail. |
 | Sprint 37 | **COMPLETE (v0.0.48)** | CR36: Housekeeping. Declares `fastmcp` dependency, single-quote guards on `get_job_submissions` status / `resolve_owner` / `resolve_caller`, collapse duplicated note constants, docs-of-record sync. **719 tests passing.** T37.7 closed (bf91c18). One review cycle, clean. See Sprint 37 detail. |
 | Sprint 37B | **COMPLETE** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Tagged v0.0.49 after 1 clean review cycle. See Sprint 37B detail. |
-| Sprint 38 | **PLANNED** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. Expected ~734 tests, target tag v0.0.50. See Sprint 38 detail. |
+| Sprint 38 | **BUILT (review pending)** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. **734 tests passing.** Target tag v0.0.50 after the review cycle. See Sprint 38 detail. |
 
 ### Sprint 15 post-tag regression note
 
@@ -125,7 +125,7 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/auth.py` — OAuth 2.0 flow with regional redirects, session refresh
 - `src/bullhorn_mcp/client.py` — `BullhornClient` with `_request()` (params + json body, 200/201 success), `search()`, `query()`, `get()`, `get_meta()`, `create()`, `resolve_owner()`, `update()`, `add_note(commenting_person_id)`, `_request_multipart`, `parse_resume_file`, `parse_resume_text`, `attach_file`; `_ENTITY_FIELD` dispatch dict in `add_note` maps each of 7 entity types to its Note association field name
 - `src/bullhorn_mcp/metadata.py` — `BullhornMetadata` with `get_fields()`, `resolve_label_to_api()`, `resolve_api_to_label()`, `resolve_fields()`, session-level caching; `FIELD_ALIASES` constant extended at module load with env-defined JobOrder aliases via `joborder_config.get_joborder_aliases()`; `FIELD_ALIASES["JobSubmission"] = {}` reserved slot.
-- `src/bullhorn_mcp/server.py` — MCP server with **38 implemented tools**: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `list_placements`, `get_job`, `get_candidate`, `get_company`, `get_contact`, `get_job_submissions`, `search_entities`, `query_entities`, `search_emails`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`, `get_notes_for_entity`, `search_notes`, `list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet` (CR33 added `list_placements`). Includes `get_client()`, `get_metadata()`, `_shortlist_one()`, `_paginate_envelope()` helpers; `_NOTE_TARGET_ENTITIES` set; `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()`, `_strip_cc_telemetry()` private helpers; `_NOTE_DEFAULT_FIELDS`, `_CC_TAG_RE`, `_valid_note_actions` module-level constants/state.
+- `src/bullhorn_mcp/server.py` — MCP server with **39 implemented tools**: `list_jobs`, `list_candidates`, `list_contacts`, `list_companies`, `list_placements`, `get_job`, `get_candidate`, `get_company`, `get_contact`, `get_job_submissions`, `search_entities`, `query_entities`, `search_emails`, `get_entity_fields`, `create_company`, `create_contact`, `find_duplicate_companies`, `find_duplicate_contacts`, `update_record`, `add_note`, `bulk_import`, `create_job`, `update_job`, `shortlist_candidate`, `shortlist_candidates`, `create_candidate`, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv`, `get_notes_for_entity`, `search_notes`, `list_tearsheets`, `get_tearsheet`, `create_tearsheet`, `add_to_tearsheet`, `remove_from_tearsheet`, `people_search_perplexity` (CR33 added `list_placements`; CR38 added `people_search_perplexity`). Includes `get_client()`, `get_metadata()`, `_shortlist_one()`, `_paginate_envelope()` helpers; `_NOTE_TARGET_ENTITIES` set; `_strip_contact_title()`, `_check_candidate_duplicates()`, `_truncate_against_meta()`, `_strip_cc_telemetry()` private helpers; `_NOTE_DEFAULT_FIELDS`, `_CC_TAG_RE`, `_valid_note_actions` module-level constants/state.
 - `src/bullhorn_mcp/fuzzy.py` — Fuzzy string matching and confidence scoring
 
 ### New modules (implemented)
@@ -133,6 +133,7 @@ These are fixed as the first tasks in Sprint 16.
 - `src/bullhorn_mcp/identity.py` — Entra token claim extraction and per-user Bullhorn CorporateUser identity cache
 - `src/bullhorn_mcp/joborder_config.py` — Per-instance JobOrder env configuration: `get_joborder_aliases()`, `get_joborder_required()`, `get_joborder_defaults()` reading from `BULLHORN_JOBORDER_ALIASES/REQUIRED/DEFAULTS`
 - `src/bullhorn_mcp/shortlist_config.py` — Per-instance JobSubmission env configuration: `get_shortlist_status()` reading from `BULLHORN_SHORTLIST_STATUS` (default `"Shortlisted"`)
+- `src/bullhorn_mcp/perplexity.py` (CR38): `PERPLEXITY_SEARCH_URL`, `PerplexityError`, `search_people()`. The only non-Bullhorn outbound dependency. It imports nothing from the Bullhorn client, auth or config, so a Perplexity outage or missing key cannot affect Bullhorn tools. The key is read by the tool at call time via `os.getenv`, never at import and never in `BullhornConfig`.
 
 ### Existing modules extended
 - `src/bullhorn_mcp/server.py` — Add `bulk_import` MCP tool (Sprint 7)
@@ -150,7 +151,8 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
 - `tests/test_descriptions.py`, `tests/test_candidate_config.py`: enrichment and candidate env-config tests (per-file counts above are historical; not re-counted)
-- **Total: 720 tests, all passing (Sprint 37B, measured 2026-09-23; tagged v0.0.49)**. Sprint 38 will add `tests/test_perplexity.py`.
+- `tests/test_perplexity.py` (CR38): 4 tests for `search_people` (payload and bearer header, 401, 400, transport error)
+- **Total: 734 tests, all passing (Sprint 38 build, measured 2026-09-23; review pending, target v0.0.50)**.
 
 ---
 
@@ -3117,7 +3119,7 @@ Previous: 715. Added 4 (T37.2 1, T37.3 1, T37.4 1, T37.5 1). **Expected: 719. Ac
 - [x] `grep -rn "must not contain single quotes" src/bullhorn_mcp/client.py src/bullhorn_mcp/identity.py` returns nothing. The two `status` guards in `server.py` are still present (lines 746, 1125).
 - [x] Optional live read-only check (run 2026-09-23: `ValueError No CorporateUser found matching 'Tracey O'Neill'`; with `exclude_deleted=False` the escaped query returns id 145098): `client.resolve_owner("Tracey O'Neill")` raises the **no-match** `ValueError` (the only match is soft-deleted, so the default `exclude_deleted=True` filters it out), not a 400 and not the old quote rejection. That proves the escaped query is well-formed on the tenant.
 - [x] `git diff --stat` shows no line-ending churn (the per-file CRLF/LF rule): 61 insertions, 29 deletions across the four source/test files.
-- [x] Local commit `fix: CR39 escape apostrophes in CorporateUser lookups` (`2ce3bfe`), then the review cycle (1 clean cycle), push, and tag **v0.0.49**. Still outstanding (T37B.3 post-tag): CR39 Status and PRD markers.
+- [x] Local commit `fix: CR39 escape apostrophes in CorporateUser lookups` (`2ce3bfe`), then the review cycle (1 clean cycle), push, and tag **v0.0.49**. T37B.3 post-tag items (CR39 Status, PRD "Delivered (CR39)" markers) were done in the Sprint 38 build commit, as carried-over work.
 
 ### Expected test count after Sprint 37B
 
@@ -3138,7 +3140,7 @@ Previous: 719 (Sprint 37 actual). Rewritten in place: 2 (net 0). Added: 1 (`test
 
 ---
 
-## Sprint 38: CR38 `people_search_perplexity` (external people search via Perplexity) - PLANNED
+## Sprint 38: CR38 `people_search_perplexity` (external people search via Perplexity) - BUILT (review pending)
 
 **Change request:** CR38.md (APPROVED for implementation, owner, 2026-09-23)
 **PRD requirement:** FR-22 (External People Search via Perplexity)
@@ -3206,12 +3208,21 @@ The tool must **not** be added to `SUPPORTED_ENTITIES` or `TOOL_ENTITY_MAP`.
 
 ### Verification
 
-- [ ] `.venv/bin/pytest` green. Sprint 37B's tests plus all earlier tests are unchanged, except for any tool-count assertion updated deliberately (T38.4).
-- [ ] Server imports with the key unset.
-- [ ] One manual live smoke (read-only, owner-approved in CR38 acceptance criteria): `people_search_perplexity(["financial controller Dublin"], max_results=5)` returns 5 formatted results, and the key does not appear in the output.
-- [ ] `grep -rn "PERPLEXITY_API_KEY" src/` shows only the call-time `os.getenv`, and nothing in `config.py`.
-- [ ] Local commit `feat: CR38 people_search_perplexity ...`, then review cycle, push, and tag **v0.0.50** after the review cycle passes (v0.0.49 goes to CR39, Sprint 37B). Post-tag: flip CR38 Status to COMPLETE.
+- [x] `.venv/bin/pytest` green: 734 passed. No pre-existing test was modified. There is no tool-count assertion to update: `test_server_has_tools` checks membership of named tools only, so T38.4's 38-to-39 concern did not apply.
+- [x] Server imports with the key unset, and `list_tools()` reports 39 tools.
+- [x] One manual live smoke (read-only, owner-approved in CR38 acceptance criteria): `people_search_perplexity(["financial controller Dublin"], max_results=5)` returned 5 formatted LinkedIn results, all Financial Controllers in Dublin, none with `date`, and the key does not appear in the output (run 2026-09-23).
+- [x] `grep -rn "PERPLEXITY_API_KEY" src/` shows only the call-time `os.getenv` (plus the error-message string), and nothing in `config.py`.
+- [x] Local commit `feat: CR38 people_search_perplexity ...`. Still to do: review cycle, push, and tag **v0.0.50** after the review cycle passes (v0.0.49 goes to CR39, Sprint 37B). Post-tag: flip CR38 Status to COMPLETE.
 
 ### Expected test count after Sprint 38
 
-Previous: ~720 (Sprint 37B expected). Added 14 (T38.1 4, T38.2 8, T38.4 2). **Expected: ~734.** Actual: _to be recorded_.
+Previous: 720 (Sprint 37B actual). Added 14 (T38.1 4, T38.2 8, T38.4 2). **Expected: 734. Actual: 734 passing, 0 failing** (`.venv/bin/pytest -q`, 2026-09-23).
+
+### Build learnings
+
+- **Blank-entry error code is `blank_query`.** CR38 said only "error JSON" for a blank or whitespace-only entry. `blank_query` was chosen to match the other snake_case codes. A non-string entry gets the same code.
+- **Key-leak defence is belt and braces.** Transport errors are wrapped as `transport_error: <ExceptionClass>` (no httpx message), and any upstream error text has the key replaced with `***` before it is raised. Why: the upstream body is outside our control, so a test on one 401 shape cannot prove no future body echoes the key.
+- **The enrichment isolation test asserts `get_tool` is never called for the tool**, not just that the description is unchanged. It also asserts enrichment did run for `list_candidates`, so the test cannot pass vacuously if enrichment breaks.
+- **`.env.example` is CRLF and had no trailing newline.** The appended block completes the last line, which shows as a one-line change to `UPLOAD_SECRET` in the diff. Nothing else changed.
+- **Built directly, not with parallel subagents.** The sprint was about 80 lines of source across two files with a dependency (the tool imports the module), the same call made for Sprint 37B.
+

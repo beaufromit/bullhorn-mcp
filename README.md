@@ -37,7 +37,7 @@ Typical use cases:
 
 ## MCP Tools
 
-38 tools, grouped by family below. Each tool's full parameter and field reference is in its live MCP description (enriched from Bullhorn `/meta` at startup), which is the authoritative interface.
+39 tools, grouped by family below. Each tool's full parameter and field reference is in its live MCP description (enriched from Bullhorn `/meta` at startup), which is the authoritative interface.
 
 ### Read tools
 
@@ -97,6 +97,10 @@ Typical use cases:
 - `find_duplicate_companies`
 - `find_duplicate_contacts`
 - `find_duplicate_candidates`
+
+### External sourcing tools
+
+- `people_search_perplexity`: read-only search of Perplexity's people index for candidates not yet in Bullhorn. It makes no Bullhorn calls and needs `PERPLEXITY_API_KEY`.
 
 ## Supported Entity Scope
 
@@ -375,6 +379,7 @@ If the authenticated user cannot be mapped to a Bullhorn `CorporateUser`, create
 | `ENTRA_TENANT_ID`        | HTTP only | Microsoft Entra tenant ID                                                 |
 | `ENTRA_CLIENT_ID`        | HTTP only | Entra app registration client ID                                          |
 | `ENTRA_CLIENT_SECRET`    | HTTP only | Entra app registration client secret                                      |
+| `PERPLEXITY_API_KEY`     | No        | Perplexity API key, needed only by `people_search_perplexity`             |
 
 ## Client Configuration
 
@@ -608,6 +613,7 @@ src/bullhorn_mcp/
   fuzzy.py      Duplicate matching helpers
   identity.py   Authenticated-user to CorporateUser resolution
   metadata.py   Field metadata and label resolution
+  perplexity.py Perplexity people-search client (external, isolated from Bullhorn)
   server.py     MCP server entry point and tool definitions
 
 tests/
@@ -618,6 +624,7 @@ tests/
   test_fuzzy.py
   test_identity.py
   test_metadata.py
+  test_perplexity.py
   test_server.py
 ```
 
