@@ -1824,6 +1824,17 @@ _NOTE_INDEX_EMPTY_WARNING = (
 )
 
 
+def _note_association(entity: str) -> str:
+    """Return the note association name to read for an entity.
+
+    On ClientCorporation, "notes" is the scalar "Company Comments" text field,
+    not an association, so the association endpoint 500s with "Unknown entity:
+    String" (CR40). Company notes are the notes of the company's contacts,
+    read via "clientContactNotes" instead.
+    """
+    return "clientContactNotes" if entity == "ClientCorporation" else "notes"
+
+
 def _strip_cc_telemetry(comments: str) -> tuple[str, list[str]]:
     """Remove click-to-call tags from a note comments string.
 
@@ -1835,15 +1846,28 @@ def _strip_cc_telemetry(comments: str) -> tuple[str, list[str]]:
 
 
 @mcp.tool()
-def add_note(entity: str, entity_id: int, action: str, comments: str) -> str:
+def add_note(entity: str, entity_id: int, action: str, comments: str, person_id: int | None = None) -> str:
     """Add a Note to a Bullhorn record.
 
+    Candidate, ClientContact and Lead notes attach to the record itself.
+    JobOrder, Placement and Opportunity notes attach to the logged-in
+    consultant, not the record's client contact or candidate, so job notes do
+    not pile up on a contact's timeline. Pass person_id to attach one of those
+    notes to a specific person instead. ClientCorporation is not a note
+    target: Bullhorn has no company-level note, so calling this with
+    entity="ClientCorporation" writes nothing and instead returns the
+    company's contacts. Add the note to one of those contacts, or use
+    update_record to set the company's "Company Comments" field.
+
     Args:
-        entity: One of "Candidate", "ClientContact", "ClientCorporation",
-            "JobOrder", "Placement", "Lead", or "Opportunity"
+        entity: One of "Candidate", "ClientContact", "JobOrder", "Placement",
+            "Lead", or "Opportunity"
         entity_id: Bullhorn ID of the record to attach the note to
-        action: Note action type — must match a valid action in your Bullhorn instance (e.g. "General Note")
+        action: Note action type, must match a valid action in your Bullhorn instance (e.g. "General Note")
         comments: Note body text
+        person_id: Optional Bullhorn person ID. For JobOrder, Placement and
+            Opportunity, attaches the note to this person instead of the
+            logged-in consultant. Ignored for Candidate, ClientContact and Lead.
 
     Returns:
         JSON object with changedEntityId, changeType, and full Note record data.
@@ -1851,9 +1875,8 @@ def add_note(entity: str, entity_id: int, action: str, comments: str) -> str:
     Examples:
         - add_note("Candidate", 11111, "General Note", "Strong fit for senior roles")
         - add_note("ClientContact", 54321, "General Note", "Discovered via weekly scan")
-        - add_note("ClientCorporation", 98765, "General Note", "PE-backed, growing headcount")
         - add_note("JobOrder", 22222, "General Note", "Role put on hold pending budget approval")
-        - add_note("Placement", 33333, "General Note", "Candidate started — all good")
+        - add_note("Placement", 33333, "General Note", "Candidate started, all good")
     """
     try:
         client = get_client()
@@ -1865,6 +1888,24 @@ def add_note(entity: str, entity_id: int, action: str, comments: str) -> str:
                     f"add_note does not support entity '{entity}'. "
                     f"Supported: {', '.join(sorted(_NOTE_TARGET_ENTITIES))}."
                 ),
+            })
+
+        if entity == "ClientCorporation":
+            contacts = client.query(
+                "ClientContact",
+                f"clientCorporation.id={entity_id}",
+                fields="id,firstName,lastName,occupation,email",
+                count=50,
+            )
+            return format_response({
+                "error": "company_notes_live_on_contacts",
+                "message": (
+                    "Bullhorn has no company-level note. Add the note to one of "
+                    'the company\'s contacts with add_note(entity="ClientContact", '
+                    'entity_id=<contact id>, ...) instead, or use update_record to '
+                    'set the company\'s "Company Comments" field.'
+                ),
+                "contacts": contacts,
             })
 
         valid_actions = _load_valid_note_actions(get_metadata())
@@ -1882,7 +1923,31 @@ def add_note(entity: str, entity_id: int, action: str, comments: str) -> str:
         except IdentityResolutionError:
             pass
 
-        result = client.add_note(entity, entity_id, action, comments, commenting_person_id=commenting_person_id)
+        person_reference_id = None
+        if entity in {"JobOrder", "Placement", "Opportunity"}:
+            if person_id is not None:
+                person_reference_id = person_id
+            elif commenting_person_id is not None:
+                person_reference_id = commenting_person_id
+            else:
+                record = client.get(entity, entity_id, fields="id,owner(id)")
+                owner_id = (record.get("owner") or {}).get("id")
+                if owner_id is None:
+                    return format_response({
+                        "error": "no_linked_person",
+                        "message": (
+                            f"Could not resolve a person for this {entity} note: "
+                            "the caller's identity did not resolve and the record "
+                            "has no owner. Pass person_id explicitly."
+                        ),
+                    })
+                person_reference_id = owner_id
+
+        result = client.add_note(
+            entity, entity_id, action, comments,
+            commenting_person_id=commenting_person_id,
+            person_reference_id=person_reference_id,
+        )
         return format_response(result)
 
     except (AuthenticationError, BullhornAPIError, ValueError) as e:
@@ -3196,6 +3261,8 @@ def get_notes_for_entity(
     Do NOT use query_entities(entity="Note") — Note does not support /query. Do NOT
     rely on search_entities(entity="Note") to filter by record ID — Lucene by subject-entity
     ID is unreliable on /search/Note. Use this tool instead.
+    For entity="ClientCorporation", this returns the notes of the company's
+    contacts (Bullhorn has no company-level note).
 
     Args:
         entity: One of "Candidate", "ClientContact", "ClientCorporation",
@@ -3243,7 +3310,7 @@ def get_notes_for_entity(
         meta = client.get_association_with_meta(
             entity,
             entity_id,
-            "notes",
+            _note_association(entity),
             fields=resolved_fields,
             count=limit,
             start=start,
@@ -3321,6 +3388,8 @@ def search_notes(
             JobOrder, Placement, Lead, Opportunity.
             When provided, fetches all notes for that record and keyword-filters
             them locally — reliable regardless of Lucene index configuration.
+            For type="ClientCorporation" this searches the notes of the
+            company's contacts (Bullhorn has no company-level note).
         limit: Maximum number of results (1-500, default 20)
         start: Pagination offset (default 0)
         fields: Comma-separated Note fields to return. Default includes id, action,
@@ -3368,7 +3437,7 @@ def search_notes(
             all_notes = client.get_association(
                 filter_type,
                 filter_id,
-                "notes",
+                _note_association(filter_type),
                 fields=resolved_fields,
                 count=500,
             )

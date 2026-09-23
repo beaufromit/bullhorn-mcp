@@ -470,41 +470,66 @@ class BullhornClient:
         action: str,
         comments: str,
         commenting_person_id: int | None = None,
+        person_reference_id: int | None = None,
     ) -> dict[str, Any]:
         """Add a Note entity linked to a Bullhorn record.
 
+        WHY: Bullhorn rejects any Note without a personReference (a Person:
+        Candidate, ClientContact, Lead or CorporateUser) with a 400 "missing
+        required property: personReference" raised at persist time. /meta/Note
+        does not mark the field as required, so this cannot be detected in
+        advance. For Candidate, ClientContact and Lead the record itself is the
+        person, and person_reference_id is ignored. For JobOrder, Placement and
+        Opportunity there is no person on the record itself, so the caller must
+        supply person_reference_id (typically the logged-in consultant); the
+        record is linked through its TO_MANY field (jobOrders/placements/
+        opportunities) rather than a TO_ONE, matching how notes created in the
+        Bullhorn UI link these records. Bullhorn's ATTEMPT_TO_SET_TO_MANY
+        WARNING message on this PUT is expected and is ignored; only
+        changedEntityId is read. ClientCorporation has no Note field at all
+        (company notes live on its contacts) and is not supported here.
+
         Args:
-            entity: One of "Candidate", "ClientContact", "ClientCorporation",
-                "JobOrder", "Placement", "Lead", or "Opportunity"
+            entity: One of "Candidate", "ClientContact", "JobOrder",
+                "Placement", "Lead", or "Opportunity"
             entity_id: ID of the entity to attach the note to
             action: Note action type (e.g. "General Note")
             comments: Note body text
             commenting_person_id: CorporateUser ID of the note author.
                 When provided, sets commentingPerson on the Note.
+            person_reference_id: Person ID to use as personReference. Required
+                for JobOrder, Placement and Opportunity; ignored for
+                Candidate, ClientContact and Lead, which reference themselves.
 
         Returns:
             Dict with changedEntityId, changeType, and full Note record data
 
         Raises:
-            ValueError: If entity is not one of the supported types
+            ValueError: If entity is not one of the supported types, or if
+                person_reference_id is missing for JobOrder, Placement or
+                Opportunity
         """
-        _ENTITY_FIELD: dict[str, tuple[str, Any]] = {
-            "Candidate": ("personReference", {"id": entity_id}),
-            "ClientContact": ("personReference", {"id": entity_id}),
-            "ClientCorporation": ("clientCorporation", {"id": entity_id}),
-            "JobOrder": ("jobOrder", {"id": entity_id}),
-            "Placement": ("placements", [{"id": entity_id}]),
-            "Lead": ("leads", [{"id": entity_id}]),
-            "Opportunity": ("opportunities", [{"id": entity_id}]),
+        _SELF_REFERENCE_ENTITIES = ("Candidate", "ClientContact", "Lead")
+        _TO_MANY_FIELD: dict[str, str] = {
+            "JobOrder": "jobOrders",
+            "Placement": "placements",
+            "Opportunity": "opportunities",
         }
 
-        if entity not in _ENTITY_FIELD:
-            supported = ", ".join(sorted(_ENTITY_FIELD))
-            raise ValueError(f"add_note does not support entity '{entity}'. Supported: {supported}")
-
         payload: dict[str, Any] = {"action": action, "comments": comments}
-        field_name, field_value = _ENTITY_FIELD[entity]
-        payload[field_name] = field_value
+
+        if entity in _SELF_REFERENCE_ENTITIES:
+            payload["personReference"] = {"id": entity_id}
+            if entity == "Lead":
+                payload["leads"] = [{"id": entity_id}]
+        elif entity in _TO_MANY_FIELD:
+            if person_reference_id is None:
+                raise ValueError(f"add_note requires person_reference_id for entity '{entity}'")
+            payload["personReference"] = {"id": person_reference_id}
+            payload[_TO_MANY_FIELD[entity]] = [{"id": entity_id}]
+        else:
+            supported = ", ".join(sorted(set(_SELF_REFERENCE_ENTITIES) | set(_TO_MANY_FIELD)))
+            raise ValueError(f"add_note does not support entity '{entity}'. Supported: {supported}")
 
         if commenting_person_id is not None:
             payload["commentingPerson"] = {"id": commenting_person_id}

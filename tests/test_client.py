@@ -569,27 +569,16 @@ class TestAddNote:
         assert body["commentingPerson"] == {"id": 42}
         assert body["personReference"] == {"id": 54321}
 
-    @respx.mock
     def test_add_note_to_company(self, mock_auth, mock_session):
-        """add_note() for ClientCorporation sets clientCorporation field."""
-        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
-            return_value=httpx.Response(200, json={"changedEntityId": 88902, "changeType": "INSERT"})
-        )
-        respx.get(f"{mock_session.rest_url}/entity/Note/88902").mock(
-            return_value=httpx.Response(
-                200,
-                json={"data": {"id": 88902, "action": "General Note",
-                               "clientCorporation": {"id": 98765}}},
-            )
-        )
+        """add_note() for ClientCorporation raises ValueError; company notes have no Note field.
 
+        Superseded by TestAddNotePersonReference.test_client_corporation_rejected.
+        Kept here (no PUT route registered) so a regression that resurrects the
+        old clientCorporation payload fails loudly rather than 404ing quietly.
+        """
         client = BullhornClient(mock_auth)
-        result = client.add_note("ClientCorporation", 98765, "General Note", "Company note")
-
-        body = __import__("json").loads(route.calls[0].request.content)
-        assert body["clientCorporation"] == {"id": 98765}
-        assert "personReference" not in body
-        assert result["changedEntityId"] == 88902
+        with pytest.raises(ValueError, match="add_note does not support entity 'ClientCorporation'"):
+            client.add_note("ClientCorporation", 98765, "General Note", "Company note")
 
     @respx.mock
     def test_add_note_to_candidate(self, mock_auth, mock_session):
@@ -611,7 +600,7 @@ class TestAddNote:
 
     @respx.mock
     def test_add_note_to_job_order(self, mock_auth, mock_session):
-        """add_note() for JobOrder sets jobOrder field."""
+        """add_note() for JobOrder sets personReference from person_reference_id plus jobOrders, no jobOrder key."""
         route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
             return_value=httpx.Response(200, json={"changedEntityId": 88904, "changeType": "INSERT"})
         )
@@ -620,16 +609,17 @@ class TestAddNote:
         )
 
         client = BullhornClient(mock_auth)
-        result = client.add_note("JobOrder", 22222, "General Note", "On hold")
+        result = client.add_note("JobOrder", 22222, "General Note", "On hold", person_reference_id=142235)
 
         body = __import__("json").loads(route.calls[0].request.content)
-        assert body["jobOrder"] == {"id": 22222}
-        assert "personReference" not in body
+        assert body["personReference"] == {"id": 142235}
+        assert body["jobOrders"] == [{"id": 22222}]
+        assert "jobOrder" not in body
         assert result["changedEntityId"] == 88904
 
     @respx.mock
     def test_add_note_to_placement(self, mock_auth, mock_session):
-        """add_note() for Placement sets placements as a list."""
+        """add_note() for Placement sets placements as a list plus personReference from person_reference_id."""
         route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
             return_value=httpx.Response(200, json={"changedEntityId": 88905, "changeType": "INSERT"})
         )
@@ -638,15 +628,18 @@ class TestAddNote:
         )
 
         client = BullhornClient(mock_auth)
-        result = client.add_note("Placement", 33333, "General Note", "Candidate started")
+        result = client.add_note(
+            "Placement", 33333, "General Note", "Candidate started", person_reference_id=142235
+        )
 
         body = __import__("json").loads(route.calls[0].request.content)
         assert body["placements"] == [{"id": 33333}]
+        assert body["personReference"] == {"id": 142235}
         assert result["changedEntityId"] == 88905
 
     @respx.mock
     def test_add_note_to_lead(self, mock_auth, mock_session):
-        """add_note() for Lead sets leads as a list."""
+        """add_note() for Lead sets leads as a list plus personReference to the lead itself."""
         route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
             return_value=httpx.Response(200, json={"changedEntityId": 88906, "changeType": "INSERT"})
         )
@@ -659,11 +652,12 @@ class TestAddNote:
 
         body = __import__("json").loads(route.calls[0].request.content)
         assert body["leads"] == [{"id": 44444}]
+        assert body["personReference"] == {"id": 44444}
         assert result["changedEntityId"] == 88906
 
     @respx.mock
     def test_add_note_to_opportunity(self, mock_auth, mock_session):
-        """add_note() for Opportunity sets opportunities as a list."""
+        """add_note() for Opportunity sets opportunities as a list plus personReference from person_reference_id."""
         route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
             return_value=httpx.Response(200, json={"changedEntityId": 88907, "changeType": "INSERT"})
         )
@@ -672,10 +666,13 @@ class TestAddNote:
         )
 
         client = BullhornClient(mock_auth)
-        result = client.add_note("Opportunity", 55555, "General Note", "In negotiation")
+        result = client.add_note(
+            "Opportunity", 55555, "General Note", "In negotiation", person_reference_id=142235
+        )
 
         body = __import__("json").loads(route.calls[0].request.content)
         assert body["opportunities"] == [{"id": 55555}]
+        assert body["personReference"] == {"id": 142235}
         assert result["changedEntityId"] == 88907
 
     def test_add_note_unsupported_entity_raises(self, mock_auth, mock_session):
@@ -694,6 +691,155 @@ class TestAddNote:
         client = BullhornClient(mock_auth)
         with pytest.raises(BullhornAPIError):
             client.add_note("ClientContact", 1, "Invalid Action", "note")
+
+
+class TestAddNotePersonReference:
+    """CR40 T39.1: add_note() personReference payload per target (client.py only).
+
+    person_reference_id is passed in directly here; resolving it (caller,
+    person_id override, record owner) is server.py's job (T39.2), not tested
+    here.
+    """
+
+    @respx.mock
+    def test_joborder_uses_given_person(self, mock_auth, mock_session):
+        """JobOrder: personReference from person_reference_id, jobOrders TO_MANY, no jobOrder key, no job GET."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88950, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88950").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88950}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note(
+            "JobOrder", 51437, "Claude note", "test", person_reference_id=142235
+        )
+
+        assert route.call_count == 1
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["personReference"] == {"id": 142235}
+        assert body["jobOrders"] == [{"id": 51437}]
+        assert "jobOrder" not in body
+        assert result["changedEntityId"] == 88950
+
+    @respx.mock
+    def test_placement_uses_given_person(self, mock_auth, mock_session):
+        """Placement: personReference from person_reference_id plus placements TO_MANY."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88951, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88951").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88951}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note(
+            "Placement", 33333, "Claude note", "test", person_reference_id=142235
+        )
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["personReference"] == {"id": 142235}
+        assert body["placements"] == [{"id": 33333}]
+        assert result["changedEntityId"] == 88951
+
+    @respx.mock
+    def test_opportunity_uses_given_person(self, mock_auth, mock_session):
+        """Opportunity: personReference from person_reference_id plus opportunities TO_MANY."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88952, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88952").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88952}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note(
+            "Opportunity", 55555, "Claude note", "test", person_reference_id=142235
+        )
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["personReference"] == {"id": 142235}
+        assert body["opportunities"] == [{"id": 55555}]
+        assert result["changedEntityId"] == 88952
+
+    @respx.mock
+    def test_lead_uses_self_as_person(self, mock_auth, mock_session):
+        """Lead: personReference is the lead itself (U3 payload), plus leads TO_MANY."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88953, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88953").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88953}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note("Lead", 172990, "Claude note", "test")
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["personReference"] == {"id": 172990}
+        assert body["leads"] == [{"id": 172990}]
+        assert result["changedEntityId"] == 88953
+
+    def test_non_person_target_without_person_raises(self, mock_auth, mock_session):
+        """JobOrder with person_reference_id=None raises ValueError and makes no PUT."""
+        client = BullhornClient(mock_auth)
+        with pytest.raises(ValueError, match="add_note requires person_reference_id for entity 'JobOrder'"):
+            client.add_note("JobOrder", 51437, "Claude note", "test")
+
+    @respx.mock
+    def test_person_target_ignores_person_reference_id(self, mock_auth, mock_session):
+        """ClientContact with a person_reference_id passed still sends personReference for the contact."""
+        route = respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 88954, "changeType": "INSERT"})
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88954").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88954}})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.add_note("ClientContact", 145635, "Claude note", "test", person_reference_id=999)
+
+        body = __import__("json").loads(route.calls[0].request.content)
+        assert body["personReference"] == {"id": 145635}
+        assert "999" not in str(body)
+
+    @respx.mock
+    def test_to_many_warning_is_not_an_error(self, mock_auth, mock_session):
+        """A PUT response carrying ATTEMPT_TO_SET_TO_MANY WARNING still returns the note (U1/U2/U3 behavior)."""
+        respx.put(f"{mock_session.rest_url}/entity/Note").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "changedEntityId": 88955,
+                    "changeType": "INSERT",
+                    "messages": [
+                        {
+                            "propertyName": "jobOrders",
+                            "severity": "WARNING",
+                            "type": "ATTEMPT_TO_SET_TO_MANY",
+                        }
+                    ],
+                },
+            )
+        )
+        respx.get(f"{mock_session.rest_url}/entity/Note/88955").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 88955}})
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.add_note(
+            "JobOrder", 51437, "Claude note", "test", person_reference_id=142235
+        )
+
+        assert result["changedEntityId"] == 88955
+        assert result["changeType"] == "INSERT"
+
+    def test_client_corporation_rejected(self, mock_auth, mock_session):
+        """ClientCorporation raises ValueError; it has no Note field (company notes live on contacts)."""
+        client = BullhornClient(mock_auth)
+        with pytest.raises(ValueError, match="add_note does not support entity 'ClientCorporation'"):
+            client.add_note("ClientCorporation", 10666, "Claude note", "test")
 
 
 class TestResolveOwner:

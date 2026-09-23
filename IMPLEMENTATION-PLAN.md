@@ -2,7 +2,14 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools).
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is BUILT at 761 tests passing** (2026-09-23), committed locally, awaiting live acceptance (T39.5, owner approval) and the review cycle; target v0.0.51.
+
+**Replan validation (2026-09-23, post-CR38):** Re-reconciled PRD, user stories, CRs, and source code. **743 tests passing, tagged v0.0.50** (`.venv/bin/pytest -q`: 743 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
+- **CR40** (add_note personReference, owner-APPROVED 2026-09-23) is planned as **Sprint 39** (target v0.0.51). Its PRD amendments were already applied: FR-7 Amendment 2, FR-16 Amendment, US-46 and US-47. Code search confirms nothing is implemented: `client.py:491` `_ENTITY_FIELD` still omits `personReference` for non-person targets and sends `clientCorporation` and the `jobOrder` TO_ONE, and `server.py` `add_note` has no `person_id`.
+- **Discrepancy 1 (resolved with the owner):** the `search_notes` entity_filter path (`server.py:3368`) makes the same `notes` association call as `get_notes_for_entity`, so it also 500s on ClientCorporation. The FR-16 Amendment only covered `get_notes_for_entity`. The owner chose to fix both, so the FR-16 Amendment gained one sentence and US-47 one acceptance clause. CR40.md was updated to match.
+- **Discrepancy 2 (resolved with the owner):** the existing FR-7 Amendment said `add_note` "accepts a `commenting_person_id` parameter". The tool never did; it stamps the resolved caller. The sentence was reworded (docs only). CR40's new `person_id` (whose timeline) is a different field from `commentingPerson` (author).
+- Read-only live checks: `clientContactNotes` on company 10666 works with the default note fields, but returns **no `total`**. The ClientContact-by-company query works. JobOrder 51437's owner is 142235.
+- Coverage: 22 FRs and 49 user stories (US-1 to US-47, plus US-7A and US-15A). No user stories without a requirement. `bha-expired-list-ids.md` (untracked data note) still has no PRD requirement, and nothing is planned for it. CR35 is still reserved and unspecced.
 
 **Replan validation (2026-09-23, post-CR36):** Re-reconciled PRD, user stories, CRs, and source code. **719 tests passing, tagged v0.0.48** (`.venv/bin/pytest -q`: 719 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **New CR39** (escape apostrophes in CorporateUser lookups, owner-APPROVED 2026-09-23, assumptions A1 to A3 confirmed). It follows up Sprint 37 review minor m3. The PRD is already amended: FR-2 and FR-12 each gained an apostrophe sentence marked "Planned (CR39)". The existing user stories cover the behaviour: **US-4** (owner by consultant name) and **US-23** (Entra identity to CorporateUser). No new user story is needed, because this is an input-domain correction to existing stories, not a new capability.
@@ -102,6 +109,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 37 | **COMPLETE (v0.0.48)** | CR36: Housekeeping. Declares `fastmcp` dependency, single-quote guards on `get_job_submissions` status / `resolve_owner` / `resolve_caller`, collapse duplicated note constants, docs-of-record sync. **719 tests passing.** T37.7 closed (bf91c18). One review cycle, clean. See Sprint 37 detail. |
 | Sprint 37B | **COMPLETE** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Tagged v0.0.49 after 1 clean review cycle. See Sprint 37B detail. |
 | Sprint 38 | **COMPLETE** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. **743 tests passing.** Tagged v0.0.50. See Sprint 38 detail. |
+| Sprint 39 | **BUILT (awaiting review)** | CR40: `add_note` always sends `personReference` (JobOrder, Placement and Opportunity attach to the logged-in consultant via the TO_MANY link; Lead to itself), adds `person_id`, and replaces ClientCorporation notes with a `company_notes_live_on_contacts` redirect. `get_notes_for_entity` and `search_notes` read `clientContactNotes` for companies (FR-7 Amendment 2, FR-16 Amendment; US-46, US-47). Tool count unchanged at 39. Target v0.0.51. See Sprint 39 detail. |
 
 ### Sprint 15 post-tag regression note
 
@@ -3240,3 +3248,126 @@ Previous: 720 (Sprint 37B actual). Added 14 (T38.1 4, T38.2 8, T38.4 2). **Expec
 - **Cycle 3: clean** (`5eaa3bb`). 743 tests passing. Tagged v0.0.50.
 - **Learning:** `tests/test_server.py` is CRLF. Lines inserted via a Python script with `newline=""` were LF and had to be converted. Check line endings on every inserted block, not only on whole-file rewrites.
 
+## Sprint 39: CR40 add_note sets personReference; company notes read and write path - BUILT (awaiting review)
+
+**Change request:** CR40.md (APPROVED, owner, 2026-09-23; replan decisions written back 2026-09-23)
+**PRD requirement:** FR-7 Amendment 2 (Person Reference and Supported Targets), FR-16 Amendment (Company Notes, extended at replan to cover `search_notes`), FR-7 Amendment wording fix (author is auto-stamped)
+**User stories:** US-46 (note on a job, placement or opportunity), US-47 (company notes go to a contact; extended at replan to cover `search_notes`)
+**Dependency:** Sprint 38 (CR38) complete, v0.0.50, 743 tests. There is no code overlap with CR38.
+**Risk:** Medium. This changes a live write path (`add_note`) and the payload for three targets, and it removes a target (ClientCorporation). The payloads were verified by live probes P1, P2 and U3 (notes 2653713, 2653714, 2653733). Tool count is unchanged at 39.
+
+### Current state (verified by code search and read-only live calls, 2026-09-23)
+
+- **Nothing in CR40 is implemented.** `client.py:491-499` `_ENTITY_FIELD` still sets `personReference` only for Candidate and ClientContact. It sends `clientCorporation` (not a Note field) for ClientCorporation and the `jobOrder` TO_ONE for JobOrder. It sends only the TO_MANY for Placement, Lead and Opportunity, with no `personReference`. So JobOrder, Placement, Opportunity, Lead and ClientCorporation notes all fail with the 400.
+- `server.py:1838` `add_note(entity, entity_id, action, comments)` has no `person_id`. It resolves the caller only for `commentingPerson` and swallows `IdentityResolutionError`. The docstring still lists ClientCorporation and has a ClientCorporation example.
+- `_NOTE_TARGET_ENTITIES` (`server.py:1779`) is **shared** by `add_note`, `get_notes_for_entity` (`server.py:3233`) and `search_notes` (`server.py:3363`). ClientCorporation must stay in it for the two read tools, so the add_note rejection has to be a separate, explicit check.
+- `get_notes_for_entity` (`server.py:3244`) and the `search_notes` entity_filter path (`server.py:3368`) both hard-code the `"notes"` association, so both 500 on ClientCorporation.
+- **Live, read-only:** `get_association_with_meta("ClientCorporation", 10666, "clientContactNotes", fields=_NOTE_DEFAULT_FIELDS, order_by="-dateAdded")` works and returns notes 2653713, 2653704 and 2653680 (personReference 145635). **It returns no `total`**, so pagination falls back to the existing `raw_page_count == limit` heuristic. `query_with_meta("ClientContact", "clientCorporation.id=10666", ...)` works (no `total` either). `JobOrder/51437?fields=id,owner(id)` returns owner 142235.
+- README line 544 shows an `add_note("ClientCorporation", ...)` example, which becomes wrong after this sprint.
+- 743 tests passing. No skips, xfails, TODOs or FIXMEs in `src/` or `tests/`.
+
+### Assumptions (state them to the reviewer; none change CR40's approved behaviour)
+
+- **A1. Person resolution lives in `server.py`,** because it owns `resolve_caller`. `client.add_note` gains `person_reference_id: int | None = None`. It is required for JobOrder, Placement and Opportunity (`ValueError` if None) and ignored for Candidate, ClientContact and Lead, which reference themselves. CR40 said "client.py" for the table; the payload table is still implemented there.
+- **A2. Precedence** for JobOrder, Placement and Opportunity: `person_id` argument, then resolved caller, then the record `owner`, then the `no_linked_person` error. `commentingPerson` behaviour is unchanged: it is set to the caller when the caller resolves, and is absent otherwise (including when the owner fallback is used).
+- **A3. "Active contacts" means non-deleted contacts** of the company, fetched with `client.query("ClientContact", "clientCorporation.id=<id>", fields="id,firstName,lastName,occupation,email", count=50)`. The automatic isDeleted gate applies. It is capped at 50 (company 10666 has 19).
+- **A4. The company redirect is checked before action validation,** so it costs no Note metadata call and makes no write.
+- **A5. The owner lookup** is one `client.get(entity, entity_id, fields="id,owner(id)")`. A missing or null owner gives `no_linked_person`. A failed GET (for example a 404) goes through the existing `ERROR:` path.
+
+### Tasks
+
+#### T39.1, `client.add_note` payload per target
+**File:** `src/bullhorn_mcp/client.py`
+- Replace `_ENTITY_FIELD` with a per-target payload builder that follows the CR40 table:
+  - Candidate and ClientContact: `personReference={id}` (unchanged).
+  - Lead: `personReference={id}` plus `leads=[{id}]` (U3 payload).
+  - JobOrder: `personReference={person_reference_id}` plus `jobOrders=[{id}]`, and **no** `jobOrder` key.
+  - Placement: `placements=[{id}]`. Opportunity: `opportunities=[{id}]`. Both with `personReference={person_reference_id}`.
+- Remove ClientCorporation (it now raises `ValueError`, unsupported). Update the method docstring.
+- The `ATTEMPT_TO_SET_TO_MANY` warning in the PUT response is ignored: only `changedEntityId` is read, as today.
+- **Unit tests** (`tests/test_client.py`, new `TestAddNotePersonReference`, respx, exact PUT-body assertions):
+  - `test_joborder_uses_given_person`: `personReference={"id":142235}`, `jobOrders=[{"id":51437}]`, `"jobOrder" not in body`, and exactly one PUT plus the read-back GET (no GET of the job).
+  - `test_placement_uses_given_person`, `test_opportunity_uses_given_person`
+  - `test_lead_uses_self_as_person`: `personReference={"id":172990}` and `leads=[{"id":172990}]`.
+  - `test_non_person_target_without_person_raises`: JobOrder with `person_reference_id=None` raises `ValueError` and makes no PUT.
+  - `test_person_target_ignores_person_reference_id`: ClientContact with `person_reference_id=999` still sends `personReference={"id":<contact>}`.
+  - `test_to_many_warning_is_not_an_error`: a PUT response carrying `messages:[{"type":"ATTEMPT_TO_SET_TO_MANY","severity":"WARNING",...}]` still returns the note.
+  - `test_client_corporation_rejected`: raises `ValueError`, no PUT.
+- **Existing tests to update deliberately** (they pin the old broken payloads). Do not delete their intent:
+  - `TestAddNote::test_add_note_to_company` (`test_client.py:573`) becomes a rejection test, or is removed in favour of `test_client_corporation_rejected`.
+  - `test_add_note_to_job_order` (`:613`) asserts `jobOrder` and no `personReference`. It must be rewritten to the new payload.
+  - `test_add_note_to_placement` and `test_add_note_to_opportunity` must pass `person_reference_id` and assert `personReference`.
+  - `test_add_note_to_lead` should also assert `personReference`.
+
+#### T39.2, `add_note` tool: person resolution, `person_id`, company redirect
+**File:** `src/bullhorn_mcp/server.py`
+- New signature: `add_note(entity, entity_id, action, comments, person_id: int | None = None)`.
+- Order:
+  1. `invalid_entity` check (unchanged).
+  2. **ClientCorporation**: return `{"error": "company_notes_live_on_contacts", "message": ..., "contacts": [...]}` (A3). The message points to a contact's `add_note` and to `update_record` for "Company Comments". No PUT, no Note metadata call.
+  3. Action validation (unchanged).
+  4. Resolve the caller (unchanged).
+  5. For JobOrder, Placement and Opportunity, resolve the person (A2). If none resolves, return `{"error": "no_linked_person", "message": ...}` with no PUT.
+  6. `client.add_note(..., commenting_person_id=..., person_reference_id=...)`.
+- **Docstring** (text before `Args:`, because FastMCP drops Returns and Examples): say whose timeline each target's note lands on (the record itself for Candidate, ClientContact and Lead; the logged-in consultant for JobOrder, Placement and Opportunity). Say that company notes belong on a contact and that "Company Comments" is set with `update_record`. Document `person_id`. Remove ClientCorporation from the entity list and from Examples.
+- **Unit tests** (`tests/test_server.py::TestAddNote`, mock_client):
+  - `test_joborder_note_attaches_to_consultant`: `client.add_note` called with `person_reference_id=<caller id>` and `commenting_person_id=<caller id>`.
+  - `test_person_id_override`: `person_id=172083` wins over the caller. `commentingPerson` is still the caller.
+  - `test_no_caller_falls_back_to_record_owner`: `IdentityResolutionError`, `client.get` returns `owner.id=142235`, so `person_reference_id=142235` and `commenting_person_id=None`.
+  - `test_no_caller_and_no_owner_returns_no_linked_person`: `no_linked_person` JSON, `client.add_note` not called, and the output does not contain `missing required property`.
+  - `test_company_target_rejected_with_contact_list`: `company_notes_live_on_contacts`, `contacts` lists the mocked contacts, `client.add_note` not called, and the query WHERE is `clientCorporation.id=10666`.
+  - `test_person_id_ignored_for_person_targets`: a Candidate call with `person_id` passes `person_reference_id=None`. The server only resolves a person for JobOrder, Placement and Opportunity.
+  - `test_add_note_docstring_drops_client_corporation`: the registered tool description (via `mcp.get_tool`, **not** `__doc__`, see the FastMCP-drops-sections memory) contains `person_id` and does not list ClientCorporation as a target.
+- **Existing tests to update deliberately:**
+  - `test_add_note_resolves_caller_for_commenting_person` (JobOrder, `assert_called_once_with`) gains `person_reference_id`.
+  - `test_add_note_handles_identity_resolution_error` (Placement) now exercises the owner fallback. Mock `client.get` and assert the fallback, rather than just adding a kwarg.
+  - `test_add_note_to_candidate_success` and the contact test: update `assert_called_once_with` to the new kwarg set.
+
+#### T39.3, shared company-aware note association for both read tools
+**File:** `src/bullhorn_mcp/server.py`
+- Add `_note_association(entity: str) -> str`, returning `"clientContactNotes"` for ClientCorporation and `"notes"` otherwise, with a one-line WHY comment (on ClientCorporation, `notes` is the scalar "Company Comments" field, which gives a 500 `Unknown entity: String`). Use it in `get_notes_for_entity` (`get_association_with_meta`) and in the `search_notes` entity_filter path (`get_association`).
+- Update both docstrings (before `Args:`): ClientCorporation returns the notes of the company's contacts.
+- **Unit tests** (`tests/test_server.py`):
+  - `TestGetNotesForEntity::test_client_corporation_uses_client_contact_notes`: the association arg is `clientContactNotes`, and the envelope is standard. With no `total` (as live) and a full page, `has_more` is true and `next_start` equals `start + count`.
+  - `TestGetNotesForEntity::test_other_entities_still_use_notes` (JobOrder uses `notes`).
+  - `TestSearchNotes::test_entity_filter_client_corporation_uses_client_contact_notes`
+
+#### T39.4, docs
+- README line 544: replace the ClientCorporation `add_note` example with a JobOrder one, and add one sentence that company notes go on a contact.
+- PRD.md is already amended at replan (FR-7 Amendment wording, FR-7 Amendment 2, FR-16 Amendment, US-46, US-47). No further PRD change is expected.
+- Post-tag: flip CR40 Status to COMPLETE, reconcile the four test-count locations, and add the Current Status row.
+
+#### T39.5, live acceptance (**requires explicit owner approval at build time**; test records only: job 51437, company 10666, contact 145635)
+The CR40 Verification section, tests 1 to 4. Before and after, use read-only `get_notes_for_entity` to confirm:
+- the job note lands on 51437 with `personReference` = the logged-in consultant;
+- it does **not** appear on 145635;
+- the company call returns the redirect with no write;
+- the company read and the company `search_notes` both return notes with no 500;
+- a contact note still works.
+In stdio mode (no Entra token) the caller does not resolve, so a local live run exercises the **owner fallback** (owner 142235). Record which path ran. Leave the acceptance notes in place unless the owner asks otherwise.
+
+### Verification
+
+- [ ] `.venv/bin/pytest` green. Every changed pre-existing test is listed in the build notes with the reason.
+- [ ] `grep -n '"jobOrder"' src/bullhorn_mcp/client.py` shows no TO_ONE in the note payload; `grep -n "clientCorporation" src/bullhorn_mcp/client.py` shows it is gone from add_note.
+- [ ] Server imports cleanly, and `list_tools()` still reports 39 tools.
+- [ ] Line endings: `client.py`, `test_client.py` and `test_server.py` are CRLF; `server.py` is LF. Check inserted blocks, not only whole files.
+- [ ] T39.5 live acceptance run (owner-approved), with results recorded here.
+- [ ] Local commit `fix: CR40 add_note personReference and company notes ...`. No push.
+- [ ] Review cycle clean, push, tag **v0.0.51**.
+
+### Expected test count after Sprint 39
+
+Previous: 743 (Sprint 38 actual). Added about 18 new (T39.1 8, T39.2 7, T39.3 3), plus about 7 pre-existing tests rewritten in place (not new). **Expected: about 761, to be measured, not predicted.**
+
+**Actual: 761 passing, 0 failing** (2026-09-23; test_client.py +8, test_server.py +10). Tool count 39 (unchanged).
+
+### Build notes (2026-09-23)
+
+- T39.1 to T39.4 implemented as planned. `client.add_note` replaces `_ENTITY_FIELD` with a self-reference set (Candidate, ClientContact, Lead) and a `_TO_MANY_FIELD` map (JobOrder `jobOrders`, Placement `placements`, Opportunity `opportunities`); `person_reference_id` is required for the latter (ValueError before any HTTP call). ClientCorporation now raises ValueError in the client, and the server returns `company_notes_live_on_contacts` before reaching it.
+- Server: `add_note(..., person_id=None)`; precedence `person_id` > caller > record `owner` (`client.get(entity, id, fields="id,owner(id)")`) > `no_linked_person`. `_note_association()` picks `clientContactNotes` for ClientCorporation in `get_notes_for_entity` and the `search_notes` entity_filter path.
+- Pre-existing tests rewritten in place, with reason: test_client.py `test_add_note_to_company` (now a rejection guard), `test_add_note_to_job_order` (new payload, asserts no `jobOrder` key), `test_add_note_to_placement` and `test_add_note_to_opportunity` (pass `person_reference_id`, assert `personReference`), `test_add_note_to_lead` (also asserts self `personReference`). test_server.py `test_add_note_to_contact_success` (gained a call assertion), `test_add_note_to_candidate_success` and `test_add_note_resolves_caller_for_commenting_person` (new kwarg), `test_add_note_handles_identity_resolution_error` (now asserts the owner fallback).
+- Learning: FastMCP moves each `Args:` entry into that parameter's JSON-schema description, so the docstring test checks `tool.parameters["properties"]["entity"]["description"]` for the entity list, not `tool.description` (whose pre-Args prose legitimately mentions ClientCorporation when explaining the redirect).
+- README add_note example switched from ClientCorporation to JobOrder, with one sentence on where company notes go.
+- Line endings verified: client.py, test_client.py, test_server.py and this file fully CRLF; server.py and README.md LF.
+- **T39.5 live acceptance NOT yet run**: it writes notes to the live tenant and needs explicit owner approval.

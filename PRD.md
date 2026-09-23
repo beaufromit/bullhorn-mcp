@@ -174,7 +174,18 @@ The MCP shall provide tools for shortlisting candidates to jobs by creating `Job
 
 ### FR-7 Amendment: Add Notes — Extended Entity Support
 
-The original FR-7 covers ClientContact and ClientCorporation. The `add_note` tool has since been extended (CR20) to support seven entity types: Candidate, ClientContact, ClientCorporation, JobOrder, Placement, Lead, and Opportunity. The tool also accepts a `commenting_person_id` parameter to explicitly identify the note author (stamped as `commentingPerson`). The valid note action list is validated against the Bullhorn Note picklist on first use and cached for the session.
+The original FR-7 covers ClientContact and ClientCorporation. The `add_note` tool has since been extended (CR20) to support seven entity types: Candidate, ClientContact, ClientCorporation, JobOrder, Placement, Lead, and Opportunity. The note author (`commentingPerson`) is stamped automatically from the resolved caller (the logged-in consultant, FR-12); the tool has no author parameter. The valid note action list is validated against the Bullhorn Note picklist on first use and cached for the session.
+
+### FR-7 Amendment 2: Add Notes, Person Reference and Supported Targets
+
+Bullhorn rejects any Note without a `personReference` (a Person: Candidate, ClientContact, Lead or CorporateUser) with `400 missing required property: personReference`. The `/meta/Note` required flag does not show this; it is enforced at persist time. The `add_note` tool shall therefore always send a `personReference`, as follows:
+
+- **Candidate, ClientContact, Lead**: the record itself. The Candidate and ClientContact payloads are unchanged from FR-7.
+- **JobOrder, Placement, Opportunity**: the logged-in consultant (the same CorporateUser stamped as `commentingPerson`). The note is linked to the record through the matching TO_MANY field (`jobOrders`, `placements`, `opportunities`) in the create body, so it appears in that record's notes. It is never attached to the record's client contact or candidate implicitly, so job notes do not accumulate on a contact's timeline.
+- If the caller's identity cannot be resolved, the record's `owner` is used instead. If there is no owner either, the tool returns a `no_linked_person` error and writes nothing.
+- An optional `person_id` argument lets the caller attach a JobOrder, Placement or Opportunity note to a specific person instead of the consultant.
+- **ClientCorporation is not a note target.** Bullhorn has no company-level Note; the Note entity has no company field, and the notes shown on a company are the notes of its contacts. `add_note` on a ClientCorporation shall return a `company_notes_live_on_contacts` error that lists the company's active contacts, write nothing, and point to `update_record` for the company's "Company Comments" field.
+- Bullhorn's `ATTEMPT_TO_SET_TO_MANY` warning in the create response is expected and shall not be treated as a failure.
 
 ### FR-15: Candidate Creation and CV Parsing
 
@@ -194,6 +205,10 @@ The MCP shall provide read tools for Bullhorn Note records:
 - `get_notes_for_entity(entity, entity_id, count, start, fields)` shall return all notes associated with a given entity record, using the Bullhorn association endpoint `GET /entity/{Entity}/{id}/notes`. Responses are wrapped in the standard pagination envelope (FR-19). Callers must use `next_start` from the pagination block (not `start + count`) because server-side isDeleted filtering of association results is not possible — the `count` in the envelope may be smaller than the page size when deleted notes are filtered client-side.
 - `search_notes(query, entity_filter, count, start, fields)` shall perform full-text Lucene search over Note records using `/search/Note`. The `entity_filter` parameter optionally restricts results to notes linked to a specific entity type and ID (applied client-side as a comment substring match when entity_filter is set). On this account the Lucene path returns no documents for any query; when that is detected the response carries a `warnings` key naming the routes that do return note data (the `note_action` parameter on the list tools, a nested `notes.action` query on the parent entity, `entity_filter`, or `get_notes_for_entity`).
 - `query_entities(entity="Note")` is explicitly refused with a helpful error; callers must use `get_notes_for_entity` or `search_notes`.
+
+### FR-16 Amendment: Company Notes
+
+On ClientCorporation, `notes` is a text field ("Company Comments"), not a note association, so `GET /entity/ClientCorporation/{id}/notes` fails with a 500. `get_notes_for_entity(entity="ClientCorporation", ...)` shall read the `clientContactNotes` association instead, returning the notes of the company's contacts in the standard pagination envelope (FR-19). The `search_notes` `entity_filter` path shall use the same association when the filter type is ClientCorporation. All other entities keep the `/notes` association.
 
 ### FR-17: Email Search
 
@@ -553,6 +568,14 @@ As an agent or consultant, I want all list, search, and query responses to inclu
 **US-45: Find people outside Bullhorn by role and location**
 As a consultant, I want to find people matching a role and a location or sector who are not yet in Bullhorn, so that I can source new candidate leads without leaving the chat.
 - **Acceptance**: `people_search_perplexity(queries=["financial controller Dublin"], max_results=20)` returns up to 20 people-index results, each with `title`, `url`, a truncated `snippet`, and `last_updated`, plus a note that the list is merged across queries and comes from an external source. 1 to 5 queries are accepted; an empty list, a blank entry, or more than 5 queries returns a clean error without calling Perplexity. `max_results` is clamped to 1..50. A missing `PERPLEXITY_API_KEY` returns a clean error at call time and the server still starts. An upstream Perplexity failure returns a clean error with the key absent from the output. The tool makes no Bullhorn calls and writes nothing.
+
+**US-46: Add a note to a job, placement or opportunity**
+As a consultant, I want to add a note to a job, placement or opportunity and see it on that record, attributed to me, so that the record's history is complete without the note also landing on the client contact's or candidate's timeline.
+- **Acceptance**: `add_note(entity="JobOrder", entity_id=51437, action="Claude note", comments="...")` succeeds, and `get_notes_for_entity("JobOrder", 51437)` returns the note with `personReference` set to the logged-in consultant. The note does not appear in `get_notes_for_entity("ClientContact", 145635)` (the job's contact). The same holds for Placement and Opportunity. Passing `person_id` attaches the note to that person instead. When neither the caller nor the record owner can be resolved, the tool returns a `no_linked_person` error and writes nothing, never the raw Bullhorn 400.
+
+**US-47: Company notes go to a contact**
+As a consultant, I want a clear redirect when I try to add a note to a company, and I want to be able to read a company's notes, so that notes land on the right person and I can see the company's history.
+- **Acceptance**: `add_note(entity="ClientCorporation", entity_id=10666, ...)` returns `company_notes_live_on_contacts` with the company's active contacts and makes no write. `get_notes_for_entity("ClientCorporation", 10666)` returns the notes of the company's contacts (no 500), and `search_notes(query, entity_filter={"type": "ClientCorporation", "id": 10666})` searches those same notes (no 500). Candidate, ClientContact and Lead notes behave as before.
 
 ## 10. Input/Output Schemas
 

@@ -541,8 +541,10 @@ BULLHORN_SHORTLIST_STATUS=Internal Review
 ### Add a note
 
 ```text
-add_note("ClientCorporation", 12345, "General Note", "Spoke with the client about hiring plans.")
+add_note("JobOrder", 12345, "General Note", "Spoke with the client about hiring plans.")
 ```
+
+Notes on a job, placement or opportunity are attached to you (the logged-in consultant); pass `person_id` to attach one to a specific person instead. Bullhorn has no company-level note: add it to one of the company's contacts, or set the company's "Company Comments" field with `update_record`.
 
 ### Bulk import
 

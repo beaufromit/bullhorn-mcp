@@ -2223,6 +2223,10 @@ class TestAddNote:
         data = json.loads(result)
         assert data["changedEntityId"] == 88901
         assert data["changeType"] == "INSERT"
+        mock_client.add_note.assert_called_once_with(
+            "ClientContact", 54321, "General Note", "Test",
+            commenting_person_id=None, person_reference_id=None,
+        )
 
     def test_add_note_to_candidate_success(self, mock_client):
         """add_note works for Candidate entity."""
@@ -2239,7 +2243,8 @@ class TestAddNote:
         data = json.loads(result)
         assert data["changedEntityId"] == 88903
         mock_client.add_note.assert_called_once_with(
-            "Candidate", 11111, "General Note", "Strong fit", commenting_person_id=None
+            "Candidate", 11111, "General Note", "Strong fit",
+            commenting_person_id=None, person_reference_id=None,
         )
 
     def test_add_note_invalid_entity(self, mock_client):
@@ -2252,7 +2257,8 @@ class TestAddNote:
         mock_client.add_note.assert_not_called()
 
     def test_add_note_resolves_caller_for_commenting_person(self, mock_client):
-        """add_note passes caller id as commenting_person_id when identity resolves."""
+        """add_note passes caller id as commenting_person_id, and as person_reference_id
+        for JobOrder/Placement/Opportunity, when identity resolves."""
         mock_client.add_note.return_value = {
             "changedEntityId": 88904,
             "changeType": "INSERT",
@@ -2263,12 +2269,15 @@ class TestAddNote:
             server.add_note("JobOrder", 22222, "General Note", "On hold")
 
         mock_client.add_note.assert_called_once_with(
-            "JobOrder", 22222, "General Note", "On hold", commenting_person_id=99
+            "JobOrder", 22222, "General Note", "On hold",
+            commenting_person_id=99, person_reference_id=99,
         )
 
     def test_add_note_handles_identity_resolution_error(self, mock_client):
-        """add_note falls back to commenting_person_id=None when identity resolution fails."""
+        """add_note falls back to the record owner as person_reference_id when identity
+        resolution fails, and leaves commenting_person_id unset (CR40 A2)."""
         from bullhorn_mcp.identity import IdentityResolutionError
+        mock_client.get.return_value = {"id": 33333, "owner": {"id": 142235}}
         mock_client.add_note.return_value = {
             "changedEntityId": 88905,
             "changeType": "INSERT",
@@ -2281,8 +2290,10 @@ class TestAddNote:
         data = json.loads(result)
         assert data["changedEntityId"] == 88905
         mock_client.add_note.assert_called_once_with(
-            "Placement", 33333, "General Note", "Started", commenting_person_id=None
+            "Placement", 33333, "General Note", "Started",
+            commenting_person_id=None, person_reference_id=142235,
         )
+        mock_client.get.assert_called_once_with("Placement", 33333, fields="id,owner(id)")
 
     def test_add_note_api_error(self, mock_client):
         """add_note returns ERROR prefix on API failure."""
@@ -2394,6 +2405,130 @@ class TestAddNote:
         meta.get_fields.side_effect = Exception("metadata unavailable")
         result = server._load_valid_note_actions(meta)
         assert result is None
+
+    def test_joborder_note_attaches_to_consultant(self, mock_client):
+        """CR40: a JobOrder note's personReference is the logged-in consultant."""
+        mock_client.add_note.return_value = {
+            "changedEntityId": 2653713,
+            "changeType": "INSERT",
+            "data": {"id": 2653713},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", return_value={"id": 142235}):
+            server.add_note("JobOrder", 51437, "General Note", "test")
+
+        mock_client.add_note.assert_called_once_with(
+            "JobOrder", 51437, "General Note", "test",
+            commenting_person_id=142235, person_reference_id=142235,
+        )
+
+    def test_person_id_override(self, mock_client):
+        """CR40: person_id overrides the caller as person_reference_id, but the
+        caller is still stamped as commentingPerson."""
+        mock_client.add_note.return_value = {
+            "changedEntityId": 2653733,
+            "changeType": "INSERT",
+            "data": {"id": 2653733},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", return_value={"id": 142235}):
+            server.add_note("JobOrder", 51437, "General Note", "test", person_id=172083)
+
+        mock_client.add_note.assert_called_once_with(
+            "JobOrder", 51437, "General Note", "test",
+            commenting_person_id=142235, person_reference_id=172083,
+        )
+
+    def test_no_caller_falls_back_to_record_owner(self, mock_client):
+        """CR40: when the caller cannot be resolved, the record owner is used
+        as person_reference_id for JobOrder/Placement/Opportunity."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        mock_client.get.return_value = {"id": 51437, "owner": {"id": 142235}}
+        mock_client.add_note.return_value = {
+            "changedEntityId": 2653714,
+            "changeType": "INSERT",
+            "data": {"id": 2653714},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            server.add_note("JobOrder", 51437, "General Note", "test")
+
+        mock_client.get.assert_called_once_with("JobOrder", 51437, fields="id,owner(id)")
+        mock_client.add_note.assert_called_once_with(
+            "JobOrder", 51437, "General Note", "test",
+            commenting_person_id=None, person_reference_id=142235,
+        )
+
+    def test_no_caller_and_no_owner_returns_no_linked_person(self, mock_client):
+        """CR40: no caller and no record owner returns a structured error, never
+        the raw Bullhorn 400 about a missing personReference."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        mock_client.get.return_value = {"id": 51437, "owner": None}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            result = server.add_note("JobOrder", 51437, "General Note", "test")
+
+        data = json.loads(result)
+        assert data["error"] == "no_linked_person"
+        assert "missing required property" not in result
+        mock_client.add_note.assert_not_called()
+
+    def test_company_target_rejected_with_contact_list(self, mock_client):
+        """CR40: ClientCorporation is no longer a note target; add_note redirects
+        to the company's contacts and makes no write."""
+        mock_client.query.return_value = [
+            {"id": 145635, "firstName": "Duke", "lastName": "Nukem",
+             "occupation": "CTO", "email": "duke@example.com"},
+        ]
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.add_note("ClientCorporation", 10666, "General Note", "test")
+
+        data = json.loads(result)
+        assert data["error"] == "company_notes_live_on_contacts"
+        assert data["contacts"][0]["id"] == 145635
+        mock_client.add_note.assert_not_called()
+        mock_client.query.assert_called_once_with(
+            "ClientContact", "clientCorporation.id=10666",
+            fields="id,firstName,lastName,occupation,email", count=50,
+        )
+
+    def test_person_id_ignored_for_person_targets(self, mock_client):
+        """CR40: person_id is only meaningful for JobOrder/Placement/Opportunity;
+        the server does not resolve a person at all for Candidate/ClientContact/Lead."""
+        from bullhorn_mcp.identity import IdentityResolutionError
+        mock_client.add_note.return_value = {
+            "changedEntityId": 1,
+            "changeType": "INSERT",
+            "data": {"id": 1},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "resolve_caller", side_effect=IdentityResolutionError("no token")):
+            server.add_note("Candidate", 11111, "General Note", "test", person_id=999)
+
+        mock_client.get.assert_not_called()
+        mock_client.add_note.assert_called_once_with(
+            "Candidate", 11111, "General Note", "test",
+            commenting_person_id=None, person_reference_id=None,
+        )
+
+    def test_add_note_docstring_drops_client_corporation(self):
+        """CR40: the registered tool description and parameter schema (what the
+        agent actually sees, not __doc__ -- FastMCP drops everything from Args:
+        onward out of .description, into each parameter's own schema entry).
+        person_id is documented and ClientCorporation is no longer a listed
+        entity or example. Prose explaining the company redirect may still
+        mention the name in the pre-Args description."""
+        import asyncio
+        tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+        tool = tools["add_note"]
+        description = tool.description or ""
+        entity_schema_description = tool.parameters["properties"]["entity"]["description"]
+
+        assert "person_id" in description
+        assert "person_id" in tool.parameters["properties"]
+        assert '"ClientContact", "JobOrder"' in entity_schema_description
+        assert "ClientCorporation" not in entity_schema_description
+        assert 'add_note("ClientCorporation"' not in description
 
 
 class TestSprint6E2E:
@@ -6366,6 +6501,50 @@ class TestGetNotesForEntity:
         assert call_args.args[0] == "JobOrder"
         assert call_args.args[1] == 51227
 
+    def test_client_corporation_uses_client_contact_notes(self, mock_client):
+        """CR40/T39.3: ClientCorporation reads clientContactNotes, not notes,
+        because "notes" is a scalar field on ClientCorporation (500s otherwise)."""
+        mock_client.get_association_with_meta.side_effect = None
+        company_note = {
+            "id": 2653713,
+            "action": "General Note",
+            "comments": "test",
+            "dateAdded": 1758000000000,
+            "isDeleted": False,
+            "commentingPerson": {"id": 142235},
+            "personReference": {"id": 145635, "firstName": "Duke", "lastName": "Nukem"},
+        }
+        mock_client.get_association_with_meta.return_value = {
+            "data": [company_note],
+            "start": 0,
+            "count": 1,
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_notes_for_entity("ClientCorporation", 10666, limit=1)
+
+        call_args = mock_client.get_association_with_meta.call_args
+        assert call_args.args[0] == "ClientCorporation"
+        assert call_args.args[1] == 10666
+        assert call_args.args[2] == "clientContactNotes"
+
+        data = json.loads(result)
+        assert data["data"][0]["id"] == 2653713
+        # No "total" in the response, as on the live tenant, and a full page:
+        # has_more falls back to the raw_page_count == limit heuristic.
+        assert data["pagination"]["has_more"] is True
+        assert data["pagination"]["next_start"] == 1
+
+    def test_other_entities_still_use_notes(self, mock_client, sample_note_records):
+        """CR40/T39.3: non-ClientCorporation entities keep using the notes association."""
+        mock_client.get_association.return_value = [sample_note_records[0]]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.get_notes_for_entity("JobOrder", 51437)
+
+        call_args = mock_client.get_association_with_meta.call_args
+        assert call_args.args[2] == "notes"
+
 
 class TestSearchNotes:
     """Tests for search_notes tool."""
@@ -6519,6 +6698,29 @@ class TestSearchNotes:
         call_args = mock_client.search_with_meta.call_args
         fields_arg = call_args.kwargs.get("fields") or call_args.args[2]
         assert "clientCorporation" not in fields_arg
+
+    def test_entity_filter_client_corporation_uses_client_contact_notes(self, mock_client):
+        """CR40/T39.3: entity_filter on ClientCorporation reads clientContactNotes,
+        so it no longer 500s ("Unknown entity: String" on the scalar notes field)."""
+        company_note = {
+            "id": 2653713,
+            "action": "General Note",
+            "comments": "duke nukem test",
+            "isDeleted": False,
+        }
+        mock_client.get_association.return_value = [company_note]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.search_notes(
+                "duke", entity_filter={"type": "ClientCorporation", "id": 10666}
+            )
+
+        call_args = mock_client.get_association.call_args
+        assert call_args.args[0] == "ClientCorporation"
+        assert call_args.args[1] == 10666
+        assert call_args.args[2] == "clientContactNotes"
+        data = json.loads(result)
+        assert data["data"][0]["id"] == 2653713
 
     def test_note_search_fields_are_note_default_fields(self):
         """_NOTE_SEARCH_DEFAULT_FIELDS is an alias for _NOTE_DEFAULT_FIELDS, not a copy."""
