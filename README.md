@@ -37,32 +37,66 @@ Typical use cases:
 
 ## MCP Tools
 
+38 tools, grouped by family below. Each tool's full parameter and field reference is in its live MCP description (enriched from Bullhorn `/meta` at startup), which is the authoritative interface.
+
 ### Read tools
 
 - `list_jobs`
 - `list_candidates`
 - `list_contacts`
 - `list_companies`
+- `list_placements`
 - `get_job`
 - `get_candidate`
+- `get_company`
+- `get_contact`
+- `get_job_submissions`
 - `search_entities`
 - `query_entities`
+- `search_emails`
 - `get_entity_fields`
+
+### Note tools
+
+- `add_note`
+- `get_notes_for_entity`
+- `search_notes`
 
 ### Write tools
 
 - `create_company`
 - `create_contact`
 - `create_job`
+- `create_candidate`
 - `update_record`
 - `update_job`
-- `add_note`
 - `bulk_import`
+
+### CV parsing tools
+
+- `parse_cv`
+- `parse_cv_text`
+- `create_candidate_from_cv`
+- `attach_cv`
+
+### Shortlist tools
+
+- `shortlist_candidate`
+- `shortlist_candidates`
+
+### Tearsheet (hotlist) tools
+
+- `list_tearsheets`
+- `get_tearsheet`
+- `create_tearsheet`
+- `add_to_tearsheet`
+- `remove_from_tearsheet`
 
 ### Duplicate detection tools
 
 - `find_duplicate_companies`
 - `find_duplicate_contacts`
+- `find_duplicate_candidates`
 
 ## Supported Entity Scope
 

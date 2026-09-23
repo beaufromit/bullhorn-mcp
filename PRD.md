@@ -207,7 +207,7 @@ Every primary entity shall have a dedicated by-ID read tool, and the job submiss
 
 - `get_company(company_id, fields)` — returns a single ClientCorporation by ID. Implemented (CR25).
 - `get_contact(contact_id, fields)` — returns a single ClientContact by ID, with default fields `id,firstName,lastName,name,email,phone,occupation,status,clientCorporation,owner,dateAdded`. Implemented (CR29).
-- `get_job_submissions(job_id, status, limit, start, fields)` — returns all JobSubmission records for a given JobOrder, filtered by `jobOrder.id` via `query_with_meta`. The optional `status` parameter appends `AND status="<value>"` to the SQL WHERE clause. Returns the standard pagination envelope. **Planned (CR30).**
+- `get_job_submissions(job_id, status, limit, start, fields)` — returns all JobSubmission records for a given JobOrder, filtered by `jobOrder.id` via `query_with_meta`. The optional `status` parameter appends `AND status="<value>"` to the SQL WHERE clause. Returns the standard pagination envelope. **Delivered (CR30).**
 
 All three tools delegate to existing `BullhornClient.get()` or `BullhornClient.query_with_meta()` with no new client-layer logic.
 

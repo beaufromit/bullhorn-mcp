@@ -394,6 +394,15 @@ class TestGetJobSubmissions:
 
         assert result.startswith("ERROR:")
 
+    def test_invalid_status_returns_error(self, mock_client):
+        """status containing a single quote returns an error envelope."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.get_job_submissions(job_id=12345, status="Shortlisted' OR '1'='1")
+        data = json.loads(result)
+        assert data["error"] == "invalid_status"
+        assert "single quotes" in data["message"]
+        mock_client.query_with_meta.assert_not_called()
+
 
 class TestSearchEntities:
     """Tests for search_entities tool."""
@@ -6510,6 +6519,10 @@ class TestSearchNotes:
         call_args = mock_client.search_with_meta.call_args
         fields_arg = call_args.kwargs.get("fields") or call_args.args[2]
         assert "clientCorporation" not in fields_arg
+
+    def test_note_search_fields_are_note_default_fields(self):
+        """_NOTE_SEARCH_DEFAULT_FIELDS is an alias for _NOTE_DEFAULT_FIELDS, not a copy."""
+        assert server._NOTE_SEARCH_DEFAULT_FIELDS is server._NOTE_DEFAULT_FIELDS
 
 
 class TestSearchNotesEmptyIndexWarning:

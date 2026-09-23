@@ -794,6 +794,24 @@ class TestResolveOwner:
         assert "lastName" not in result
         assert "email" not in result
 
+    @respx.mock
+    def test_owner_with_single_quote_raises(self, mock_auth, mock_session):
+        """resolve_owner rejects a name containing a single quote before querying.
+
+        The name is interpolated unguarded into the Lucene ``where`` clause
+        (``name='{owner}'``), so a raw single quote could break out of the
+        literal. resolve_owner must raise ValueError instead of issuing the query.
+        """
+        route = respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(ValueError, match="must not contain single quotes"):
+            client.resolve_owner("O'Brien")
+
+        assert route.called is False
+
 
 class TestEdgeCases:
     """Tests for edge cases and error scenarios."""

@@ -74,6 +74,11 @@ def resolve_caller(client: "BullhornClient") -> dict:
     if not email:
         raise IdentityResolutionError("No email claim found in token")
 
+    if "'" in email:
+        raise IdentityResolutionError(
+            f"Email claim must not contain single quotes. Got: {email!r}"
+        )
+
     results = client.query(
         entity="CorporateUser",
         where=f"email='{email}'",

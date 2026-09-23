@@ -518,6 +518,9 @@ class BullhornClient:
         if isinstance(owner, dict):
             return owner
 
+        if "'" in owner:
+            raise ValueError(f"Owner name must not contain single quotes. Got: {owner!r}")
+
         results = self.query(
             entity="CorporateUser",
             where=f"name='{owner}'",

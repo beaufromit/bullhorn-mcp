@@ -241,6 +241,23 @@ class TestResolveCaller:
         assert first == second == SAMPLE_USER
         assert route.call_count == 1
 
+    def test_email_with_single_quote_raises(self, client):
+        """Raises IdentityResolutionError when the email claim contains a single quote.
+
+        A raw single quote in the email would break out of the Lucene-style
+        `where=f"email='{email}'"` string built in resolve_caller. This must be
+        rejected before the query is built, and the cache must stay unpopulated.
+        """
+        token = _make_token({"sub": "sub-quote", "email": "beau'@thepanel.com"})
+
+        with patch("bullhorn_mcp.identity.get_access_token", return_value=token):
+            with patch.object(client, "query") as mock_query:
+                with pytest.raises(IdentityResolutionError, match="single quotes"):
+                    resolve_caller(client)
+
+        mock_query.assert_not_called()
+        assert "sub-quote" not in identity._caller_cache
+
     @respx.mock
     def test_reset_caller_cache_clears_all(self, client, mock_session):
         """_reset_caller_cache() clears all cached identities, not just one slot.

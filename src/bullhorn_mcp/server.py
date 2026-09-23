@@ -1122,6 +1122,12 @@ def get_job_submissions(
         - get_job_submissions(job_id=12345, status="Shortlisted") — Shortlisted only
         - get_job_submissions(job_id=12345, limit=50, start=0) — First 50 results
     """
+    if status is not None and "'" in status:
+        return format_response({
+            "error": "invalid_status",
+            "message": f"status must not contain single quotes. Got: {status!r}",
+        })
+
     try:
         client = get_client()
 
@@ -1785,18 +1791,6 @@ _CC_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Maps _NOTE_TARGET_ENTITIES members to the subject-reference field name on a
-# Note record (mirrors the write-side _ENTITY_FIELD map in client.add_note).
-_NOTE_ENTITY_SUBJECT_FIELD: dict[str, str] = {
-    "Candidate": "personReference",
-    "ClientContact": "personReference",
-    "ClientCorporation": "clientCorporation",
-    "JobOrder": "jobOrder",
-    "Placement": "placements",
-    "Lead": "leads",
-    "Opportunity": "opportunities",
-}
-
 _NOTE_DEFAULT_FIELDS = (
     "id,action,comments,dateAdded,"
     "commentingPerson(id,firstName,lastName),"
@@ -1809,17 +1803,10 @@ _NOTE_DEFAULT_FIELDS = (
 )
 
 # /search/Note and the /entity/{Entity}/{id}/notes association endpoint both
-# reject clientCorporation — keep these fields in sync with _NOTE_DEFAULT_FIELDS.
-_NOTE_SEARCH_DEFAULT_FIELDS = (
-    "id,action,comments,dateAdded,"
-    "commentingPerson(id,firstName,lastName),"
-    "personReference(id,firstName,lastName),"
-    "jobOrder(id,title),"
-    "placements(id),"
-    "leads(id),"
-    "opportunities(id),"
-    "isDeleted"
-)
+# reject clientCorporation (CR25), so both tools share one field list. Alias,
+# not a separate literal, so search_notes and get_notes_for_entity can never
+# drift apart and always return the same note shape.
+_NOTE_SEARCH_DEFAULT_FIELDS = _NOTE_DEFAULT_FIELDS
 
 # Attached to search_notes results when the match-all probe confirms the Lucene
 # /search/Note route returns nothing on this account, so that an empty result is
