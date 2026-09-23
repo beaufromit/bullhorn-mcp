@@ -6,6 +6,18 @@ from typing import Any
 from .auth import BullhornAuth
 
 
+def _escape_where_literal(value: str) -> str:
+    """Escape a value for use inside a single-quoted /query WHERE literal.
+
+    Bullhorn /query accepts the SQL doubled quote as an escape (CR39, verified
+    live 2026-09-23: name='Tracey O''Neill' returns exactly that user), while a
+    backslash escape or a raw quote both return 400 errors.badSearchQuery.
+    Escaping instead of rejecting lets O'Brien-style names resolve, and the
+    value still cannot close the literal, so injection stays impossible.
+    """
+    return value.replace("'", "''")
+
+
 # Entities that do not expose an isDeleted field on /search or /query.
 # The auto-exclude-deleted clause is silently skipped for these entities.
 _ENTITIES_WITHOUT_ISDELETED: frozenset[str] = frozenset({"ClientCorporation", "UserMessage"})
@@ -518,12 +530,9 @@ class BullhornClient:
         if isinstance(owner, dict):
             return owner
 
-        if "'" in owner:
-            raise ValueError(f"Owner name must not contain single quotes. Got: {owner!r}")
-
         results = self.query(
             entity="CorporateUser",
-            where=f"name='{owner}'",
+            where=f"name='{_escape_where_literal(owner)}'",
             fields="id,firstName,lastName,email",
         )
 

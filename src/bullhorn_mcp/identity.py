@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 from fastmcp.server.dependencies import get_access_token
 
+from .client import _escape_where_literal
+
 if TYPE_CHECKING:
     from .client import BullhornClient
 
@@ -74,14 +76,11 @@ def resolve_caller(client: "BullhornClient") -> dict:
     if not email:
         raise IdentityResolutionError("No email claim found in token")
 
-    if "'" in email:
-        raise IdentityResolutionError(
-            f"Email claim must not contain single quotes. Got: {email!r}"
-        )
-
     results = client.query(
         entity="CorporateUser",
-        where=f"email='{email}'",
+        # CR39: escape, not reject. Apostrophes are valid in email addresses, and a
+        # hostile claim can only fail to match once the quote is doubled.
+        where=f"email='{_escape_where_literal(email)}'",
         fields="id,firstName,lastName,email",
         # Note: do NOT include 'department' — it is not a reliably queryable field
         # on CorporateUser across all Bullhorn instances (Sprint 10 / CR3 lesson).

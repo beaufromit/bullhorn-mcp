@@ -795,22 +795,45 @@ class TestResolveOwner:
         assert "email" not in result
 
     @respx.mock
-    def test_owner_with_single_quote_raises(self, mock_auth, mock_session):
-        """resolve_owner rejects a name containing a single quote before querying.
+    def test_owner_with_single_quote_is_escaped(self, mock_auth, mock_session):
+        """CR39: resolve_owner escapes a single quote instead of rejecting the name.
 
-        The name is interpolated unguarded into the Lucene ``where`` clause
-        (``name='{owner}'``), so a raw single quote could break out of the
-        literal. resolve_owner must raise ValueError instead of issuing the query.
+        The name is interpolated into the /query ``where`` clause
+        (``name='{owner}'``). Bullhorn accepts the SQL doubled quote as an
+        escape, so "Tracey O'Neill" must be sent as ``name='Tracey O''Neill'``
+        and resolve normally. Rejecting it (CR36) locked out real Irish names.
+        """
+        route = respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": 145098, "firstName": "Tracey", "lastName": "O'Neill"}]},
+            )
+        )
+
+        client = BullhornClient(mock_auth)
+        result = client.resolve_owner("Tracey O'Neill")
+
+        assert result == {"id": 145098}
+        where = route.calls[0].request.url.params["where"]
+        assert where == "(name='Tracey O''Neill') AND isDeleted=false"
+
+    @respx.mock
+    def test_owner_injection_attempt_is_escaped(self, mock_auth, mock_session):
+        """CR39: a quote-based injection attempt becomes one fully escaped literal.
+
+        Every quote in the owner is doubled, so the value cannot close the
+        string literal and the OR clause stays inside it as plain text.
         """
         route = respx.get(f"{mock_session.rest_url}/query/CorporateUser").mock(
             return_value=httpx.Response(200, json={"data": []})
         )
 
         client = BullhornClient(mock_auth)
-        with pytest.raises(ValueError, match="must not contain single quotes"):
-            client.resolve_owner("O'Brien")
+        with pytest.raises(ValueError, match="No CorporateUser found matching"):
+            client.resolve_owner("x' OR name like '%")
 
-        assert route.called is False
+        where = route.calls[0].request.url.params["where"]
+        assert where == "(name='x'' OR name like ''%') AND isDeleted=false"
 
 
 class TestEdgeCases:

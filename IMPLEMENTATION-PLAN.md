@@ -2,7 +2,15 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37 (CR36 housekeeping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Next up: Sprint 38 (CR38 `people_search_perplexity`, PLANNED).** Sprint 36 (CR37) is COMPLETE — `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
+**Current baseline:** All sprints through Sprint 37 (CR36 housekeeping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is BUILT at 720 tests passing, committed locally, awaiting the review cycle (target v0.0.49).** Next after that: Sprint 38 (CR38 `people_search_perplexity`, PLANNED, target v0.0.50).** Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
+
+**Replan validation (2026-09-23, post-CR36):** Re-reconciled PRD, user stories, CRs, and source code. **719 tests passing, tagged v0.0.48** (`.venv/bin/pytest -q`: 719 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
+- **New CR39** (escape apostrophes in CorporateUser lookups, owner-APPROVED 2026-09-23, assumptions A1 to A3 confirmed). It follows up Sprint 37 review minor m3. The PRD is already amended: FR-2 and FR-12 each gained an apostrophe sentence marked "Planned (CR39)". The existing user stories cover the behaviour: **US-4** (owner by consultant name) and **US-23** (Entra identity to CorporateUser). No new user story is needed, because this is an input-domain correction to existing stories, not a new capability.
+- Code search confirms CR39 is unimplemented. The reject guards are still at `client.py:521-522` (`resolve_owner`) and `identity.py:77-80` (`resolve_caller`). No `_escape_where_literal` exists anywhere. The two CR36 rejection tests are still present (`tests/test_client.py:798`, `tests/test_identity.py:244`).
+- Per CR39 A2, it is planned as **patch Sprint 37B**, ahead of Sprint 38, so the Sprint 38 number stays with CR38. Tag targets shift: CR39 gets v0.0.49 and CR38 moves to v0.0.50. Sprint 38's dependency, baseline and expected count were updated to match.
+- Scope note (no discrepancy, recorded for the reviewer): the FR-2 sentence mentions only contact owners, but `resolve_owner` is shared by `create_contact`, `create_job`, `create_candidate`, `search_emails` (`user`) and `bulk_import`. The single fix in the shared helper covers all of them, so no further PRD amendment was made.
+- Doc drift found: `CR36.md` Status still says "APPROVED for planning ... NOT STARTED" although it shipped as v0.0.48. This is folded into T37B.3.
+- Coverage is unchanged: 22 FRs, 47 user stories, and no user stories without a requirement. `bha-expired-list-ids.md` (untracked data note) still has no PRD requirement, and nothing is planned for it.
 
 **Replan validation (2026-09-23, post-CR37):** Re-reconciled PRD, user stories, CRs, and source code. **715 tests passing, tagged v0.0.47** (`.venv/bin/pytest -q`: 715 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **New CR38** (`people_search_perplexity`, FR-22). FR-22 had been added to PRD.md without a user story. After checking with the owner, **PRD.md gained US-45** (new "External Candidate Sourcing" section) and FR-22 was added to the §1 Overview scope paragraph. The owner approved CR38 (Status flipped to APPROVED). Code search confirms it is unimplemented: no `perplexity` reference in `src/`, `tests/`, `.env.example`, or `pyproject.toml`. Planned as **Sprint 38**.
@@ -92,7 +100,8 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 35 | **COMPLETE** | CR34: Trim startup tool-description enrichment — select_fields(), leveled build_entity_section(), GENERIC_DISCOVERY_TOOLS; ~80% description token reduction. See Sprint 35 detail. |
 | Sprint 36 | **COMPLETE** | CR37: Make note-field filtering discoverable — `note_action` parameter on `list_contacts`/`list_candidates`/`list_jobs`, empty-route probe warning on the Lucene note path, three enrichment field-selection fixes. Tool count unchanged at 38. **715 tests passing, tagged v0.0.47.** See Sprint 36 detail. |
 | Sprint 37 | **COMPLETE (v0.0.48)** | CR36: Housekeeping. Declares `fastmcp` dependency, single-quote guards on `get_job_submissions` status / `resolve_owner` / `resolve_caller`, collapse duplicated note constants, docs-of-record sync. **719 tests passing.** T37.7 closed (bf91c18). One review cycle, clean. See Sprint 37 detail. |
-| Sprint 38 | **PLANNED** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. Expected ~733 tests. See Sprint 38 detail. |
+| Sprint 37B | **BUILT (awaiting review)** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Target tag v0.0.49 after the review cycle. See Sprint 37B detail. |
+| Sprint 38 | **PLANNED** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. Expected ~734 tests, target tag v0.0.50. See Sprint 38 detail. |
 
 ### Sprint 15 post-tag regression note
 
@@ -141,7 +150,7 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
 - `tests/test_descriptions.py`, `tests/test_candidate_config.py`: enrichment and candidate env-config tests (per-file counts above are historical; not re-counted)
-- **Total: 719 tests, all passing (Sprint 37, measured 2026-09-23; last tag v0.0.48)**. Sprint 38 will add `tests/test_perplexity.py`.
+- **Total: 720 tests, all passing (Sprint 37B build, measured 2026-09-23; last tag v0.0.48, v0.0.49 pending review)**. Sprint 38 will add `tests/test_perplexity.py`.
 
 ---
 
@@ -3059,12 +3068,74 @@ Previous: 715. Added 4 (T37.2 1, T37.3 1, T37.4 1, T37.5 1). **Expected: 719. Ac
 
 ---
 
+## Sprint 37B: CR39 Escape apostrophes in CorporateUser lookups (patch sprint) - BUILT (awaiting review)
+
+**Change request:** CR39.md (APPROVED, owner, 2026-09-23; assumptions A1 to A3 confirmed)
+**PRD requirement:** FR-2 (owner by name: apostrophe names resolve), FR-12 (identity resolution: apostrophe email claims resolve). Both PRD sentences are already in place, marked "Planned (CR39)".
+**User stories:** US-4 (owner assigned when creating a contact, including by consultant name), US-23 (authenticated user resolves to Bullhorn owner)
+**Dependency:** Sprint 37 complete (baseline **v0.0.48, 719 tests**, measured 2026-09-23). Lands **before** Sprint 38 (CR38 A2). There is no code overlap with CR38.
+**Risk:** Low. The change widens the accepted input domain of two lookups. Injection safety comes from escaping, and a dedicated test pins it. The live tenant has no active apostrophe CorporateUser today (the three O' users are all `isDeleted: true`), so live behaviour for existing users does not change.
+**Numbering:** "37B" keeps Sprint 38 bound to CR38 (CR39 A2). Task IDs are `T37B.n`.
+
+### Current state (verified by code search 2026-09-23, nothing implemented)
+
+- `client.py:521-522` `resolve_owner`: `if "'" in owner: raise ValueError("Owner name must not contain single quotes ...")`, then `where=f"name='{owner}'"` at line 526.
+- `identity.py:77-80` `resolve_caller`: `if "'" in email: raise IdentityResolutionError(...)`, then `where=f"email='{email}'"` at line 84.
+- `grep -rn "_escape_where_literal" src tests` returns nothing.
+- Rejection tests to be **rewritten, not supplemented** (CR39 change 3): `tests/test_client.py:798` `TestResolveOwner::test_owner_with_single_quote_raises`, `tests/test_identity.py:244` `test_email_with_single_quote_raises`.
+- `identity.py` imports `BullhornClient` only under `TYPE_CHECKING`. `client.py` does not import `identity`, so a runtime `from .client import _escape_where_literal` in `identity.py` creates no import cycle.
+- `server.py:1415` comment ("resolve_owner raises ValueError when no CorporateUser matches") becomes accurate again once the reject branch goes, which closes Sprint 37 m1. The `resolve_owner` docstring `Raises:` likewise becomes accurate (closes m2). Neither needs editing.
+- Line endings: `client.py` and `tests/test_client.py` are **CRLF**. `identity.py`, `tests/test_identity.py` and `CR36.md` are **LF**. Match per file.
+- Guards that **stay reject-only** (CR39 Non-goals): `get_job_submissions` `status` (`server.py:1125`) and `list_placements` `status` (`server.py:746`).
+
+### Tasks
+
+#### T37B.1, `_escape_where_literal` helper and `resolve_owner` escaping
+**File:** `src/bullhorn_mcp/client.py`
+- Add a module-level `_escape_where_literal(value: str) -> str` returning `value.replace("'", "''")`. Its docstring records the WHY from the CR39 live evidence: Bullhorn `/query` accepts the SQL doubled quote (`name='Tracey O''Neill'` returns id 145098), while a backslash escape and a raw quote both return 400 `errors.badSearchQuery`.
+- In `resolve_owner`, delete the quote `ValueError` and use `where=f"name='{_escape_where_literal(owner)}'"`. The no-match `ValueError` message keeps the **unescaped** name (it is user-facing).
+- **Unit tests** (`tests/test_client.py::TestResolveOwner`, respx):
+  - Rewrite `test_owner_with_single_quote_raises` as `test_owner_with_single_quote_is_escaped`. `resolve_owner("Tracey O'Neill")` sends a `/query/CorporateUser` request whose `where` param is exactly `name='Tracey O''Neill' AND isDeleted=false`, and returns `{"id": 145098}`. Confirm the exact isDeleted suffix against a neighbouring `TestResolveOwner` test before hard-coding it, because the metadata gate falls back to appending the clause when `/meta` is unmocked. Fix the "Lucene" wording in the docstring (Sprint 37 m4).
+  - New `test_owner_injection_attempt_is_escaped`: owner `x' OR name like '%` produces the `where` param `name='x'' OR name like ''%' AND isDeleted=false`, a single literal with every quote doubled.
+
+#### T37B.2, `resolve_caller` escaping
+**File:** `src/bullhorn_mcp/identity.py`
+- Delete the quote `IdentityResolutionError` guard. Import `_escape_where_literal` from `.client` and use `where=f"email='{_escape_where_literal(email)}'"`. Error messages keep the unescaped email.
+- **Unit test** (`tests/test_identity.py`): rewrite `test_email_with_single_quote_raises` as `test_email_with_single_quote_is_escaped`. The token includes `sub` (known fixture trap), with email `o'brien@x.com`. `client.query` is patched to return one user. Assert it was called with `where="email='o''brien@x.com'"`, that the resolved user is returned, and that the cache is populated under that `sub`. Fix the "Lucene" wording in the docstring.
+
+#### T37B.3, Docs of record
+**Files:** `CR36.md`, `CR39.md`, `IMPLEMENTATION-PLAN.md` (PRD.md is already done, see note)
+- `CR36.md`: fix the stale Status line to `COMPLETE (shipped v0.0.48)`. Mark goal 2's `resolve_owner` / `resolve_caller` parts and the two matching `## Changes` subsections "superseded by CR39 (escape, not reject)". Leave the `get_job_submissions` guard as is.
+- `PRD.md`: CR39 change 4 is **already applied** (FR-2 and FR-12 sentences, owner-approved). Post-tag only: change the two "Planned (CR39)" markers to "Delivered (CR39)".
+- `CR39.md`: post-tag, set Status to `COMPLETE (shipped v0.0.49)`.
+- `IMPLEMENTATION-PLAN.md`: header baseline, this sprint's Actual count, and the Current Status row.
+- Doc edits need no tests, but they are reviewed.
+
+### Verification
+
+- [x] `.venv/bin/pytest` green. The only modified pre-existing tests are the two rewritten rejection tests (T37B.1, T37B.2). All other 717 tests pass unchanged.
+- [x] `grep -rn "must not contain single quotes" src/bullhorn_mcp/client.py src/bullhorn_mcp/identity.py` returns nothing. The two `status` guards in `server.py` are still present (lines 746, 1125).
+- [x] Optional live read-only check (run 2026-09-23: `ValueError No CorporateUser found matching 'Tracey O'Neill'`; with `exclude_deleted=False` the escaped query returns id 145098): `client.resolve_owner("Tracey O'Neill")` raises the **no-match** `ValueError` (the only match is soft-deleted, so the default `exclude_deleted=True` filters it out), not a 400 and not the old quote rejection. That proves the escaped query is well-formed on the tenant.
+- [x] `git diff --stat` shows no line-ending churn (the per-file CRLF/LF rule): 61 insertions, 29 deletions across the four source/test files.
+- [ ] Local commit `fix: CR39 escape apostrophes in CorporateUser lookups`, then the review cycle, push, and tag **v0.0.49** after the review cycle passes. Post-tag: CR39 Status and PRD markers per T37B.3.
+
+### Expected test count after Sprint 37B
+
+Previous: 719 (Sprint 37 actual). Rewritten in place: 2 (net 0). Added: 1 (`test_owner_injection_attempt_is_escaped`). **Expected: 720. Actual: 720 passing, 0 failing** (`.venv/bin/pytest -q`, 2026-09-23).
+
+### Build learnings
+
+- `query()` wraps the caller's WHERE in parentheses before appending the soft-delete clause, so the exact `where` param is `(name='Tracey O''Neill') AND isDeleted=false`, not the unparenthesised form the plan sketched. The client tests assert the parenthesised string. Why it matters: a future test hard-coding the plan's form would fail for the wrong reason.
+- The prompt called for parallel subagents. The sprint was about 30 lines across two files with a dependency (identity imports the client helper), so it was built directly in one pass instead.
+
+---
+
 ## Sprint 38: CR38 `people_search_perplexity` (external people search via Perplexity) - PLANNED
 
 **Change request:** CR38.md (APPROVED for implementation, owner, 2026-09-23)
 **PRD requirement:** FR-22 (External People Search via Perplexity)
 **User stories:** US-45 (Find people outside Bullhorn by role and location)
-**Dependency:** Sprint 37 complete (expected baseline v0.0.48, ~719 tests). Independent of CR36 in code: both touch `server.py`, but in unrelated regions.
+**Dependency:** Sprint 37B (CR39) complete (expected baseline v0.0.49, ~720 tests). Independent of CR36 and CR39 in code. CR36 touched unrelated `server.py` regions, and CR39 touches only `client.py` / `identity.py`.
 **Risk:** Low-to-medium. This is the first non-Bullhorn outbound dependency (CR38 R1, R2). It is contained by full isolation: its own module and error type, and no shared client, auth, or config.
 
 ### Current state (verified by code search 2026-09-23)
@@ -3127,12 +3198,12 @@ The tool must **not** be added to `SUPPORTED_ENTITIES` or `TOOL_ENTITY_MAP`.
 
 ### Verification
 
-- [ ] `.venv/bin/pytest` green. Sprint 37's tests plus all earlier tests are unchanged, except for any tool-count assertion updated deliberately (T38.4).
+- [ ] `.venv/bin/pytest` green. Sprint 37B's tests plus all earlier tests are unchanged, except for any tool-count assertion updated deliberately (T38.4).
 - [ ] Server imports with the key unset.
 - [ ] One manual live smoke (read-only, owner-approved in CR38 acceptance criteria): `people_search_perplexity(["financial controller Dublin"], max_results=5)` returns 5 formatted results, and the key does not appear in the output.
 - [ ] `grep -rn "PERPLEXITY_API_KEY" src/` shows only the call-time `os.getenv`, and nothing in `config.py`.
-- [ ] Local commit `feat: CR38 people_search_perplexity ...`, then review cycle, push, and tag **v0.0.49** after the review cycle passes. Post-tag: flip CR38 Status to COMPLETE.
+- [ ] Local commit `feat: CR38 people_search_perplexity ...`, then review cycle, push, and tag **v0.0.50** after the review cycle passes (v0.0.49 goes to CR39, Sprint 37B). Post-tag: flip CR38 Status to COMPLETE.
 
 ### Expected test count after Sprint 38
 
-Previous: ~719 (Sprint 37 actual). Added 14 (T38.1 4, T38.2 8, T38.4 2). **Expected: ~733.** Actual: _to be recorded_.
+Previous: ~720 (Sprint 37B expected). Added 14 (T38.1 4, T38.2 8, T38.4 2). **Expected: ~734.** Actual: _to be recorded_.

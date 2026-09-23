@@ -58,6 +58,7 @@ The MCP shall provide a tool to create a new ClientContact entity in Bullhorn, l
 
 - A valid ClientCorporation ID to associate the contact with.
 - An owner may be provided as either a Bullhorn user ID or a consultant name. If omitted, the MCP resolves the authenticated user to a Bullhorn CorporateUser and auto-populates the owner. If a name is provided, the MCP resolves it to a Bullhorn CorporateUser ID internally by searching the CorporateUser entity. If the name resolves to multiple users, the MCP returns all matches with disambiguation information (email and available identity fields) and does not create the record until the caller specifies which user.
+- Owner names containing an apostrophe (e.g. "Conor O'Reilly") shall resolve like any other name. The MCP escapes the apostrophe in the CorporateUser lookup rather than rejecting the name. Planned (CR39).
 
 Before creating, the tool checks for existing contacts with the same name at the same company. Exact, likely, or possible matches are returned for review instead of creating a duplicate unless the caller explicitly sets a force/bypass option. The tool returns the created record including its new Bullhorn ID when creation proceeds.
 
@@ -146,6 +147,8 @@ The MCP server shall support an HTTP transport mode (`streamable-http`) in addit
 ### FR-12: Authenticated User Identity Resolution
 
 For hosted HTTP deployments, the MCP shall authenticate users with Microsoft Entra OIDC and resolve the authenticated user's email claim to a Bullhorn CorporateUser record. Resolved identities shall be cached per authenticated user, not globally, so a shared HTTP server can safely serve multiple consultants. Identity resolution failures shall return clear errors when an operation needs the caller identity and no explicit owner was supplied.
+
+Email claims containing an apostrophe (valid in email addresses) shall resolve like any other email. The MCP escapes the apostrophe in the CorporateUser lookup rather than rejecting the claim. Planned (CR39).
 
 ### FR-13: First-class JobOrder Create and Update Tools
 
