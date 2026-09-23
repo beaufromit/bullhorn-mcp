@@ -2,7 +2,7 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37 (CR36 housekeeping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is BUILT at 720 tests passing, committed locally, awaiting the review cycle (target v0.0.49).** Next after that: Sprint 38 (CR38 `people_search_perplexity`, PLANNED, target v0.0.50).** Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). Next after that: Sprint 38 (CR38 `people_search_perplexity`, PLANNED, target v0.0.50).** Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. All 38 MCP tools are present in `server.py`; CR37 added parameters, not tools.
 
 **Replan validation (2026-09-23, post-CR36):** Re-reconciled PRD, user stories, CRs, and source code. **719 tests passing, tagged v0.0.48** (`.venv/bin/pytest -q`: 719 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **New CR39** (escape apostrophes in CorporateUser lookups, owner-APPROVED 2026-09-23, assumptions A1 to A3 confirmed). It follows up Sprint 37 review minor m3. The PRD is already amended: FR-2 and FR-12 each gained an apostrophe sentence marked "Planned (CR39)". The existing user stories cover the behaviour: **US-4** (owner by consultant name) and **US-23** (Entra identity to CorporateUser). No new user story is needed, because this is an input-domain correction to existing stories, not a new capability.
@@ -100,7 +100,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 35 | **COMPLETE** | CR34: Trim startup tool-description enrichment — select_fields(), leveled build_entity_section(), GENERIC_DISCOVERY_TOOLS; ~80% description token reduction. See Sprint 35 detail. |
 | Sprint 36 | **COMPLETE** | CR37: Make note-field filtering discoverable — `note_action` parameter on `list_contacts`/`list_candidates`/`list_jobs`, empty-route probe warning on the Lucene note path, three enrichment field-selection fixes. Tool count unchanged at 38. **715 tests passing, tagged v0.0.47.** See Sprint 36 detail. |
 | Sprint 37 | **COMPLETE (v0.0.48)** | CR36: Housekeeping. Declares `fastmcp` dependency, single-quote guards on `get_job_submissions` status / `resolve_owner` / `resolve_caller`, collapse duplicated note constants, docs-of-record sync. **719 tests passing.** T37.7 closed (bf91c18). One review cycle, clean. See Sprint 37 detail. |
-| Sprint 37B | **BUILT (awaiting review)** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Target tag v0.0.49 after the review cycle. See Sprint 37B detail. |
+| Sprint 37B | **COMPLETE** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Tagged v0.0.49 after 1 clean review cycle. See Sprint 37B detail. |
 | Sprint 38 | **PLANNED** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. Expected ~734 tests, target tag v0.0.50. See Sprint 38 detail. |
 
 ### Sprint 15 post-tag regression note
@@ -150,7 +150,7 @@ These are fixed as the first tasks in Sprint 16.
 - `tests/test_shortlist_config.py` — 3 tests (env config loader for shortlist status)
 - `tests/test_candidate_tools.py` — tests for all 6 CR19 candidate/CV tools
 - `tests/test_descriptions.py`, `tests/test_candidate_config.py`: enrichment and candidate env-config tests (per-file counts above are historical; not re-counted)
-- **Total: 720 tests, all passing (Sprint 37B build, measured 2026-09-23; last tag v0.0.48, v0.0.49 pending review)**. Sprint 38 will add `tests/test_perplexity.py`.
+- **Total: 720 tests, all passing (Sprint 37B, measured 2026-09-23; tagged v0.0.49)**. Sprint 38 will add `tests/test_perplexity.py`.
 
 ---
 
@@ -3068,7 +3068,7 @@ Previous: 715. Added 4 (T37.2 1, T37.3 1, T37.4 1, T37.5 1). **Expected: 719. Ac
 
 ---
 
-## Sprint 37B: CR39 Escape apostrophes in CorporateUser lookups (patch sprint) - BUILT (awaiting review)
+## Sprint 37B: CR39 Escape apostrophes in CorporateUser lookups (patch sprint) - COMPLETE
 
 **Change request:** CR39.md (APPROVED, owner, 2026-09-23; assumptions A1 to A3 confirmed)
 **PRD requirement:** FR-2 (owner by name: apostrophe names resolve), FR-12 (identity resolution: apostrophe email claims resolve). Both PRD sentences are already in place, marked "Planned (CR39)".
@@ -3117,7 +3117,7 @@ Previous: 715. Added 4 (T37.2 1, T37.3 1, T37.4 1, T37.5 1). **Expected: 719. Ac
 - [x] `grep -rn "must not contain single quotes" src/bullhorn_mcp/client.py src/bullhorn_mcp/identity.py` returns nothing. The two `status` guards in `server.py` are still present (lines 746, 1125).
 - [x] Optional live read-only check (run 2026-09-23: `ValueError No CorporateUser found matching 'Tracey O'Neill'`; with `exclude_deleted=False` the escaped query returns id 145098): `client.resolve_owner("Tracey O'Neill")` raises the **no-match** `ValueError` (the only match is soft-deleted, so the default `exclude_deleted=True` filters it out), not a 400 and not the old quote rejection. That proves the escaped query is well-formed on the tenant.
 - [x] `git diff --stat` shows no line-ending churn (the per-file CRLF/LF rule): 61 insertions, 29 deletions across the four source/test files.
-- [ ] Local commit `fix: CR39 escape apostrophes in CorporateUser lookups`, then the review cycle, push, and tag **v0.0.49** after the review cycle passes. Post-tag: CR39 Status and PRD markers per T37B.3.
+- [x] Local commit `fix: CR39 escape apostrophes in CorporateUser lookups` (`2ce3bfe`), then the review cycle (1 clean cycle), push, and tag **v0.0.49**. Still outstanding (T37B.3 post-tag): CR39 Status and PRD markers.
 
 ### Expected test count after Sprint 37B
 
@@ -3127,6 +3127,14 @@ Previous: 719 (Sprint 37 actual). Rewritten in place: 2 (net 0). Added: 1 (`test
 
 - `query()` wraps the caller's WHERE in parentheses before appending the soft-delete clause, so the exact `where` param is `(name='Tracey O''Neill') AND isDeleted=false`, not the unparenthesised form the plan sketched. The client tests assert the parenthesised string. Why it matters: a future test hard-coding the plan's form would fail for the wrong reason.
 - The prompt called for parallel subagents. The sprint was about 30 lines across two files with a dependency (identity imports the client helper), so it was built directly in one pass instead.
+
+### Review cycle findings
+
+- **Cycle 1 (reviewed `2ce3bfe`): clean.** 0 CRITICAL, 0 MODERATE. Two minors logged, not fixed per PROMPT_iterate constraint 1:
+  - **m1:** a stray unmatched `**` in the "Current baseline" paragraph (after "PLANNED, target v0.0.50).").
+  - **m2:** the `CR39.md` Status line is stale ("APPROVED ... Next: replan").
+- 720 tests passing (verified 2026-09-23). Tagged v0.0.49 on push.
+- **Learning:** none new beyond confirming the doubled-quote escaping approach.
 
 ---
 
