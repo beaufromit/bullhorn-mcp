@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bullhorn MCP: Recent Additions</title>
+<style>
+  :root {
+    --bg: #f6f4f9; --card: #fff; --ink: #1d1530; --muted: #6b6480;
+    --accent: #c0157f; --deep: #3b1a6b; --ok: #1a8a5a; --warn: #b26a00;
+    --code: #1d1530; --codeink: #e9e3f5; --line: #e2dcee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #150f22; --card: #211936; --ink: #f0eaff; --muted: #a79dc0; --line: #35294f; --code: #0d0817; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { margin: 0 0 4px; font-size: 1.5rem; color: var(--deep); }
+  @media (prefers-color-scheme: dark) { h1 { color: #e9d7ff; } }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .tab, .btn { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px;
+    padding: 8px 14px; font: inherit; font-size: .9rem; cursor: pointer; }
+  .tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .stage { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; min-height: 420px; }
+  .caption { font-weight: 600; color: var(--accent); min-height: 1.5em; margin-bottom: 12px; }
+  .msg { max-width: 88%; padding: 10px 14px; border-radius: 14px; margin: 8px 0; opacity: 0; transform: translateY(8px);
+    transition: opacity .35s, transform .35s; }
+  .msg.show { opacity: 1; transform: none; }
+  .user { background: var(--deep); color: #fff; margin-left: auto; border-bottom-right-radius: 4px; }
+  .bot { background: var(--bg); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .call { font: .82rem/1.5 ui-monospace, Menlo, Consolas, monospace; background: var(--code); color: var(--codeink);
+    border-radius: 10px; padding: 10px 12px; margin: 8px 0; white-space: pre-wrap; overflow-x: auto;
+    opacity: 0; transition: opacity .35s; }
+  .call.show { opacity: 1; }
+  .call .tool { color: #ff7ac6; } .call .k { color: #9ad1ff; } .call .s { color: #b9f0c6; }
+  .call .tag { display: inline-block; padding: 0 8px; border-radius: 6px; font-size: .75rem; margin-bottom: 4px; }
+  .call .in { background: #4b2c86; } .call .out { background: #1c6b49; }
+  .note { border-left: 4px solid var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent);
+    padding: 8px 12px; border-radius: 6px; font-size: .9rem; margin: 8px 0; opacity: 0; transition: opacity .35s; }
+  .note.show { opacity: 1; }
+  .caret::after { content: "|"; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .controls { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+  .progress { flex: 1; min-width: 120px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .progress > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  @media (prefers-reduced-motion: reduce) { .msg, .call, .note { transition: none; } .caret::after { animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Bullhorn MCP: recent additions</h1>
+  <p class="sub">Three newer tools, shown as a conversation with Claude. Pick a scene or let it play.</p>
+  <div class="tabs" role="tablist" id="tabs"></div>
+  <div class="stage" id="stage" aria-live="polite">
+    <div class="caption" id="caption"></div>
+    <div id="feed"></div>
+  </div>
+  <div class="controls">
+    <button class="btn" id="play">Pause</button>
+    <button class="btn" id="replay">Replay</button>
+    <div class="progress"><i id="bar"></i></div>
+  </div>
+</div>
+
+<script>
+// Each scene is a list of steps: {type, text|html, caption?, wait?}
+// type: user (typed out), bot, call (tool input), result (tool output), note
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const hl = s => esc(s)
+  .replace(/^(\w+)\(/, '<span class="tool">$1</span>(')
+  .replace(/"([\w]+)":/g, '<span class="k">"$1"</span>:')
+  .replace(/(&quot;|")([^"\n]*?)\1(?=[,\]\}\)\n]|$)/g, '<span class="s">"$2"</span>');
+
+const SCENES = [
+  {
+    name: "1. Find people outside Bullhorn",
+    steps: [
+      { type: "user", caption: "people_search_perplexity: sourcing from outside your database",
+        text: "Who are the financial controllers in Dublin fintech that we don't already know?" },
+      { type: "bot", text: "I'll search the external people index. It never touches Bullhorn, so nothing is written." },
+      { type: "call", label: "in", text:
+`people_search_perplexity(
+  queries=["financial controller Dublin fintech",
+           "finance manager Dublin payments"],
+  max_results=10
+)` },
+      { type: "result", text:
+`{ "results": [
+    { "name": "Aoife Byrne", "title": "Financial Controller", "company": "PayLoop", "url": "linkedin.com/in/..." },
+    { "name": "Conor Walsh", "title": "Finance Manager", "company": "Stripe", "url": "linkedin.com/in/..." },
+    ... 8 more ] }` },
+      { type: "note", text: "Results are a snapshot and may be out of date. One to five queries per call, merged into one ranked list. Needs PERPLEXITY_API_KEY on the server." },
+      { type: "bot", text: "Found 10 people. Want me to check which are already in Bullhorn with find_duplicate_candidates before adding anyone?" }
+    ]
+  },
+  {
+    name: "2. Read and search notes",
+    steps: [
+      { type: "user", caption: "get_notes_for_entity and search_notes: read the history on a record",
+        text: "What notes do we have on candidate 169020, and did anything mention visa sponsorship?" },
+      { type: "call", label: "in", text:
+`get_notes_for_entity(
+  entity="Candidate",
+  entity_id=169020,
+  limit=50
+)` },
+      { type: "result", text:
+`{ "data": [
+    { "id": 8841, "action": "General Note", "comments": "Open to hybrid, needs visa sponsorship", "dateAdded": "2026-08-12" },
+    { "id": 8620, "action": "Screening Call", "comments": "Strong on IFRS, notice 1 month", "dateAdded": "2026-07-30" } ],
+  "pagination": { "count": 2, "start": 0 } }` },
+      { type: "note", text: "Use this, not query_entities(\"Note\"). Note does not support /query. For a company it returns the notes of its contacts." },
+      { type: "call", label: "in", text:
+`search_notes(
+  query="visa sponsorship",
+  entity_filter={"type": "Candidate", "id": 169020}
+)` },
+      { type: "note", text: "Always pass entity_filter. It filters that record's notes locally, so it is reliable. A global search can return nothing even when notes exist, and the response then carries a warnings key." },
+      { type: "bot", text: "Yes. Note 8841 from 12 August says they need visa sponsorship." }
+    ]
+  },
+  {
+    name: "3. Add a note (people and companies)",
+    steps: [
+      { type: "user", caption: "add_note: person_id and the company redirect",
+        text: "Log that the Senior Accountant role is on hold pending budget approval, against the hiring manager." },
+      { type: "bot", text: "Job notes attach to the logged-in consultant by default. I'll pass person_id so it lands on the hiring manager's timeline." },
+      { type: "call", label: "in", text:
+`add_note(
+  entity="JobOrder",
+  entity_id=22222,
+  action="General Note",
+  comments="Role on hold pending budget approval",
+  person_id=54321
+)` },
+      { type: "result", text:
+`{ "changeType": "INSERT", "changedEntityId": 9102,
+  "data": { "action": "General Note", "personReference": { "id": 54321 } } }` },
+      { type: "user", text: "Now add a note to the company itself." },
+      { type: "call", label: "in", text:
+`add_note(
+  entity="ClientCorporation",
+  entity_id=777,
+  action="General Note",
+  comments="Hiring freeze until Q1"
+)` },
+      { type: "result", text:
+`{ "contacts": [ { "id": 54321, "firstName": "Sinead", "lastName": "Doyle" }, ... ],
+  "contacts_truncated": false }` },
+      { type: "note", text: "Bullhorn has no company-level note, so nothing is written. You get up to 50 active contacts back. Pick one, or use update_record to set Company Comments." },
+      { type: "bot", text: "Which contact should carry the note? Sinead Doyle is the hiring manager." }
+    ]
+  }
+];
+
+const feed = document.getElementById("feed"), cap = document.getElementById("caption"),
+      bar = document.getElementById("bar"), tabs = document.getElementById("tabs"),
+      playBtn = document.getElementById("play");
+let run = 0, paused = false, current = 0;
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const sleep = ms => new Promise(r => setTimeout(r, reduce ? Math.min(ms, 50) : ms));
+async function hold(ms, id) {           // pausable sleep that aborts if a newer run started
+  for (let t = 0; t < ms; t += 100) {
+    if (id !== run) return false;
+    while (paused && id === run) await sleep(100);
+    await sleep(100);
+  }
+  return id === run;
+}
+function add(cls, html) {
+  const d = document.createElement("div");
+  d.className = cls; d.innerHTML = html; feed.appendChild(d);
+  requestAnimationFrame(() => d.classList.add("show"));
+  d.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+  return d;
+}
+async function typeInto(el, text, id) {
+  el.classList.add("caret");
+  for (const ch of text) {
+    if (id !== run) return false;
+    while (paused && id === run) await sleep(100);
+    el.textContent += ch; await sleep(reduce ? 0 : 18);
+  }
+  el.classList.remove("caret");
+  return true;
+}
+async function play(i) {
+  const id = ++run; current = i; feed.innerHTML = ""; cap.textContent = ""; bar.style.width = "0";
+  [...tabs.children].forEach((t, k) => t.setAttribute("aria-selected", k === i));
+  const steps = SCENES[i].steps;
+  for (let n = 0; n < steps.length; n++) {
+    const s = steps[n];
+    if (s.caption) cap.textContent = s.caption;
+    if (s.type === "user") {
+      const el = add("msg user show", ""); if (!await typeInto(el, s.text, id)) return;
+    } else if (s.type === "bot") {
+      add("msg bot", esc(s.text));
+    } else if (s.type === "call") {
+      add("call", '<span class="tag in">tool call</span>\n' + hl(s.text));
+    } else if (s.type === "result") {
+      add("call", '<span class="tag out">result</span>\n' + hl(s.text));
+    } else if (s.type === "note") {
+      add("note", esc(s.text));
+    }
+    bar.style.width = ((n + 1) / steps.length * 100) + "%";
+    if (!await hold(s.type === "note" ? 2600 : 1500, id)) return;
+  }
+  if (id === run && current < SCENES.length - 1 && !paused) {   // auto-advance
+    if (await hold(2500, id)) play(current + 1);
+  }
+}
+
+SCENES.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.className = "tab"; b.role = "tab"; b.textContent = s.name;
+  b.onclick = () => { paused = false; playBtn.textContent = "Pause"; play(i); };
+  tabs.appendChild(b);
+});
+playBtn.onclick = () => { paused = !paused; playBtn.textContent = paused ? "Resume" : "Pause"; };
+document.getElementById("replay").onclick = () => { paused = false; playBtn.textContent = "Pause"; play(current); };
+play(0);
+</script>
+</body>
+</html>
