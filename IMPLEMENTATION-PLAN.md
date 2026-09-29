@@ -2,7 +2,14 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is BUILT at 761 tests passing** (2026-09-23), committed locally, live acceptance (T39.5) passed, awaiting the review cycle; target v0.0.51.
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is PLANNED** (2026-09-29), target v0.0.52; T40.1 (owner hands-on test) passed 2026-09-29, ready to build.
+
+**Replan validation (2026-09-29, post-CR40):** Re-reconciled PRD, user stories, CRs, and source code. **762 tests passing, tagged v0.0.51** (`.venv/bin/pytest -q`: 762 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
+- **New CR41** (CV file intake via upload tickets, owner-APPROVED 2026-09-29) is planned as **Sprint 40** (target v0.0.52). PRD amended at replan: FR-15 `parse_cv` sentence reworded, new **FR-15 Amendment** (CV File Intake Without Base64), new **NFR-9** (Upload Ticket Security and File Retention), US-31 acceptance reworded, new **US-48** and **US-49**, and the §1 overview scope line. Code search confirms nothing is implemented (see Sprint 40 Current state).
+- Coverage: 22 FRs plus amendments, 9 NFRs, 51 user stories (US-1 to US-49, plus US-7A and US-15A). US-48 and US-49 map to the FR-15 Amendment and NFR-9. No user stories without a requirement. US-49 is conditional on T40.1 showing Cowork renders MCP Apps; if it does not, US-49 goes back to the owner rather than being silently dropped.
+- Withdrawn: CR27's `POST /upload-cv` and `UPLOAD_SECRET` (never worked in production). The CR27 section below stays as history.
+- Not a discrepancy, recorded for the reviewer: the owner's instruction that there is no paste-text fallback refers to the existing candidate-from-CV flow; how these tools interact is an explicit follow-up CR, not part of Sprint 40.
+- Header baseline refreshed (it still said Sprint 39 was awaiting review). `bha-expired-list-ids.md` (untracked data note) still has no PRD requirement; nothing planned. CR35 still reserved and unspecced.
 
 **Replan validation (2026-09-23, post-CR38):** Re-reconciled PRD, user stories, CRs, and source code. **743 tests passing, tagged v0.0.50** (`.venv/bin/pytest -q`: 743 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **CR40** (add_note personReference, owner-APPROVED 2026-09-23) is planned as **Sprint 39** (target v0.0.51). Its PRD amendments were already applied: FR-7 Amendment 2, FR-16 Amendment, US-46 and US-47. Code search confirms nothing is implemented: `client.py:491` `_ENTITY_FIELD` still omits `personReference` for non-person targets and sends `clientCorporation` and the `jobOrder` TO_ONE, and `server.py` `add_note` has no `person_id`.
@@ -110,6 +117,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 37B | **COMPLETE** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Tagged v0.0.49 after 1 clean review cycle. See Sprint 37B detail. |
 | Sprint 38 | **COMPLETE** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. **743 tests passing.** Tagged v0.0.50. See Sprint 38 detail. |
 | Sprint 39 | **COMPLETE** | CR40: `add_note` always sends `personReference` (JobOrder, Placement and Opportunity attach to the logged-in consultant via the TO_MANY link; Lead to itself), adds `person_id`, and replaces ClientCorporation notes with a `company_notes_live_on_contacts` redirect. `get_notes_for_entity` and `search_notes` read `clientContactNotes` for companies (FR-7 Amendment 2, FR-16 Amendment; US-46, US-47). Tool count unchanged at 39. Target v0.0.51. See Sprint 39 detail. Reviewed (2 cycles; owner asked for minors fixed too), tagged v0.0.51, 762 tests. |
+| Sprint 40 | **PLANNED** | CR41: CV file intake via single-use upload tickets (`request_cv_upload`, `POST /upload/{token}`, `get_cv_upload`, in-chat `show_cv_upload_box` fallback); `upload_id` replaces `file_b64` on `parse_cv` / `create_candidate_from_cv` / `attach_cv`; `/upload-cv` and `UPLOAD_SECRET` removed. FR-15 Amendment, NFR-9, US-48, US-49. Target v0.0.52. T40.1 owner hands-on test passed 2026-09-29; ready to build. |
 
 ### Sprint 15 post-tag regression note
 
@@ -3389,3 +3397,119 @@ Previous: 743 (Sprint 38 actual). Added about 18 new (T39.1 8, T39.2 7, T39.3 3)
   - Fixed in commit `00e040a`. Live read-only check: the company 10666 redirect returns 19 contacts (was 22), `contacts_truncated` false, no write.
 - **Cycle 2 (`00e040a`): clean.** One MINOR logged for awareness only: the ClientContact status picklist on this tenant is Active, Archive, Left Company, Private, so "Left Company" contacts still appear in the redirect list. This is consistent with the owner's chosen fix and was not changed.
 - **Learning:** a plan assumption that redefines a PRD term (A3 "active" = non-deleted) must be written back into the PRD at replan, or the review will flag the mismatch. Also check a status filter against the live picklist (`/meta` options) before deciding what "active" means.
+
+---
+
+## Sprint 40: CR41 CV file intake via upload tickets (replaces /upload-cv and base64 inputs) - PLANNED
+
+**Change request:** CR41.md (APPROVED, owner, 2026-09-29)
+**PRD requirement:** FR-15 Amendment (CV File Intake Without Base64), NFR-9 (Upload Ticket Security and File Retention)
+**User stories:** US-48 (attach a CV once in Cowork), US-49 (upload box fallback in the same chat), US-31 (acceptance reworded from base64 to `upload_id`)
+**Dependency:** Sprint 39 (CR40) complete, v0.0.51, 762 tests. T40.1 (owner hands-on test) was run and recorded on 2026-09-29; all gates passed.
+**Risk:** Medium-high. It adds an unauthenticated HTTP route (token-authorised), removes a parameter from three live tools, deletes an endpoint, and adds the repo's first MCP App. Tool count 39 to 42 (`request_cv_upload`, `get_cv_upload`, `show_cv_upload_box`). The owner builds this sprint in a separate session.
+
+### Current state (verified by code search, 2026-09-29)
+
+- **Nothing in CR41 is implemented.** No `uploads.py`, no `request_cv_upload`, no `/upload/{token}` route.
+- `server.py:2332` `parse_cv(file_b64, filename, format)`, `server.py:2435` `create_candidate_from_cv(file_b64, filename, format, content, content_type, force, fields_override)` and `server.py:2656` `attach_cv(candidate_id, file_b64, filename, format, ...)` all decode `file_b64` with `base64.b64decode` (`:2367`, `:2496`, `:2711`). `base64` is imported at `server.py:4`; after this sprint its only user is gone unless something else needs it (check before removing).
+- `create_candidate_from_cv` attaches the file with `client.attach_file("Candidate", id, file_bytes, filename, content_mime, file_type="CV")` inside a best-effort `try` (`:2632`); the `attach_cv` commit does the same (`:2883`). These are the points where the upload must be marked attached (bytes dropped) on success.
+- `server.py:3586` `_upload_cv_handler` and `server.py:3668` `mcp.custom_route("/upload-cv", ...)`. `hmac` (`server.py:5`) is used only at `:3593`. The handler's create path calls `create_candidate_from_cv` outside any MCP request, so `resolve_caller()` has no Entra token there (the probable reason it never worked; not reproduced, owner chose replacement).
+- `MCP_BASE_URL` is already read in `_build_auth()` (`server.py:180`) and required in HTTP mode. The upload URL is built from it.
+- `.env.example:86` has the commented `UPLOAD_SECRET` block. README "Automated CV Upload" section is at `README.md:294`-`352`.
+- `descriptions.py:92-95` maps `parse_cv`, `parse_cv_text`, `create_candidate_from_cv`, `attach_cv` to Candidate for enrichment. The three new tools should **not** be added to `TOOL_ENTITY_MAP` (they are not entity-shaped; keeps NFR-8 budget).
+- Tests that pin the old behaviour: `tests/test_server.py:6924` `TestCVUploadEndpoint` (9 tests, all removed), and binary-mode tests in `TestParseCv` (`:5760`, 4 tests), `TestCreateCandidateFromCv` (`:5891`, 9 tests), `TestAttachCv` (`:6150`, 7 tests), 17 `file_b64` references in total. These are rewritten in place onto `upload_id`, not deleted.
+- **FastMCP 3.2.4 already supports what Route B needs, with no new dependency:** `ctx.client_supports_extension(UI_EXTENSION_ID)` (`fastmcp/server/context.py:583`, `UI_EXTENSION_ID = "io.modelcontextprotocol/ui"`) detects MCP Apps support, and `@mcp.tool(app=AppConfig(...))` with `ResourceCSP` (`fastmcp/apps/config.py:20,79`) declares the UI resource and `connectDomains`. The ready-made `fastmcp.apps.FileUpload` provider needs `prefab-ui` (not installed) and is not used.
+- Production runs as one systemd process (`bullhorn-mcp.service`), so an in-memory store is shared between the MCP tools and the upload route.
+- 762 tests passing. No skips, xfails, TODOs or FIXMEs in `src/` or `tests/`.
+
+### Assumptions (from CR41, owner-confirmed 2026-09-29 unless marked)
+
+- **A1.** `file_b64` is removed completely from all three tools. No base64 fallback.
+- **A2.** Max 10 MB (Bullhorn's attachment cap per its File Attachment FAQ). Allowed extensions `pdf, doc, docx, rtf, odt, txt, html, htm`. The uploaded file's extension must match the ticket filename's.
+- **A3.** Filenames: the model passes the original attached name to `request_cv_upload(filename=...)`; the stored name is used for Bullhorn; the multipart filename is ignored apart from the extension check. If T40.1 shows the model does not know the original name, fall back to stripping the confirmed prefix pattern server-side (and write that decision back to CR41 first).
+- **A4.** Retention: in memory only; bytes dropped on successful `attach_file`; kept after `parse_cv`, after `attach_cv` preview, after duplicate-found and after failures; purged 30 minutes after upload; unused tickets expire after 15 minutes. A restart loses in-flight uploads.
+- **A5.** No paste-text fallback and no browser upload page. With no MCP Apps support, a failed curl is reported and the flow stops. How these tools interact with the existing candidate-from-CV skill is a follow-up CR.
+- **A6.** Stdio mode: the three new tools return `uploads_require_http_mode` (there is no HTTP listener).
+- **A7 (planning choice, not owner-stated).** Uploads are bound to the Entra `sub` from the access token (the same key the identity cache uses), not to the Bullhorn CorporateUser id, so a lookup failure cannot let one user read another's upload.
+
+### Tasks
+
+#### T40.1, owner hands-on test (no code, no commit; run BEFORE the build)
+Run in a Cowork chat with the current egress setting ("Package managers only" plus `mcp.thepanel.com` in Additional allowed domains). Give the owner these three prompts, then record the results in **T40.1 findings** below.
+1. Attach any CV (docx or pdf). Prompt: *"Tell me the exact name of the file I attached, as it appears in this chat. Then find it in your environment and show its full path and `ls -la` of its folder."* Records: the prefix pattern, and whether the model knows the original name (A3).
+2. Prompt: *"Run: `curl -sS -w '\nHTTP %{http_code}\n' -X POST -F file=@\"<that full path>\" https://mcp.thepanel.com/upload-cv` and show me the full output."* Expected: our app's JSON with HTTP 401 (`unauthorized`) or 400 (`upload_secret_not_configured`). Either proves a multipart POST with a body passes egress and Caddy. The route rejects before reading anything and writes nothing. A proxy 403, `CONNECT tunnel failed`, or a timeout means egress is blocked: switch to "All domains" and repeat.
+3. Prompt: *"Show me my Asana tasks using the interactive view if one is available."* (or any connected connector that ships an MCP App). Records whether Cowork renders MCP App UI at all.
+- **Gate:** if step 3 shows Cowork cannot render MCP Apps, stop before T40.6 and return to the owner. If step 2 fails even on "All domains", stop entirely and return to the owner.
+- Not testable yet: whether the upload box iframe can `fetch` our domain. That needs T40.6 deployed, so it is the first step of T40.8.
+
+#### T40.2, `UploadStore`
+**File:** new `src/bullhorn_mcp/uploads.py` (LF line endings, like other new modules)
+- `UploadStore(clock=time.monotonic)` with a `threading.Lock`. Module-level singleton `upload_store` plus `_reset_upload_store()` for tests.
+- `create(owner_sub, filename, candidate_id=None) -> (upload_id, token, expires_at)`: validates the extension; `token = secrets.token_urlsafe(32)`, stored only as SHA-256; `upload_id` random and opaque.
+- `redeem(token, upload_filename, data)`: atomic single use; errors (distinct exception subclasses mapping to HTTP codes): unknown (404), expired or already used (410), oversize (413), bad or mismatched extension (415), empty (400).
+- `get(upload_id, owner_sub)`: returns status `pending | received | attached | expired` and, for `received`, bytes, stored filename, format, size, sha256. Another user's id is treated as not found.
+- `mark_attached(upload_id, file_id)`: drops bytes, keeps a tombstone until the 30-minute purge. Lazy purge on every call.
+- **Unit tests** (`tests/test_uploads.py`, new): `test_create_returns_token_and_id`, `test_token_stored_only_as_hash`, `test_redeem_happy_path`, `test_redeem_is_single_use`, `test_ticket_expires_after_15_minutes` (injected clock), `test_received_file_purged_after_30_minutes`, `test_oversize_rejected`, `test_disallowed_extension_rejected_at_create`, `test_extension_mismatch_rejected_at_redeem`, `test_empty_file_rejected`, `test_other_user_cannot_get`, `test_mark_attached_drops_bytes`, `test_pending_status_before_redeem`.
+
+#### T40.3, `POST /upload/{token}` route; delete `/upload-cv`
+**File:** `src/bullhorn_mcp/server.py` (LF)
+- Delete `_upload_cv_handler`, its `custom_route`, the `hmac` import and all `UPLOAD_SECRET` handling.
+- Add `_upload_handler(request)` via `mcp.custom_route("/upload/{token}", methods=["POST", "OPTIONS"])`. Multipart field `file`. Map store exceptions to 400/404/410/413/415 with `{error, message}` JSON. Success 200 `{upload_id, filename, size}`. It never calls `get_client()`. CORS: answer `OPTIONS` and add `Access-Control-Allow-Origin` for origins ending `.claudemcpcontent.com` (the MCP App sandbox), nothing else. Log the upload id and size, never the token.
+- **Unit tests** (`tests/test_server.py`, new `TestUploadRoute` replacing `TestCVUploadEndpoint`, Starlette `TestClient` or the direct-request pattern CR27 used): `test_upload_happy_path`, `test_unknown_token_404`, `test_reused_token_410`, `test_expired_token_410`, `test_oversize_413`, `test_bad_type_415`, `test_missing_file_field_400`, `test_cors_preflight_allows_mcp_app_origin`, `test_cors_rejects_other_origin`, `test_upload_makes_no_bullhorn_call` (`get_client` patched to raise), `test_old_upload_cv_route_removed` (404 or 405).
+
+#### T40.4, `request_cv_upload` and `get_cv_upload` tools
+**File:** `src/bullhorn_mcp/server.py`
+- `request_cv_upload(filename: str, candidate_id: int | None = None, ctx: Context)`: owner key from the access token `sub` (A7); URL `f"{MCP_BASE_URL.rstrip('/')}/upload/{token}"`; returns `upload_id`, `upload_url`, `expires_at` (ISO), `max_bytes`, and `next_steps`: (1) the curl line with `-F file=@"<path to the attached file>"`; (2) then `get_cv_upload(upload_id)`, then `create_candidate_from_cv(upload_id=...)` or `attach_cv(candidate_id, upload_id=...)`; (3) if curl fails: `show_cv_upload_box(upload_id)` only when `ctx.client_supports_extension(UI_EXTENSION_ID)`, otherwise "tell the user the file could not be sent and stop". Guidance lives in the result, because FastMCP drops docstring text after `Args:`.
+- `get_cv_upload(upload_id)`: status plus filename and size (and Bullhorn file id when `attached`).
+- Short descriptions (NFR-8). Not added to `TOOL_ENTITY_MAP`.
+- **Unit tests** (`tests/test_server.py`, new `TestRequestCvUpload`, `TestGetCvUpload`): `test_url_built_from_mcp_base_url`, `test_ticket_bound_to_token_sub`, `test_next_steps_offer_upload_box_when_ui_supported`, `test_next_steps_omit_upload_box_when_ui_unsupported`, `test_disallowed_extension_rejected`, `test_stdio_mode_returns_uploads_require_http_mode`, `test_get_status_pending_then_received`, `test_get_other_users_upload_not_found`.
+
+#### T40.5, `upload_id` on `parse_cv`, `create_candidate_from_cv`, `attach_cv`; remove `file_b64`
+**File:** `src/bullhorn_mcp/server.py`
+- Replace `file_b64` + `filename` + `format` with `upload_id: str` (filename and format come from the store). `create_candidate_from_cv` keeps text mode; "exactly one of `upload_id` or `content`".
+- Errors with hints: `upload_not_found`, `upload_pending` (call `get_cv_upload` / resend), `upload_expired` (call `request_cv_upload` again), `upload_already_attached`.
+- Call `mark_attached` right after a successful `attach_file` in `create_candidate_from_cv` and in the `attach_cv` commit, before the later best-effort steps. Leave the upload in place on preview, duplicate-found, and any exception.
+- Docstrings (before `Args:`) say "call `request_cv_upload` first".
+- **Tests** (`tests/test_server.py`): rewrite the 17 `file_b64` usages across `TestParseCv`, `TestCreateCandidateFromCv`, `TestAttachCv` onto a pre-seeded `upload_store` (fixture that resets it). New: `test_parse_cv_uses_stored_bytes_and_original_filename` (payload assertion on `parse_resume_file`), `test_create_attaches_under_original_filename` (assert `attach_file` filename arg is the ticket name, not the multipart name), `test_create_marks_attached_and_drops_bytes`, `test_create_duplicate_found_keeps_upload`, `test_create_attach_failure_keeps_upload`, `test_attach_cv_preview_keeps_then_commit_drops`, `test_upload_pending_error`, `test_upload_expired_error`, `test_file_b64_parameter_removed` (registered schema via `mcp.get_tool`, not `__doc__`).
+
+#### T40.6, `show_cv_upload_box` MCP App (only if T40.1 step 3 passed)
+**Files:** `src/bullhorn_mcp/server.py`, new `src/bullhorn_mcp/upload_box.html` (packaged; check `pyproject.toml` package-data)
+- `@mcp.tool(app=AppConfig(...))` pointing at a UI resource serving the HTML. `ResourceCSP(connect_domains=[MCP_BASE_URL origin])`. `ui.domain` for Claude = first 32 hex chars of SHA-256 of `https://mcp.thepanel.com/mcp` + `.claudemcpcontent.com` (compute from `MCP_BASE_URL`, not hard-coded).
+- The HTML: drop zone plus file picker, 10 MB and extension check client-side, `fetch(upload_url, {method: "POST", body: FormData})`, then shows "Received, you can tell Claude to continue" (or uses the MCP Apps SDK message call if available without a CDN dependency). The tool receives only `upload_id`; the upload URL is re-derived server-side for the owner. No base64 anywhere.
+- **Unit tests:** `test_upload_box_tool_registered_with_ui_meta`, `test_upload_box_csp_connect_domain_is_base_url`, `test_upload_box_ui_domain_hash`, `test_upload_box_resource_serves_html`, `test_upload_box_other_users_upload_rejected`.
+
+#### T40.7, docs and config
+- README: replace "Automated CV Upload" with "CV upload (Cowork)": the consultant flow, egress allowlist note (`mcp.thepanel.com`), what the model runs, retention and limits.
+- `.env.example`: remove the `UPLOAD_SECRET` block (the file is CRLF; keep it that way).
+- Server `instructions`: one sentence, "for CV files call `request_cv_upload` first".
+- Run `.venv/bin/python scripts/measure_descriptions.py` and record the before/after description size (NFR-8).
+- PRD already amended at replan (FR-15 text, FR-15 Amendment, NFR-9, US-31 wording, US-48, US-49, §1 overview). No further PRD change expected.
+
+#### T40.8, sample CV and live acceptance (owner-approved writes; deploy handled by the owner)
+- Generate a fictional sample CV: `tests/fixtures/sample_cv/cr41_test_candidate.docx` and `.pdf`. Obviously fake person (for example "Testcase Cr-Fortyone"), "TEST RECORD" in the body, `example.com` email, fake phone.
+- After the owner deploys: (1) if T40.6 was built, confirm the upload box iframe can POST to `mcp.thepanel.com` (Route B precondition); (2) in Cowork, attach the docx and ask Claude to add the candidate: confirm `request_cv_upload` then curl then `create_candidate_from_cv`, the CV shows on the new Candidate under its original name, `get_cv_upload` reports `attached`; (3) `attach_cv` the pdf to the same Candidate (preview then commit); (4) Route B once, by asking Claude not to use curl.
+- Record the new Candidate id here and add it to the approved live test records.
+
+### Verification
+
+- [x] T40.1 findings recorded below before any code is written; gates respected (2026-09-29, all passed).
+- [ ] `.venv/bin/pytest` green. Every rewritten pre-existing test listed in the build notes with the reason.
+- [ ] `grep -rn "file_b64\|UPLOAD_SECRET\|upload-cv" src/ .env.example README.md` returns nothing.
+- [ ] Server imports cleanly; `list_tools()` reports 42 tools (41 if T40.6 is skipped at the gate).
+- [ ] Line endings: `server.py`, `uploads.py`, `test_uploads.py` LF; `test_server.py` and this file CRLF; `.env.example` CRLF. Check inserted blocks, not only whole files.
+- [ ] Token never logged; route never calls Bullhorn (test asserts it).
+- [ ] T40.8 live acceptance run (owner-approved), results recorded here.
+- [ ] Local commit `feat: CR41 CV upload tickets ...`. No push.
+- [ ] `/review` run manually, then `PROMPT_iterate.md` to a clean cycle, push, tag **v0.0.52**.
+
+### T40.1 findings
+
+**Run by the owner in Cowork, 2026-09-29. All three gates PASSED; the build may proceed, including T40.6.** (The test file was a real candidate's CV; the name is redacted here as `<Name>_CV_New..pdf`.)
+
+1. **Filename and path.** The chat shows the original name, `<Name>_CV_New..pdf`, and the model reported it exactly (including the double dot). On disk the file is `/root/.claude/uploads/<session-uuid>/<8 hex chars>-<original name>`, for example `.../3a918abc-74f6-5924-b75b-99861417a196/8655a252-<Name>_CV_New..pdf`. The prefix is the first 8 characters of the file's id plus a hyphen (`^[0-9a-f]{8}-`). **A3 confirmed:** the model knows the original name, so `request_cv_upload(filename=<original>)` is the primary path and no server-side stripping is needed. Build note: a double dot before the extension is a legitimate name; the extension check must use the final suffix (`.pdf`), not reject it. File was 67,284 bytes, mode `-rw-------`, owned by root (curl runs as root, so it can read it).
+2. **Real multipart POST.** `curl -sS -w '\nHTTP %{http_code}\n' -X POST -F file=@"<full path>" https://mcp.thepanel.com/upload-cv` returned `{"error":"upload_secret_not_configured"}` and `HTTP 400` from our app. So a multipart POST with a body passes Cowork egress on "Package managers only" plus the `mcp.thepanel.com` allowlist entry, and passes Caddy. **"All domains" is not needed.** Side finding: `UPLOAD_SECRET` is not set in production, so `/upload-cv` rejected every request, a second reason (alongside the missing identity context) that it never worked. Nothing was stored or written.
+3. **MCP Apps in Cowork.** The Asana connector's interactive task list rendered inline in the Cowork chat (a card with rows, avatars, due dates, "View full screen"). **Cowork renders MCP App UI, so US-49 / T40.6 stay in scope.** Still unverified until T40.6 is deployed: whether our iframe can `fetch` `mcp.thepanel.com` (first step of T40.8).
+
+### Expected test count after Sprint 40
+
+Previous: 762 (Sprint 39 actual). Removed 9 (`TestCVUploadEndpoint`). Added about 13 (T40.2) + 11 (T40.3) + 8 (T40.4) + 9 (T40.5) + 5 (T40.6), about 46 new. About 20 pre-existing CV tests rewritten in place (not new). **Expected: about 799 (about 794 if T40.6 is skipped), to be measured, not predicted.**

@@ -4,7 +4,7 @@
 
 The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, field metadata resolution, hosted HTTP access, authenticated-user owner stamping, first-class JobOrder create/update workflows, and JobSubmission (shortlist) write tools.
 
-Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), tearsheet (hotlist) management tools (FR-21), and a read-only external people search via Perplexity for sourcing candidates not yet in Bullhorn (FR-22).
+Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15, with CV files delivered through single-use upload tickets rather than base64 per the FR-15 Amendment), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), tearsheet (hotlist) management tools (FR-21), and a read-only external people search via Perplexity for sourcing candidates not yet in Bullhorn (FR-22).
 
 The MCP serves two classes of consumer:
 
@@ -193,10 +193,21 @@ The MCP shall provide tools for creating Candidate records and processing CVs:
 
 - `create_candidate` shall create a new Candidate entity in Bullhorn with the fields supplied by the caller. Required fields are configurable per deployment via the `BULLHORN_CANDIDATE_REQUIRED` environment variable. The `source` field is auto-stamped from `BULLHORN_MCP_SOURCE` (default `"Claude"`) when the caller omits it. `name` is auto-computed from `firstName`/`lastName` — any caller-supplied `name` value is stripped and replaced. The Candidate `title` field is invalid (unlike ClientContact where it is a salutation); `occupation` is the correct field for job title.
 - `find_duplicate_candidates` shall check for existing Candidates matching first/last name or email, returning matches with confidence categories.
-- `parse_cv` shall accept a base64-encoded file (PDF/DOCX/TXT) and return structured candidate field suggestions extracted by Bullhorn's CV-parsing endpoint, without writing any records.
+- `parse_cv` shall accept an uploaded CV file (PDF/DOC/DOCX/TXT, referenced by `upload_id`, see FR-15 Amendment) and return structured candidate field suggestions extracted by Bullhorn's CV-parsing endpoint, without writing any records. (Originally a base64-encoded file argument; withdrawn by CR41.)
 - `parse_cv_text` shall accept raw CV text (as a string) and return the same structured field suggestions.
 - `create_candidate_from_cv` shall parse a CV and create a Candidate in one operation, applying the same field-injection rules as `create_candidate`.
 - `attach_cv` shall attach a CV file to an existing Candidate record using a two-call commit pattern: the first call returns a preview of parsed fields with `committed: false`; the second call (with `force_all=true` or a `fields_to_update` list) writes the fields and attaches the file.
+
+### FR-15 Amendment: CV File Intake Without Base64 (CR41)
+
+CV files shall reach the server out of band, never as file contents in a tool argument:
+
+- `request_cv_upload(filename, candidate_id?)` shall issue a single-use upload ticket for the logged-in user and return an `upload_id`, an upload URL on the server's public base URL, an expiry time, and ordered next steps for the agent. `filename` is the name the user attached the file under; the file is stored in Bullhorn under that name, whatever name the upload itself carries.
+- `POST /upload/{token}` shall accept the file bytes (multipart) against a valid ticket. It shall only store the file; it shall never write to Bullhorn. All Bullhorn writes stay in MCP tools, where the caller's identity is known.
+- `get_cv_upload(upload_id)` shall report the upload's status: `pending`, `received`, `attached` or `expired`.
+- `parse_cv`, `create_candidate_from_cv` and `attach_cv` shall take an `upload_id` in place of base64 content. The `file_b64` parameter is removed. `create_candidate_from_cv` keeps its text mode (`content`).
+- The primary route is the agent sending an attached file itself (for example `curl` from a Cowork session). Where the client supports MCP Apps, an upload box shown in the same chat shall be the fallback when the agent cannot send the file. There is no separate browser upload page and no paste-the-text fallback in this flow.
+- The `POST /upload-cv` endpoint (CR27) and the `UPLOAD_SECRET` variable are withdrawn.
 
 ### FR-16: Note Reading and Search
 
@@ -331,6 +342,13 @@ The startup tool-description enrichment (the `## Field reference` block appended
 - Entity-specific tools shall carry a curated, capped field set for their own entity (full detail). Generic tools that span all entities (`search_entities`, `query_entities`, `update_record`, `get_entity_fields`) shall carry only a compact field-name subset per entity plus a pointer to `get_entity_fields` for the full list.
 - Full per-entity field discovery shall remain available on demand via `get_entity_fields`; trimming the startup payload must not remove any capability.
 - The guidance to call `get_entity_fields` for the full field list shall also appear in the static (pre-enrichment) docstrings of the generic tools, so it survives the enrichment's graceful-fallback path.
+
+### NFR-9: Upload Ticket Security and File Retention (CR41)
+
+- Upload tickets shall be single use, expire 15 minutes after issue, be stored only as hashes, and be bound to the user who requested them.
+- An upload shall be at most 10 MB (Bullhorn's own cap on record file attachments) and of an allowed CV file type (`pdf, doc, docx, rtf, odt, txt, html, htm`), with an extension matching the ticket's filename.
+- Received files shall be held in memory only, never on disk, and be readable only by the issuing user.
+- A file shall be deleted as soon as it is attached in Bullhorn. It is kept between calls that need it (after `parse_cv`, between `attach_cv` preview and commit, and after a failure, so the user can retry), and is purged 30 minutes after upload otherwise.
 
 ## 8. Constraints and Exclusions
 
@@ -497,7 +515,15 @@ As an automated agent, before creating a candidate, I want to check whether they
 
 **US-31: Parse a CV and create or attach a candidate**
 As a recruiter, I want to upload or paste a CV and have the MCP extract candidate fields and optionally create or update the candidate, so that CV processing is automated.
-- **Acceptance**: `parse_cv` returns a structured field suggestion object from the base64-encoded file without creating any record. `create_candidate_from_cv` parses the CV and creates the candidate in one step. `attach_cv` first returns a preview (`committed: false`) with parsed field suggestions; on second call with `force_all=true` or `fields_to_update`, the fields are written and the file attached to the existing candidate.
+- **Acceptance**: `parse_cv` returns a structured field suggestion object from the uploaded file (`upload_id`, see US-48) without creating any record. `create_candidate_from_cv` parses the CV and creates the candidate in one step. `attach_cv` first returns a preview (`committed: false`) with parsed field suggestions; on second call with `force_all=true` or `fields_to_update`, the fields are written and the file attached to the existing candidate.
+
+**US-48: Attach a CV once in Cowork**
+As a consultant, I want to attach a CV to a Cowork chat and ask Claude to add the candidate (or attach the CV to an existing one), so that the file is parsed and attached in Bullhorn without me selecting it again.
+- **Acceptance**: Claude calls `request_cv_upload` with the file's original name, sends the attached file to the returned URL itself (`curl`), and completes `create_candidate_from_cv` or `attach_cv` with the `upload_id`. The CV appears on the Candidate in Bullhorn under its original name, not the prefixed name the Cowork VM uses. No base64 appears in the conversation. `get_cv_upload` then reports `attached`, and the server no longer holds the file.
+
+**US-49: Upload box fallback in the same chat**
+As a consultant, if Claude cannot send the file itself, I want an upload box to appear in the same chat, so that I can drop the CV there and Claude carries on without sending me to another page.
+- **Acceptance**: when the upload fails (for example the network blocks it) and the client supports MCP Apps, Claude calls `show_cv_upload_box`, an upload box renders in the chat, the dropped file is received against the same ticket, and the create or attach flow completes. When the client does not support MCP Apps, Claude reports that the file could not be sent and stops.
 
 ### Note Reading and Search
 

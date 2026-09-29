@@ -72,6 +72,8 @@ Do not guess at UX improvements; the project's own history shows guesses about a
 2. **Fix what the data names.** Likely candidates based on history, to be confirmed by the data: error messages rewritten to be self-correcting (tell the agent what to do next, the way `add_note` lists valid actions), dedup threshold tuning with real false-positive rates, and picklist coverage in enrichment.
 3. **CR35 itself is UX.** Fewer, clearer tools with better descriptions is the single biggest agent-experience lever, and it is already Priority 2.
 
+4. **Interactive Bullhorn cards (idea, investigate later; logged 2026-09-29).** Cowork renders MCP App UI inline (seen in the CR41 T40.1 test with Asana's task card). The same mechanism CR41 uses for its upload box (FastMCP `@mcp.tool(app=AppConfig(...))`, already in FastMCP 3.2.4, no new dependency) could render Bullhorn records as cards: a candidate summary, a job's pipeline, a shortlist or tearsheet with clickable rows. Before designing anything: pick the two or three views consultants would actually use, check the token and latency cost against plain JSON replies, and decide which actions (if any) a card may trigger, since a card button that writes to Bullhorn needs the same identity and dedup guards as the tools. Needs a PRD amendment and its own CR. Build CR41's upload box first and learn from it.
+
 ## Priority 5: Reporting and analytics (user ask; PRD amendment required)
 
 A genuinely new capability area. Direction:
