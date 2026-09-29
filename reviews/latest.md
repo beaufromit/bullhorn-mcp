@@ -1,8 +1,8 @@
-# Review: CR42 fix Bullhorn resume parser parameters (populateDescription=html on file parse, format/populateDescription as query params on text parse)
+# Review: CR42 review fixes (attach_cv preview reads current description, case-insensitive content_type, doc status and text corrections)
 
-**Commit:** 62f73c6 (build 58fbf1d reviewed via `git diff HEAD~2`; HEAD~1 is a docs-only plan update)
+**Commit:** 508a70f
 **Date:** 2026-09-29
-**Files changed:** 5 (CR42.md, IMPLEMENTATION-PLAN.md, PRD.md, src/bullhorn_mcp/client.py, tests/test_client.py)
+**Files changed:** 7 (CR42.md, IMPLEMENTATION-PLAN.md, reviews/latest.md, src/bullhorn_mcp/client.py, src/bullhorn_mcp/server.py, tests/test_client.py, tests/test_server.py)
 
 ## CRITICAL
 
@@ -10,16 +10,13 @@ None.
 
 ## MODERATE
 
-- **M1: attach_cv preview now proposes a description overwrite while reporting the current value as null** — src/bullhorn_mcp/client.py:`parse_resume_file` (effect surfaces in the `attach_cv` / `_attach_cv` commit path)
-  Before this diff the parser never returned a populated `description` (every call 400'd, and `populateDescription=true` would not have produced one anyway). With `populateDescription=html`, `parsed["candidate"]["description"]` now carries 3,000 to 5,000 chars of HTML. `_attach_cv` diffs every scalar in `parsed_candidate` against an `existing` record fetched with `fields="id,firstName,lastName,email,phone,mobile,occupation,companyName,skillSet,status,dateAdded"`, which does not include `description`. So for every existing Candidate the preview lists `{"field": "description", "current": null, "proposed": "<html...>"}` even when the Candidate already has a description, and a `force_all=True` commit then overwrites it. The consultant's consent is given against a preview that misstates the current value. The plan's "Concerns to verify" section flags the overwrite but not the false `current: null`. No test covers `attach_cv` with a parsed `description`. New class of issue (behavioral change activated by a client-layer fix in an unchanged caller), not one of the 8 known patterns.
+None.
 
 ## MINOR
 
-- **m1: content_type match is case-sensitive** — `parse_resume_text` uses `content_type.startswith("text/html")`; MIME types are case-insensitive, so `Text/HTML` or ` text/html` (leading space) from a caller silently selects `format=text` / `populateDescription=text` for HTML content. `parse_cv_text` and `create_candidate_from_cv` pass the caller's string through unnormalized.
-- **m2: HTML description inflates CV tool responses** — `parse_cv`, the `attach_cv` preview (`proposed` value) and the `create_candidate_from_cv` duplicate response now include several KB of HTML per call. Acknowledged in the plan as a concern; logged here as unmeasured.
-- **m3: stale plan text** — IMPLEMENTATION-PLAN.md Sprint 40B heading still reads "BUILT (awaiting T40B.3, review, tag)" although T40B.3 is recorded as passed; the replan validation bullet and the Sprint 40B "PRD requirement" line still say the PRD amendments are "uncommitted", but they are committed in 58fbf1d.
-- **m4: stale CR status** — CR42.md Status still says "Next: replan as Sprint 40B" after the replan and build are done.
-- **m5: test case swapped versus CR42 change 2** — CR42.md says the rewritten file-parse test becomes a docx exact check and a pdf case is added; the build kept the rewritten test as pdf and added docx. Coverage is equivalent; the CR text and the tests disagree.
+- **m1: attach_cv preview now echoes the Candidate's whole existing description** — src/bullhorn_mcp/server.py:`_attach_cv`. Adding `description` to the fetched fields makes the preview's `current` value truthful, but it also puts the existing description into the response in full. A read-only live check (2026-09-29) on the first Candidate returned by `/search/Candidate` found a 48,382-char description, roughly 12,000 tokens in one preview on top of the parsed HTML `proposed` value. Same class as the earlier response-size note, larger in size; unmeasured across the tenant.
+- **m2: CR and plan text still describe the old content_type check** — CR42.md change 1 and IMPLEMENTATION-PLAN.md T40B.1 still say `content_type.startswith("text/html")`; the code now strips and lowercases first.
+- **m3: stale concern and count in the plan** — the Sprint 40B "Concerns to verify" bullet on `attach_cv` and `description` still asks the reviewer to confirm the overwrite, with no mention that the preview now reports the real current value; the Response size bullet states the 5,028 / 3,402 figures twice; the Sprint 40B Actual count and header still read 841, the suite is now 843.
 
 ## Verdict
 
