@@ -1453,6 +1453,19 @@ class TestParseResume:
         assert params == {"format": "html", "populateDescription": "html"}
 
     @respx.mock
+    def test_parse_resume_text_html_type_case_insensitive(self, mock_auth, mock_session, sample_parsed_resume):
+        """MIME types are case-insensitive: ' Text/HTML' still selects html."""
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidateViaJson").mock(
+            return_value=httpx.Response(200, json=sample_parsed_resume)
+        )
+
+        client = BullhornClient(mock_auth)
+        client.parse_resume_text("<p>Jane Doe</p>", " Text/HTML")
+
+        params = dict(route.calls[0].request.url.params)
+        assert params == {"format": "html", "populateDescription": "html"}
+
+    @respx.mock
     def test_parse_resume_text_unknown_type_defaults_to_text(self, mock_auth, mock_session, sample_parsed_resume):
         """Any non-HTML content type falls back to format=text."""
         route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidateViaJson").mock(

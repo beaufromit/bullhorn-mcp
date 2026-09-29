@@ -6499,6 +6499,28 @@ class TestAttachCv:
         mock_client.update.assert_not_called()
         mock_client.attach_file.assert_not_called()
 
+    def test_attach_cv_preview_shows_current_description(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """The preview diff reports the Candidate's real description, not null (CR42 review M1)."""
+        parsed = {**sample_parsed_resume, "candidate": {**sample_parsed_resume["candidate"], "description": "<p>New CV</p>"}}
+        mock_client.parse_resume_file.return_value = parsed
+        mock_client.get.return_value = {**sample_candidate, "description": "<p>Old CV</p>"}
+        mock_client.query.return_value = []
+
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(
+                candidate_id=sample_candidate["id"],
+                upload_id=upload_id,
+            )
+
+        data = json.loads(result)
+        assert "description" in mock_client.get.call_args.kwargs["fields"].split(",")
+        change = next(c for c in data["proposed_field_changes"] if c["field"] == "description")
+        assert change == {"field": "description", "current": "<p>Old CV</p>", "proposed": "<p>New CV</p>"}
+
     def test_attach_cv_commit_applies_selected_fields(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """attach_cv commit applies only fields_to_update and attaches CV."""
         mock_client.parse_resume_file.return_value = sample_parsed_resume

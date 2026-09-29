@@ -3054,7 +3054,7 @@ def _attach_cv(
         existing = client.get(
             "Candidate",
             candidate_id,
-            fields="id,firstName,lastName,email,phone,mobile,occupation,companyName,skillSet,status,dateAdded",
+            fields="id,firstName,lastName,email,phone,mobile,occupation,companyName,skillSet,status,dateAdded,description",
         )
 
         # --- DIFF scalar fields ---

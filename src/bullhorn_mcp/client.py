@@ -240,7 +240,7 @@ class BullhornClient:
         Returns:
             Parsed resume data: candidate, candidateEducation, candidateWorkHistory, skillList
         """
-        fmt = "html" if content_type.startswith("text/html") else "text"
+        fmt = "html" if content_type.strip().lower().startswith("text/html") else "text"
         body = {"resume": content, "type": content_type}
         params = {"format": fmt, "populateDescription": fmt}
         return self._request(
