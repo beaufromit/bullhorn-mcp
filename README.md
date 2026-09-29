@@ -37,7 +37,7 @@ Typical use cases:
 
 ## MCP Tools
 
-39 tools, grouped by family below. Each tool's full parameter and field reference is in its live MCP description (enriched from Bullhorn `/meta` at startup), which is the authoritative interface.
+42 tools, grouped by family below. Each tool's full parameter and field reference is in its live MCP description (enriched from Bullhorn `/meta` at startup), which is the authoritative interface.
 
 ### Read tools
 
@@ -74,6 +74,9 @@ Typical use cases:
 
 ### CV parsing tools
 
+- `request_cv_upload`
+- `get_cv_upload`
+- `show_cv_upload_box`
 - `parse_cv`
 - `parse_cv_text`
 - `create_candidate_from_cv`
@@ -291,62 +294,35 @@ With these set, callers can use `"vertical"` and `"notice period"` as keys in `f
 
 Invalid JSON in any of these variables logs a warning and falls back to the empty default. The server starts normally.
 
-### Automated CV Upload
+### CV upload (Cowork)
 
-The server exposes a `POST /upload-cv` endpoint that accepts CV files as raw
-multipart bytes. This sidesteps the MCP tool layer entirely — no base64 string
-in the conversation context, no chat round-trip overhead. It is intended for
-automated workflows such as Claude containers or email-to-Bullhorn pipelines.
+CV files never travel through a tool argument. The server issues a single-use upload ticket, the file is sent to it with `curl`, and later tools refer to the file by `upload_id`. This works in hosted HTTP mode only.
 
-**Authentication:** `X-Upload-Secret` header (pre-shared secret, not Entra).
-Set the `UPLOAD_SECRET` environment variable to activate the endpoint. Requests
-without a valid secret return `401`; requests when the env var is unset return
-`400`. Generate a strong value with:
+**What the consultant does:** attach the CV in Cowork and ask Claude to add the candidate, or to attach the CV to an existing candidate. Nothing else.
 
-```
-openssl rand -hex 32
-```
+**What Claude runs:**
 
-**Request** — `POST /upload-cv` with `multipart/form-data`:
+1. `request_cv_upload(filename=<the CV's original name>, candidate_id=<optional>)` returns an `upload_id` and an `upload_url`. In Cowork the attachment sits at `/root/.claude/uploads/<session-uuid>/<8 hex>-<original name>`, so the model passes the original name (without the hex prefix) as `filename`.
+2. `curl -sS -X POST -F file=@"<path>" <upload_url>` sends the file to the server.
+3. `get_cv_upload(upload_id)` confirms the status is `received`.
+4. `create_candidate_from_cv(upload_id=...)` creates a new candidate, or `attach_cv(candidate_id=..., upload_id=...)` adds the CV to an existing one. `attach_cv` is two calls with the same `upload_id`: the first previews the field diff and writes nothing, the second commits. `parse_cv(upload_id=...)` gives a preview only.
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `file` | bytes | yes | — | The CV file bytes |
-| `filename` | str | yes | — | Original filename (e.g. `jane_doe_cv.pdf`) |
-| `format` | str | no | `pdf` | File format: `pdf`, `doc`, `docx`, `html`, `text` |
-| `candidate_id` | int | no | — | If set, attaches to this Candidate instead of parse-and-create |
-| `force` | str | no | `false` | `"true"` to skip duplicate check on create path |
+**Fallback:** if `curl` cannot reach the server, Claude calls `show_cv_upload_box(upload_id)`, which renders an upload box in the chat (an MCP App) when the client supports MCP Apps. The consultant picks the file there and says when it is uploaded. If the client does not support MCP Apps, Claude reports the failure and stops.
 
-**Responses** — always JSON:
+**Cowork egress setting:** set network egress to "Package managers only" and add `mcp.thepanel.com` to Additional allowed domains. This was verified sufficient on 2026-09-29.
 
-| Scenario | Status |
-|---|---|
-| Success | 200 |
-| Auth failure | 401 |
-| Bad request / env not configured | 400 |
-| Bullhorn API error | 500 |
+**Limits and retention:**
 
-**Examples:**
+- Maximum file size 10 MB (Bullhorn's attachment limit).
+- Allowed types: `pdf`, `doc`, `docx`, `rtf`, `odt`, `txt`, `html`, `htm`.
+- Tickets are single use and expire after 15 minutes. The token is stored only as a SHA-256 hash and is bound to the caller's Entra identity.
+- Files are held in server memory only, never on disk. A file is deleted as soon as it is attached in Bullhorn, otherwise purged 30 minutes after upload. A server restart drops any in-flight uploads.
+- The upload route never calls Bullhorn. Only the tools above do.
+- CORS is allowed only for `https://*.claudemcpcontent.com` (the MCP App sandbox).
 
-Parse a CV and create a new Candidate:
+**stdio mode:** the upload tools return `uploads_require_http_mode`. Use `parse_cv_text` or `create_candidate_from_cv(content=...)` with pasted text instead.
 
-```bash
-curl -X POST https://your-server/upload-cv \
-     -H "X-Upload-Secret: $UPLOAD_SECRET" \
-     -F file=@jane_doe_cv.pdf \
-     -F filename=jane_doe_cv.pdf \
-     -F format=pdf
-```
-
-Attach a CV file to an existing Candidate (ID 12345):
-
-```bash
-curl -X POST https://your-server/upload-cv \
-     -H "X-Upload-Secret: $UPLOAD_SECRET" \
-     -F file=@jane_doe_cv.pdf \
-     -F filename=jane_doe_cv.pdf \
-     -F candidate_id=12345
-```
+CR41 removed the old CR27 upload endpoint, its shared secret, and the base64 file inputs on the CV tools.
 
 ---
 

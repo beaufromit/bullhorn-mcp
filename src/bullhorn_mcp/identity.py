@@ -97,3 +97,22 @@ def resolve_caller(client: "BullhornClient") -> dict:
 
     _caller_cache[sub] = results[0]
     return _caller_cache[sub]
+
+
+def resolve_caller_sub() -> str:
+    """Return the Entra ``sub`` claim of the current caller, with no Bullhorn call.
+
+    CR41 binds CV uploads to this value rather than to the Bullhorn CorporateUser id,
+    so a CorporateUser lookup problem can never let one user read another's upload.
+
+    Raises:
+        IdentityResolutionError: If no token is available or it has no ``sub`` claim.
+    """
+    token = get_access_token()
+    if token is None:
+        raise IdentityResolutionError("No authentication token available")
+    claims = getattr(token, "claims", {}) or {}
+    sub = claims.get("sub")
+    if not sub:
+        raise IdentityResolutionError("No 'sub' claim found in token")
+    return sub

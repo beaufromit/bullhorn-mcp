@@ -2969,6 +2969,9 @@ class TestMCPServerSetup:
         assert "update_record" in tools
         assert "add_note" in tools
         assert "bulk_import" in tools
+        assert "request_cv_upload" in tools
+        assert "get_cv_upload" in tools
+        assert "show_cv_upload_box" in tools
 
     def test_server_name(self):
         """Test server name is set correctly."""
@@ -5757,6 +5760,54 @@ class TestFindDuplicateCandidates:
         assert result.startswith("ERROR:")
 
 
+# --- CR41: CV upload ticket helpers ------------------------------------------
+
+_CV_BYTES = b"%PDF-1.4 fake"
+
+
+@pytest.fixture
+def clean_upload_store():
+    """Empty the module-level upload store before and after each test."""
+    from bullhorn_mcp import uploads
+    uploads._reset_upload_store()
+    yield
+    uploads._reset_upload_store()
+
+
+def _token_for(sub="user-a", email="user-a@example.com"):
+    """A patched access token (use site: bullhorn_mcp.identity.get_access_token)."""
+    token = Mock()
+    token.claims = {"sub": sub, "email": email}
+    return patch("bullhorn_mcp.identity.get_access_token", return_value=token)
+
+
+def _http_as(sub="user-a"):
+    """Context manager: HTTP transport mode plus a caller whose Entra sub is ``sub``."""
+    import contextlib
+    stack = contextlib.ExitStack()
+    stack.enter_context(patch.object(server, "_transport_mode", "http"))
+    stack.enter_context(_token_for(sub, f"{sub}@example.com"))
+    return stack
+
+
+def _seed_upload(sub="user-a", filename="Jane_Doe_CV.pdf", data=_CV_BYTES, candidate_id=None):
+    """Create a ticket on the live server store and redeem it. Returns the upload_id."""
+    upload_id, token, _ = server.upload_store.create(sub, filename, candidate_id)
+    server.upload_store.redeem(token, "8655a252-" + filename, data)
+    return upload_id
+
+
+class _FakeClock:
+    """Injectable clock for UploadStore expiry tests."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.mark.usefixtures("clean_upload_store")
 class TestParseCv:
     """Tests for parse_cv tool."""
 
@@ -5771,15 +5822,16 @@ class TestParseCv:
 
     def test_parse_cv_returns_parsed_and_dup_check(self, mock_client, mock_metadata, sample_parsed_resume):
         """parse_cv returns parsed data and duplicate_check result without writing."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         mock_client.search.return_value = []
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.parse_cv(
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
             )
 
         data = json.loads(result)
@@ -5788,22 +5840,8 @@ class TestParseCv:
         assert "duplicate_check" in data
         mock_client.create.assert_not_called()
 
-    def test_parse_cv_invalid_base64(self, mock_client, mock_metadata):
-        """parse_cv returns error on malformed base64 input."""
-        with patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.parse_cv(
-                file_b64="!not-valid-base64!",
-                filename="cv.pdf",
-            )
-
-        data = json.loads(result)
-        assert data["error"] == "invalid_base64"
-        mock_client.parse_resume_file.assert_not_called()
-
     def test_parse_cv_dup_found_in_preview(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """parse_cv includes duplicate_check result when a matching Candidate is found."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         sample_candidate["firstName"] = "Jane"
         sample_candidate["lastName"] = "Doe"
@@ -5813,11 +5851,13 @@ class TestParseCv:
         sample_candidate["dateAdded"] = 0
         mock_client.search.return_value = [sample_candidate]
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.parse_cv(
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
             )
 
         data = json.loads(result)
@@ -5826,17 +5866,71 @@ class TestParseCv:
 
     def test_parse_cv_api_error(self, mock_client, mock_metadata):
         """parse_cv returns ERROR: prefix on BullhornAPIError from parse_resume_file."""
-        import base64
         mock_client.parse_resume_file.side_effect = BullhornAPIError("Parse failed")
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.parse_cv(
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
             )
 
         assert result.startswith("ERROR:")
+
+    def test_parse_cv_upload_not_found(self, mock_client, mock_metadata):
+        """parse_cv with an unknown upload_id returns upload_not_found and never calls Bullhorn."""
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.parse_cv(upload_id="upl_doesnotexist")
+
+        data = json.loads(result)
+        assert data["error"] == "upload_not_found"
+        mock_client.parse_resume_file.assert_not_called()
+        mock_client.search.assert_not_called()
+
+    def test_parse_cv_uses_stored_bytes_and_original_filename(self, mock_client, mock_metadata, sample_parsed_resume):
+        """parse_cv sends the stored bytes, the ticket filename and the parser format; upload stays received."""
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            server.parse_cv(upload_id=upload_id)
+
+        mock_client.parse_resume_file.assert_called_once_with(_CV_BYTES, "Jane_Doe_CV.pdf", "pdf")
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "received"
+        assert rec["data"] == _CV_BYTES
+
+    def test_stdio_mode_cv_tools_return_uploads_require_http_mode(self, mock_client):
+        """parse_cv, create_candidate_from_cv(upload_id) and attach_cv error out in stdio mode."""
+        with patch.object(server, "_transport_mode", "stdio"), \
+             patch.object(server, "get_client", return_value=mock_client):
+            results = [
+                server.parse_cv(upload_id="upl_x"),
+                server.create_candidate_from_cv(upload_id="upl_x"),
+                server.attach_cv(candidate_id=1, upload_id="upl_x"),
+            ]
+
+        for result in results:
+            assert json.loads(result)["error"] == "uploads_require_http_mode"
+        mock_client.parse_resume_file.assert_not_called()
+
+    def test_file_b64_parameter_removed(self):
+        """The registered schemas expose upload_id and no file_b64, filename or format parameter."""
+        import asyncio
+        tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+
+        for name in ("parse_cv", "create_candidate_from_cv", "attach_cv"):
+            props = tools[name].parameters["properties"]
+            assert "upload_id" in props, name
+            for gone in ("file_b64", "filename", "format"):
+                assert gone not in props, f"{name} still has {gone}"
 
 
 class TestParseCvText:
@@ -5888,6 +5982,7 @@ class TestParseCvText:
         assert result.startswith("ERROR:")
 
 
+@pytest.mark.usefixtures("clean_upload_store")
 class TestCreateCandidateFromCv:
     """Tests for create_candidate_from_cv tool."""
 
@@ -5902,7 +5997,6 @@ class TestCreateCandidateFromCv:
 
     def test_create_from_cv_binary_success(self, mock_client, mock_metadata, sample_parsed_resume):
         """create_candidate_from_cv binary path creates candidate and child records."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         mock_client.search.return_value = []
         mock_client.create.side_effect = [
@@ -5916,12 +6010,14 @@ class TestCreateCandidateFromCv:
         mock_client.attach_file.return_value = {"fileId": 55, "name": "cv.pdf"}
         mock_client._guess_content_type.return_value = "application/pdf"
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata), \
              patch.object(server, "resolve_caller", return_value={"id": 1}):
             result = server.create_candidate_from_cv(
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
             )
 
         data = json.loads(result)
@@ -5978,7 +6074,6 @@ class TestCreateCandidateFromCv:
 
     def test_create_from_cv_duplicate_found(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """create_candidate_from_cv returns duplicate_found when match detected."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         sample_candidate["firstName"] = "Jane"
         sample_candidate["lastName"] = "Doe"
@@ -5988,12 +6083,14 @@ class TestCreateCandidateFromCv:
         sample_candidate["dateAdded"] = 0
         mock_client.search.return_value = [sample_candidate]
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata), \
              patch.object(server, "resolve_caller", return_value={"id": 1}):
             result = server.create_candidate_from_cv(
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
             )
 
         data = json.loads(result)
@@ -6003,7 +6100,6 @@ class TestCreateCandidateFromCv:
 
     def test_create_from_cv_force_bypasses_dup(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """create_candidate_from_cv force=True skips dup check and creates."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         mock_client.create.side_effect = [
             {"changedEntityId": 220, "changeType": "INSERT", "data": {"id": 220}},
@@ -6016,12 +6112,14 @@ class TestCreateCandidateFromCv:
         mock_client.attach_file.return_value = {"fileId": 60}
         mock_client._guess_content_type.return_value = "application/pdf"
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata), \
              patch.object(server, "resolve_caller", return_value={"id": 1}):
             result = server.create_candidate_from_cv(
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
                 force=True,
             )
 
@@ -6031,20 +6129,21 @@ class TestCreateCandidateFromCv:
 
     def test_create_from_cv_required_fields_missing(self, mock_client, mock_metadata, sample_parsed_resume):
         """create_candidate_from_cv returns required_fields_missing when env-required field absent."""
-        import base64
         # Remove email from parsed data so the required field is absent
         resume = dict(sample_parsed_resume)
         resume["candidate"] = {k: v for k, v in resume["candidate"].items() if k != "email"}
         mock_client.parse_resume_file.return_value = resume
         mock_client.search.return_value = []
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata), \
              patch.object(server, "resolve_caller", return_value={"id": 1}), \
              patch("bullhorn_mcp.server.get_candidate_required", return_value=["email"]):
             result = server.create_candidate_from_cv(
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
                 force=True,
             )
 
@@ -6064,7 +6163,6 @@ class TestCreateCandidateFromCv:
 
     def test_create_from_cv_child_record_failure_best_effort(self, mock_client, mock_metadata, sample_parsed_resume):
         """create_candidate_from_cv includes warnings when child records fail."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         mock_client.search.return_value = []
 
@@ -6079,12 +6177,14 @@ class TestCreateCandidateFromCv:
         mock_client._guess_content_type.return_value = "application/pdf"
         mock_client.attach_file.return_value = {"fileId": 70}
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata), \
              patch.object(server, "resolve_caller", return_value={"id": 1}):
             result = server.create_candidate_from_cv(
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
             )
 
         data = json.loads(result)
@@ -6146,7 +6246,133 @@ class TestCreateCandidateFromCv:
         payload = candidate_call[0][1]
         assert payload.get("source") == "LinkedIn"
 
+    @staticmethod
+    def _wire_create(mock_client, parsed, first_id=300):
+        """Mock a full successful create (candidate, children, attach)."""
+        counter = iter(range(first_id, first_id + 50))
 
+        def _create(entity, data):
+            n = next(counter)
+            return {"changedEntityId": n, "changeType": "INSERT", "data": {"id": n}}
+
+        mock_client.parse_resume_file.return_value = parsed
+        mock_client.search.return_value = []
+        mock_client.create.side_effect = _create
+        mock_client.update.return_value = {"changedEntityId": first_id, "changeType": "UPDATE", "data": {"id": first_id}}
+        mock_client.get.return_value = {"id": first_id, "skillSet": ""}
+        mock_client.attach_file.return_value = {"fileId": 55, "name": "Jane_Doe_CV.pdf"}
+        mock_client._guess_content_type.return_value = "application/pdf"
+
+    def _run_create(self, mock_client, mock_metadata, upload_id, sub="user-a", **kwargs):
+        with _http_as(sub), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            return server.create_candidate_from_cv(upload_id=upload_id, **kwargs)
+
+    def test_create_attaches_under_original_filename(self, mock_client, mock_metadata, sample_parsed_resume):
+        """attach_file gets the ticket's original filename, not the prefixed multipart name."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["created"] is True
+        mock_client.attach_file.assert_called_once_with(
+            "Candidate", data["candidate_id"], _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", file_type="CV"
+        )
+        mock_client.parse_resume_file.assert_called_once_with(_CV_BYTES, "Jane_Doe_CV.pdf", "pdf")
+
+    def test_create_marks_attached_and_drops_bytes(self, mock_client, mock_metadata, sample_parsed_resume):
+        """After a successful attach the store shows attached, no bytes, and the Bullhorn file id."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        self._run_create(mock_client, mock_metadata, upload_id)
+
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "attached"
+        assert rec["data"] is None
+        assert rec["file_id"] == 55
+
+    def test_create_duplicate_found_keeps_upload(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """A duplicate stops before any write, so the upload and its bytes are kept."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        sample_candidate.update({
+            "firstName": "Jane", "lastName": "Doe", "email": "jane.doe@example.com",
+            "occupation": "", "companyName": "", "dateAdded": 0,
+        })
+        mock_client.search.return_value = [sample_candidate]
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["duplicate_found"] is True
+        mock_client.create.assert_not_called()
+        mock_client.attach_file.assert_not_called()
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "received"
+        assert rec["data"] == _CV_BYTES
+
+    def test_create_attach_failure_keeps_upload(self, mock_client, mock_metadata, sample_parsed_resume):
+        """If attach_file raises, the candidate is still created, a warning is returned and the bytes are kept."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        mock_client.attach_file.side_effect = BullhornAPIError("attach boom")
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["created"] is True
+        assert data["file_attachment"] is None
+        assert any("CV file attachment failed" in w for w in data["warnings"])
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "received"
+        assert rec["data"] == _CV_BYTES
+
+    def test_upload_pending_error(self, mock_client, mock_metadata):
+        """A ticket with no file redeemed yet returns upload_pending and does not parse."""
+        upload_id, _token, _ = server.upload_store.create("user-a", "Jane_Doe_CV.pdf")
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["error"] == "upload_pending"
+        mock_client.parse_resume_file.assert_not_called()
+        mock_client.create.assert_not_called()
+
+    def test_upload_expired_error(self, mock_client, mock_metadata):
+        """A ticket left past its 15 minute window returns upload_expired."""
+        from bullhorn_mcp.uploads import UploadStore
+        clock = _FakeClock()
+        store = UploadStore(clock=clock)
+        with patch.object(server, "upload_store", store):
+            upload_id, _token, _ = server.upload_store.create("user-a", "Jane_Doe_CV.pdf")
+            clock.now += 16 * 60
+            data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["error"] == "upload_expired"
+        mock_client.parse_resume_file.assert_not_called()
+
+    def test_upload_already_attached_error(self, mock_client, mock_metadata):
+        """Reusing an upload whose file was already attached returns upload_already_attached."""
+        upload_id = _seed_upload()
+        server.upload_store.mark_attached(upload_id, 55)
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["error"] == "upload_already_attached"
+        mock_client.parse_resume_file.assert_not_called()
+
+    def test_other_users_upload_not_found(self, mock_client, mock_metadata):
+        """An upload made by user-a is upload_not_found for user-b (never 'forbidden')."""
+        upload_id = _seed_upload(sub="user-a")
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id, sub="user-b"))
+
+        assert data["error"] == "upload_not_found"
+        mock_client.parse_resume_file.assert_not_called()
+
+
+@pytest.mark.usefixtures("clean_upload_store")
 class TestAttachCv:
     """Tests for attach_cv tool (two-call confirmation flow)."""
 
@@ -6161,7 +6387,6 @@ class TestAttachCv:
 
     def test_attach_cv_preview_returns_diff(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """attach_cv without fields_to_update returns preview diff without writing."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         mock_client.get.return_value = {
             **sample_candidate,
@@ -6170,12 +6395,14 @@ class TestAttachCv:
         }
         mock_client.query.return_value = []
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.attach_cv(
                 candidate_id=sample_candidate["id"],
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
             )
 
         data = json.loads(result)
@@ -6189,7 +6416,6 @@ class TestAttachCv:
 
     def test_attach_cv_commit_applies_selected_fields(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """attach_cv commit applies only fields_to_update and attaches CV."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
         mock_client.query.return_value = []
@@ -6200,12 +6426,14 @@ class TestAttachCv:
         mock_client.attach_file.return_value = {"fileId": 80, "name": "cv.pdf"}
         mock_client._guess_content_type.return_value = "application/pdf"
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.attach_cv(
                 candidate_id=sample_candidate["id"],
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
                 fields_to_update=["occupation"],
             )
 
@@ -6217,7 +6445,6 @@ class TestAttachCv:
 
     def test_attach_cv_force_all_applies_everything(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """attach_cv with force_all=True applies all proposed changes."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
         mock_client.query.return_value = []
@@ -6228,12 +6455,14 @@ class TestAttachCv:
         mock_client.attach_file.return_value = {"fileId": 81}
         mock_client._guess_content_type.return_value = "application/pdf"
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.attach_cv(
                 candidate_id=sample_candidate["id"],
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
                 force_all=True,
             )
 
@@ -6241,38 +6470,24 @@ class TestAttachCv:
         assert data["committed"] is True
         mock_client.attach_file.assert_called_once()
 
-    def test_attach_cv_invalid_base64(self, mock_client, mock_metadata):
-        """attach_cv returns error on malformed base64."""
-        with patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(
-                candidate_id=123,
-                file_b64="!not-base64!",
-                filename="cv.pdf",
-            )
-
-        data = json.loads(result)
-        assert data["error"] == "invalid_base64"
-        mock_client.attach_file.assert_not_called()
-
     def test_attach_cv_api_error(self, mock_client, mock_metadata):
         """attach_cv returns ERROR: prefix on BullhornAPIError from parse."""
-        import base64
         mock_client.parse_resume_file.side_effect = BullhornAPIError("Parse failed")
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.attach_cv(
                 candidate_id=123,
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
             )
 
         assert result.startswith("ERROR:")
 
     def test_attach_cv_commit_recomputes_name_both_components(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """attach_cv commit injects recomputed name when both firstName and lastName are updated."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         # parsed has firstName="Jane", lastName="Doe"; candidate has firstName="John", lastName="Smith"
         mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
@@ -6283,12 +6498,14 @@ class TestAttachCv:
         mock_client.attach_file.return_value = {"fileId": 90, "name": "cv.pdf"}
         mock_client._guess_content_type.return_value = "application/pdf"
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.attach_cv(
                 candidate_id=sample_candidate["id"],
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
                 fields_to_update=["firstName", "lastName"],
             )
 
@@ -6301,7 +6518,6 @@ class TestAttachCv:
 
     def test_attach_cv_commit_recomputes_name_single_component(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """attach_cv commit fetches the other half from Bullhorn when only one name component is updated."""
-        import base64
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         # First get: broad candidate fetch. Second get: firstName,lastName for name recomputation.
         mock_client.get.side_effect = [
@@ -6315,12 +6531,14 @@ class TestAttachCv:
         mock_client.attach_file.return_value = {"fileId": 91, "name": "cv.pdf"}
         mock_client._guess_content_type.return_value = "application/pdf"
 
-        with patch.object(server, "get_client", return_value=mock_client), \
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             result = server.attach_cv(
                 candidate_id=sample_candidate["id"],
-                file_b64=base64.b64encode(b"%PDF-fake").decode(),
-                filename="cv.pdf",
+                upload_id=upload_id,
                 fields_to_update=["firstName"],
             )
 
@@ -6330,6 +6548,54 @@ class TestAttachCv:
         # firstName changed to "Jane", lastName stays "Smith"
         assert call_kwargs.get("name") == "Jane Smith"
         assert mock_client.get.call_count == 2
+
+    def test_attach_cv_upload_not_found(self, mock_client, mock_metadata):
+        """attach_cv with an unknown upload_id returns upload_not_found and never calls Bullhorn."""
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(candidate_id=123, upload_id="upl_doesnotexist")
+
+        data = json.loads(result)
+        assert data["error"] == "upload_not_found"
+        mock_client.parse_resume_file.assert_not_called()
+        mock_client.attach_file.assert_not_called()
+
+    def test_attach_cv_preview_keeps_then_commit_drops(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """The same upload_id serves the preview call and the commit call; the commit drops the bytes."""
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
+        mock_client.query.return_value = []
+        mock_client.update.return_value = {
+            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE", "data": {},
+        }
+        mock_client.attach_file.return_value = {"fileId": 82, "name": "Jane_Doe_CV.pdf"}
+        mock_client._guess_content_type.return_value = "application/pdf"
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            preview = json.loads(server.attach_cv(candidate_id=sample_candidate["id"], upload_id=upload_id))
+            mid = server.upload_store.get(upload_id, "user-a")
+            commit = json.loads(server.attach_cv(
+                candidate_id=sample_candidate["id"], upload_id=upload_id, fields_to_update=["occupation"],
+            ))
+
+        assert preview["preview"] is True
+        assert mid["status"] == "received"
+        assert mid["data"] == _CV_BYTES
+        assert commit["committed"] is True
+        assert mock_client.parse_resume_file.call_count == 2
+        for call in mock_client.parse_resume_file.call_args_list:
+            assert call.args == (_CV_BYTES, "Jane_Doe_CV.pdf", "pdf")
+        mock_client.attach_file.assert_called_once_with(
+            "Candidate", sample_candidate["id"], _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", file_type="CV"
+        )
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "attached"
+        assert rec["data"] is None
+        assert rec["file_id"] == 82
 
 
 class TestGetNotesForEntity:
@@ -6921,140 +7187,417 @@ class TestNoAdvancedNoteSearchingReferences:
         assert "contact bullhorn support" not in source
 
 
-class TestCVUploadEndpoint:
-    """Tests for the POST /upload-cv HTTP route."""
+@pytest.mark.usefixtures("clean_upload_store")
+class TestUploadRoute:
+    """Tests for the POST /upload/{token} HTTP route (CR41)."""
 
-    class _FakeUpload:
-        def __init__(self, data: bytes):
-            self._data = data
+    MCP_APP_ORIGIN = "https://abc123.claudemcpcontent.com"
 
-        async def read(self):
-            return self._data
+    @pytest.fixture
+    def http(self):
+        from starlette.testclient import TestClient
+        return TestClient(server.mcp.http_app())
 
-    class _FakeRequest:
-        def __init__(self, form_fields, headers=None):
-            self.headers = headers or {}
-            self.client = None
-            self._form = form_fields
+    @staticmethod
+    def _ticket(filename="Jane_Doe_CV.pdf", sub="user-a"):
+        upload_id, token, _ = server.upload_store.create(sub, filename)
+        return upload_id, token
 
-        async def form(self):
-            return self._form
+    def test_upload_happy_path(self, http):
+        """A valid POST returns 200 with the ticket's original filename and stores the bytes."""
+        upload_id, token = self._ticket()
 
-    def _make_request(self, file_bytes=b"%PDF-fake", filename="cv.pdf", fmt=None,
-                      candidate_id=None, force=None, secret="s"):
-        form = {"file": self._FakeUpload(file_bytes), "filename": filename}
-        if fmt is not None:
-            form["format"] = fmt
-        if candidate_id is not None:
-            form["candidate_id"] = str(candidate_id)
-        if force is not None:
-            form["force"] = force
-        headers = {"X-Upload-Secret": secret} if secret is not None else {}
-        return self._FakeRequest(form, headers)
+        resp = http.post(f"/upload/{token}", files={"file": ("8655a252-Jane_Doe_CV.pdf", _CV_BYTES)})
 
-    @pytest.mark.asyncio
-    async def test_upload_cv_valid_secret_no_candidate_id(self, monkeypatch):
-        """Valid secret + file, no candidate_id → calls create_candidate_from_cv, returns 200 JSON."""
-        monkeypatch.setenv("UPLOAD_SECRET", "s")
-        req = self._make_request()
-        with patch.object(server, "create_candidate_from_cv", return_value='{"candidate_id": 1}') as mock_create:
-            resp = await server._upload_cv_handler(req)
         assert resp.status_code == 200
-        mock_create.assert_called_once()
-        call_kw = mock_create.call_args.kwargs
-        assert call_kw["filename"] == "cv.pdf"
-        assert call_kw["format"] == "pdf"
-        assert call_kw["force"] is False
-        import base64
-        assert base64.b64decode(call_kw["file_b64"]) == b"%PDF-fake"
+        assert resp.json() == {"upload_id": upload_id, "filename": "Jane_Doe_CV.pdf", "size": len(_CV_BYTES)}
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "received"
+        assert rec["data"] == _CV_BYTES
 
-    @pytest.mark.asyncio
-    async def test_upload_cv_missing_secret_header(self, monkeypatch):
-        """No X-Upload-Secret header → 401."""
-        monkeypatch.setenv("UPLOAD_SECRET", "s")
-        req = self._make_request(secret=None)
-        resp = await server._upload_cv_handler(req)
-        assert resp.status_code == 401
+    def test_unknown_token_404(self, http):
+        """A token that was never issued answers 404."""
+        resp = http.post("/upload/not-a-real-token", files={"file": ("cv.pdf", _CV_BYTES)})
 
-    @pytest.mark.asyncio
-    async def test_upload_cv_wrong_secret(self, monkeypatch):
-        """Wrong X-Upload-Secret value → 401."""
-        monkeypatch.setenv("UPLOAD_SECRET", "correct")
-        req = self._make_request(secret="wrong")
-        resp = await server._upload_cv_handler(req)
-        assert resp.status_code == 401
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "upload_not_found"
 
-    @pytest.mark.asyncio
-    async def test_upload_cv_no_secret_configured(self, monkeypatch):
-        """UPLOAD_SECRET not set → 400 regardless of header."""
-        monkeypatch.delenv("UPLOAD_SECRET", raising=False)
-        req = self._make_request(secret="anything")
-        resp = await server._upload_cv_handler(req)
-        assert resp.status_code == 400
-        import json as _json
-        body = _json.loads(resp.body)
-        assert body["error"] == "upload_secret_not_configured"
+    def test_reused_token_410(self, http):
+        """A second POST with the same token answers 410 upload_already_used."""
+        _upload_id, token = self._ticket()
+        first = http.post(f"/upload/{token}", files={"file": ("cv.pdf", _CV_BYTES)})
+        second = http.post(f"/upload/{token}", files={"file": ("cv.pdf", b"other bytes")})
 
-    @pytest.mark.asyncio
-    async def test_upload_cv_with_candidate_id(self, monkeypatch):
-        """candidate_id provided → calls attach_file, NOT create_candidate_from_cv."""
-        monkeypatch.setenv("UPLOAD_SECRET", "s")
-        mock_client = Mock()
-        mock_client._guess_content_type.return_value = "application/pdf"
-        mock_client.attach_file.return_value = {"fileId": 99, "name": "cv.pdf"}
-        req = self._make_request(candidate_id=42)
-        with patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "create_candidate_from_cv") as mock_create:
-            resp = await server._upload_cv_handler(req)
-        assert resp.status_code == 200
-        mock_create.assert_not_called()
-        mock_client.attach_file.assert_called_once_with(
-            "Candidate", 42, b"%PDF-fake", "cv.pdf", "application/pdf", None, "CV"
+        assert first.status_code == 200
+        assert second.status_code == 410
+        assert second.json()["error"] == "upload_already_used"
+
+    def test_expired_token_410(self, http):
+        """A token used after its 15 minute window answers 410 upload_expired."""
+        from bullhorn_mcp.uploads import UploadStore
+        clock = _FakeClock()
+        with patch.object(server, "upload_store", UploadStore(clock=clock)):
+            _upload_id, token = self._ticket()
+            clock.now += 16 * 60
+            resp = http.post(f"/upload/{token}", files={"file": ("cv.pdf", _CV_BYTES)})
+
+        assert resp.status_code == 410
+        assert resp.json()["error"] == "upload_expired"
+
+    def test_oversize_413(self, http):
+        """Too large a body, or too large a file within the body allowance, both answer 413."""
+        _upload_id, token = self._ticket()
+        # Whole body over the route's cap: refused before parsing.
+        with patch.object(server, "_UPLOAD_BODY_LIMIT", 1000):
+            big_body = http.post(f"/upload/{token}", files={"file": ("cv.pdf", b"x" * 5000)})
+        # File over the store's cap but body within the route's allowance.
+        with patch("bullhorn_mcp.uploads.MAX_UPLOAD_BYTES", 100):
+            big_file = http.post(f"/upload/{token}", files={"file": ("cv.pdf", b"x" * 200)})
+
+        assert big_body.status_code == 413
+        assert big_body.json()["error"] == "file_too_large"
+        assert big_file.status_code == 413
+        assert big_file.json()["error"] == "file_too_large"
+
+    def test_bad_type_415(self, http):
+        """A file whose extension differs from the ticket's answers 415."""
+        _upload_id, token = self._ticket("Jane_Doe_CV.pdf")
+
+        resp = http.post(f"/upload/{token}", files={"file": ("malware.exe", _CV_BYTES)})
+
+        assert resp.status_code == 415
+        assert resp.json()["error"] == "unsupported_file_type"
+
+    def test_missing_file_field_400(self, http):
+        """Multipart without a 'file' field, or a non-multipart body, answers 400 missing_file."""
+        _upload_id, token = self._ticket()
+
+        wrong_field = http.post(f"/upload/{token}", files={"other": ("cv.pdf", _CV_BYTES)})
+        not_multipart = http.post(f"/upload/{token}", content=_CV_BYTES)
+
+        assert wrong_field.status_code == 400
+        assert wrong_field.json()["error"] == "missing_file"
+        assert not_multipart.status_code == 400
+        assert not_multipart.json()["error"] == "missing_file"
+
+    def test_cors_preflight_allows_mcp_app_origin(self, http):
+        """OPTIONS from the MCP App sandbox origin gets 204 and the origin echoed; POST carries it too."""
+        _upload_id, token = self._ticket()
+
+        pre = http.options(f"/upload/{token}", headers={
+            "Origin": self.MCP_APP_ORIGIN,
+            "Access-Control-Request-Method": "POST",
+        })
+        post = http.post(
+            f"/upload/{token}",
+            files={"file": ("cv.pdf", _CV_BYTES)},
+            headers={"Origin": self.MCP_APP_ORIGIN},
         )
 
-    @pytest.mark.asyncio
-    async def test_upload_cv_force_true_passed_through(self, monkeypatch):
-        """force='true' form field → create_candidate_from_cv called with force=True."""
-        monkeypatch.setenv("UPLOAD_SECRET", "s")
-        req = self._make_request(force="true")
-        with patch.object(server, "create_candidate_from_cv", return_value='{}') as mock_create:
-            await server._upload_cv_handler(req)
-        assert mock_create.call_args.kwargs["force"] is True
+        assert pre.status_code == 204
+        assert pre.headers["access-control-allow-origin"] == self.MCP_APP_ORIGIN
+        assert "POST" in pre.headers["access-control-allow-methods"]
+        assert post.status_code == 200
+        assert post.headers["access-control-allow-origin"] == self.MCP_APP_ORIGIN
 
-    @pytest.mark.asyncio
-    async def test_upload_cv_default_format_is_pdf(self, monkeypatch):
-        """No format field → format defaults to 'pdf'."""
-        monkeypatch.setenv("UPLOAD_SECRET", "s")
-        req = self._make_request(fmt=None)
-        with patch.object(server, "create_candidate_from_cv", return_value='{}') as mock_create:
-            await server._upload_cv_handler(req)
-        assert mock_create.call_args.kwargs["format"] == "pdf"
+    def test_cors_rejects_other_origin(self, http):
+        """Other origins, plain http, and look-alike domains are refused with no ACAO header."""
+        _upload_id, token = self._ticket()
+        bad_origins = [
+            "https://evil.example.com",
+            "http://x.claudemcpcontent.com",
+            "https://claudemcpcontent.com.evil.com",
+        ]
 
-    @pytest.mark.asyncio
-    async def test_upload_cv_server_error_returns_500(self, monkeypatch):
-        """BullhornAPIError in create path → 500 with JSON error body."""
-        monkeypatch.setenv("UPLOAD_SECRET", "s")
-        req = self._make_request()
-        with patch.object(server, "create_candidate_from_cv", side_effect=BullhornAPIError("boom")):
-            resp = await server._upload_cv_handler(req)
-        assert resp.status_code == 500
-        import json as _json
-        body = _json.loads(resp.body)
-        assert body["error"] == "bullhorn_error"
-        assert "boom" in body["message"]
+        for origin in bad_origins:
+            resp = http.options(f"/upload/{token}", headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+            })
+            assert resp.status_code == 403, origin
+            assert "access-control-allow-origin" not in resp.headers, origin
 
-    @pytest.mark.asyncio
-    async def test_upload_cv_create_returns_tool_error_as_500(self, monkeypatch):
-        """create_candidate_from_cv returning JSON with 'error' key → handler returns 500."""
-        monkeypatch.setenv("UPLOAD_SECRET", "s")
-        req = self._make_request()
-        error_body = '{"error": "identity_resolution_failed", "message": "No authentication token available"}'
-        with patch.object(server, "create_candidate_from_cv", return_value=error_body):
-            resp = await server._upload_cv_handler(req)
-        assert resp.status_code == 500
-        import json as _json
-        body = _json.loads(resp.body)
-        assert body["error"] == "identity_resolution_failed"
+        # A real POST from a bad origin still works for curl-style callers but gets no CORS header.
+        post = http.post(
+            f"/upload/{token}",
+            files={"file": ("cv.pdf", _CV_BYTES)},
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert "access-control-allow-origin" not in post.headers
+
+    def test_upload_makes_no_bullhorn_call(self, http):
+        """The route only stores bytes; it never builds a Bullhorn client."""
+        _upload_id, token = self._ticket()
+
+        with patch.object(server, "get_client", side_effect=AssertionError("Bullhorn called")):
+            resp = http.post(f"/upload/{token}", files={"file": ("cv.pdf", _CV_BYTES)})
+
+        assert resp.status_code == 200
+
+    def test_old_upload_cv_route_removed(self, http):
+        """The CR27 /upload-cv route is gone."""
+        resp = http.post("/upload-cv", files={"file": ("cv.pdf", _CV_BYTES)})
+
+        assert resp.status_code in (404, 405)
+        assert not hasattr(server, "_upload_cv_handler")
+
+    def test_upload_rejected_file_does_not_consume_ticket(self, http):
+        """A wrong-type or empty file is rejected, and the same token then accepts the right file."""
+        upload_id, token = self._ticket("Jane_Doe_CV.pdf")
+
+        wrong = http.post(f"/upload/{token}", files={"file": ("cv.exe", _CV_BYTES)})
+        empty = http.post(f"/upload/{token}", files={"file": ("cv.pdf", b"")})
+        good = http.post(f"/upload/{token}", files={"file": ("cv.pdf", _CV_BYTES)})
+
+        assert wrong.status_code == 415
+        assert empty.status_code == 400
+        assert good.status_code == 200
+        assert server.upload_store.get(upload_id, "user-a")["status"] == "received"
+
+    def test_token_not_logged(self, http, caplog):
+        """The upload token never appears in a log record, for accepted or rejected uploads."""
+        import logging
+        _upload_id, token = self._ticket()
+
+        with caplog.at_level(logging.INFO, logger="bullhorn_mcp.server"):
+            rejected = http.post(f"/upload/{token}", files={"file": ("cv.exe", _CV_BYTES)})
+            accepted = http.post(f"/upload/{token}", files={"file": ("cv.pdf", _CV_BYTES)})
+            http.post(f"/upload/{token}", files={"file": ("cv.pdf", _CV_BYTES)})  # reused
+
+        assert rejected.status_code == 415
+        assert accepted.status_code == 200
+        assert caplog.records, "expected the route to log something at INFO"
+        for record in caplog.records:
+            assert token not in record.getMessage()
+            assert token not in str(record.args)
+
+
+@pytest.mark.usefixtures("clean_upload_store")
+class TestRequestCvUpload:
+    """Tests for the request_cv_upload tool (CR41)."""
+
+    BASE = {"MCP_BASE_URL": "https://mcp.example.com"}
+
+    def _request(self, filename="Jane_Doe_CV.pdf", sub="user-a", ui=False, base=None, **kwargs):
+        with _http_as(sub), \
+             patch.dict(os.environ, base or self.BASE), \
+             patch.object(server, "_client_supports_ui", return_value=ui):
+            return json.loads(server.request_cv_upload(filename, **kwargs))
+
+    def test_url_built_from_mcp_base_url(self):
+        """upload_url is MCP_BASE_URL + /upload/<token> (trailing slash tolerated) and the token redeems."""
+        data = self._request(base={"MCP_BASE_URL": "https://mcp.example.com/"})
+
+        prefix = "https://mcp.example.com/upload/"
+        assert data["upload_url"].startswith(prefix)
+        token = data["upload_url"][len(prefix):]
+        assert "/" not in token and token
+        result = server.upload_store.redeem(token, "cv.pdf", _CV_BYTES)
+        assert result["upload_id"] == data["upload_id"]
+
+    def test_ticket_bound_to_token_sub(self):
+        """The ticket belongs to the caller's Entra sub: user-a can read it, user-b cannot."""
+        data = self._request(sub="user-a")
+
+        assert server.upload_store.get(data["upload_id"], "user-a")["status"] == "pending"
+        from bullhorn_mcp.uploads import UploadNotFound
+        with pytest.raises(UploadNotFound):
+            server.upload_store.get(data["upload_id"], "user-b")
+
+    def test_next_steps_offer_upload_box_when_ui_supported(self):
+        """With MCP Apps support the fallback step points at show_cv_upload_box."""
+        data = self._request(ui=True)
+
+        text = " ".join(data["next_steps"])
+        assert f"show_cv_upload_box(upload_id='{data['upload_id']}')" in text
+
+    def test_next_steps_omit_upload_box_when_ui_unsupported(self):
+        """Without MCP Apps support there is no mention of the box, and the agent is told to stop."""
+        data = self._request(ui=False)
+
+        text = " ".join(data["next_steps"])
+        assert "show_cv_upload_box" not in text
+        assert "stop" in text.lower()
+
+    def test_next_steps_curl_line_contains_url(self):
+        """The first next step is a curl command that includes the exact upload_url."""
+        data = self._request()
+
+        curl_line = data["next_steps"][0]
+        assert "curl" in curl_line
+        assert data["upload_url"] in curl_line
+
+    def test_disallowed_extension_rejected(self):
+        """A non-CV extension returns unsupported_file_type and creates nothing."""
+        data = self._request(filename="payload.exe")
+
+        assert data["error"] == "unsupported_file_type"
+        assert server.upload_store._uploads == {}
+
+    def test_stdio_mode_returns_uploads_require_http_mode(self):
+        """request_cv_upload, get_cv_upload and show_cv_upload_box all refuse in stdio mode."""
+        with patch.object(server, "_transport_mode", "stdio"):
+            results = [
+                server.request_cv_upload("Jane_Doe_CV.pdf"),
+                server.get_cv_upload("upl_x"),
+                server.show_cv_upload_box("upl_x"),
+            ]
+
+        for result in results:
+            assert json.loads(result)["error"] == "uploads_require_http_mode"
+        assert server.upload_store._uploads == {}
+
+    def test_missing_sub_returns_identity_error(self):
+        """A token without a sub claim returns identity_resolution_failed and creates nothing."""
+        token = Mock()
+        token.claims = {"email": "user-a@example.com"}
+        with patch.object(server, "_transport_mode", "http"), \
+             patch("bullhorn_mcp.identity.get_access_token", return_value=token), \
+             patch.dict(os.environ, self.BASE):
+            data = json.loads(server.request_cv_upload("Jane_Doe_CV.pdf"))
+
+        assert data["error"] == "identity_resolution_failed"
+        assert server.upload_store._uploads == {}
+
+
+@pytest.mark.usefixtures("clean_upload_store")
+class TestGetCvUpload:
+    """Tests for the get_cv_upload tool (CR41)."""
+
+    def _get(self, upload_id, sub="user-a"):
+        with _http_as(sub):
+            return json.loads(server.get_cv_upload(upload_id))
+
+    def test_get_status_pending_then_received(self):
+        """Status moves from pending (no size) to received (size set) once the file arrives."""
+        upload_id, token, _ = server.upload_store.create("user-a", "Jane_Doe_CV.pdf", 42)
+
+        pending = self._get(upload_id)
+        server.upload_store.redeem(token, "cv.pdf", _CV_BYTES)
+        received = self._get(upload_id)
+
+        assert pending["status"] == "pending"
+        assert pending["size"] is None
+        assert pending["candidate_id"] == 42
+        assert received["status"] == "received"
+        assert received["size"] == len(_CV_BYTES)
+        assert received["filename"] == "Jane_Doe_CV.pdf"
+        assert "file_id" not in received
+
+    def test_get_attached_includes_file_id(self):
+        """An attached upload reports the Bullhorn file id."""
+        upload_id = _seed_upload()
+        server.upload_store.mark_attached(upload_id, 77)
+
+        data = self._get(upload_id)
+
+        assert data["status"] == "attached"
+        assert data["file_id"] == 77
+
+    def test_get_other_users_upload_not_found(self):
+        """Another user's upload id answers upload_not_found."""
+        upload_id = _seed_upload(sub="user-a")
+
+        data = self._get(upload_id, sub="user-b")
+
+        assert data["error"] == "upload_not_found"
+
+
+@pytest.mark.usefixtures("clean_upload_store")
+class TestShowCvUploadBox:
+    """Tests for the show_cv_upload_box tool and its MCP App resource (CR41)."""
+
+    BOX_URI = "ui://bullhorn/cv-upload-box.html"
+
+    def _show(self, upload_id, sub="user-a"):
+        with _http_as(sub), patch.dict(os.environ, {"MCP_BASE_URL": "https://mcp.example.com"}):
+            return json.loads(server.show_cv_upload_box(upload_id))
+
+    def test_upload_box_tool_registered_with_ui_meta(self):
+        """show_cv_upload_box links to the ui:// resource through its tool meta."""
+        import asyncio
+        tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+
+        assert tools["show_cv_upload_box"].meta == {"ui": {"resourceUri": self.BOX_URI}}
+
+    def test_upload_box_csp_connect_domain_is_base_url(self):
+        """The CSP connect domain is the base URL origin; with no base URL no CSP is declared."""
+        from fastmcp.apps.config import app_config_to_meta_dict
+        with_url = app_config_to_meta_dict(server._upload_box_app_config("https://mcp.thepanel.com"))
+        without = app_config_to_meta_dict(server._upload_box_app_config(None))
+
+        assert with_url["csp"]["connectDomains"] == ["https://mcp.thepanel.com"]
+        assert "csp" not in without
+        assert "domain" not in without
+
+    def test_upload_box_ui_domain_hash(self):
+        """The app domain is sha256 of the MCP endpoint URL, 32 hex chars, on claudemcpcontent.com."""
+        import hashlib
+        from fastmcp.apps.config import app_config_to_meta_dict
+        expected = hashlib.sha256(b"https://mcp.thepanel.com/mcp").hexdigest()[:32] + ".claudemcpcontent.com"
+
+        plain = app_config_to_meta_dict(server._upload_box_app_config("https://mcp.thepanel.com"))
+        slashed = app_config_to_meta_dict(server._upload_box_app_config("https://mcp.thepanel.com/"))
+
+        assert plain["domain"] == expected
+        assert slashed["domain"] == expected
+
+    def test_upload_box_resource_serves_html(self):
+        """The ui:// resource is registered as MCP App HTML and its page has no base64 path."""
+        import asyncio
+        resources = {str(r.uri): r for r in asyncio.run(server.mcp.list_resources())}
+
+        assert self.BOX_URI in resources
+        assert resources[self.BOX_URI].mime_type == "text/html;profile=mcp-app"
+        html = server.cv_upload_box_resource()
+        assert "ui/initialize" in html
+        assert "fetch(" in html
+        # The page comments mention base64 to say it is absent; check the code only.
+        import re
+        code = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+        assert "base64" not in code.lower()
+        assert "btoa" not in code
+
+        result = asyncio.run(server.mcp.read_resource(self.BOX_URI))
+        assert "ui/initialize" in result.contents[0].content
+
+    def test_upload_box_returns_fresh_url_and_old_token_dies(self):
+        """The box gets a new single-use URL for the same ticket; the original token stops working."""
+        from bullhorn_mcp.uploads import UploadNotFound
+        with _http_as(), \
+             patch.dict(os.environ, {"MCP_BASE_URL": "https://mcp.example.com"}), \
+             patch.object(server, "_client_supports_ui", return_value=True):
+            first = json.loads(server.request_cv_upload("Jane_Doe_CV.pdf"))
+        old_token = first["upload_url"].rsplit("/", 1)[1]
+
+        shown = self._show(first["upload_id"])
+
+        assert shown["upload_id"] == first["upload_id"]
+        assert shown["filename"] == "Jane_Doe_CV.pdf"
+        assert shown["allowed_extensions"] == ["pdf"]
+        new_token = shown["upload_url"].rsplit("/", 1)[1]
+        assert shown["upload_url"].startswith("https://mcp.example.com/upload/")
+        assert new_token != old_token
+        with pytest.raises(UploadNotFound):
+            server.upload_store.redeem(old_token, "cv.pdf", _CV_BYTES)
+        result = server.upload_store.redeem(new_token, "cv.pdf", _CV_BYTES)
+        assert result["upload_id"] == first["upload_id"]
+
+    def test_upload_box_other_users_upload_rejected(self):
+        """User-b cannot open a box for user-a's upload."""
+        upload_id, _token, _ = server.upload_store.create("user-a", "Jane_Doe_CV.pdf")
+
+        data = self._show(upload_id, sub="user-b")
+
+        assert data["error"] == "upload_not_found"
+
+    def test_upload_box_on_received_upload_errors(self):
+        """A box for an upload that already holds its file is refused with upload_already_used."""
+        upload_id = _seed_upload()
+
+        data = self._show(upload_id)
+
+        assert data["error"] == "upload_already_used"
 
 
 class TestQueryEntitiesNoteGuard:

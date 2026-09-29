@@ -1,18 +1,22 @@
 """Bullhorn CRM MCP Server - Query and manage CRM data via AI assistants."""
 
 import asyncio
-import base64
-import hmac
+import hashlib
 import json
 import logging
 import os
 import re
 import time
+from importlib import resources as _pkg_resources
 from typing import Any
+from urllib.parse import urlparse
+from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from fastmcp import FastMCP
+from fastmcp.apps.config import UI_EXTENSION_ID, AppConfig, ResourceCSP
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
+from fastmcp.server.dependencies import get_context
 
 from .config import BullhornConfig
 from .auth import BullhornAuth, AuthenticationError
@@ -23,9 +27,15 @@ from .joborder_config import get_joborder_defaults, get_joborder_required
 from .shortlist_config import get_shortlist_status
 from .fuzzy import score_company_match, categorize_score, score_contact_match
 from .bulk import BulkImporter
-from .identity import resolve_caller, IdentityResolutionError
+from .identity import resolve_caller, resolve_caller_sub, IdentityResolutionError
 from .descriptions import enrich_tool_descriptions
 from .perplexity import search_people, PerplexityError
+from .uploads import (
+    ALLOWED_EXTENSIONS,
+    MAX_UPLOAD_BYTES,
+    UploadError,
+    upload_store,
+)
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -216,7 +226,8 @@ mcp = FastMCP(
     instructions=(
         "Query and manage Bullhorn CRM data — jobs, candidates, contacts, companies, "
         "and placements. Supports field metadata resolution between API names and "
-        "display labels."
+        "display labels. For CV files, call request_cv_upload first; never pass file "
+        "contents in a tool argument."
     ),
 )
 
@@ -2328,22 +2339,259 @@ def find_duplicate_candidates(
         return f"ERROR: {e}"
 
 
-@mcp.tool()
-def parse_cv(
-    file_b64: str,
-    filename: str,
-    format: str = "pdf",
-) -> str:
-    """Parse a binary CV file and return the extracted fields without saving anything.
+# --- CR41: CV upload tickets --------------------------------------------------
+# CV bytes never travel in a tool argument. request_cv_upload mints a single-use
+# URL, the file is POSTed there out of band (curl in Cowork, or the in-chat upload
+# box), and the CV tools take the resulting upload_id. Uploads are bound to the
+# Entra `sub`, so they need HTTP mode (stdio has no token and no upload listener).
 
+_UPLOAD_BOX_URI = "ui://bullhorn/cv-upload-box.html"
+
+
+def _uploads_unavailable() -> str | None:
+    """Return the stdio-mode error JSON, or None when uploads are available."""
+    if _transport_mode != "http":
+        return format_response({
+            "error": "uploads_require_http_mode",
+            "message": (
+                "CV file uploads need the hosted (HTTP) server. This server runs in "
+                "stdio mode, which has no upload endpoint. Use parse_cv_text or "
+                "create_candidate_from_cv(content=...) with pasted CV text instead."
+            ),
+        })
+    return None
+
+
+def _upload_url(token: str) -> str:
+    return f"{os.environ.get('MCP_BASE_URL', '').rstrip('/')}/upload/{token}"
+
+
+def _client_supports_ui() -> bool:
+    """True when the connected client advertised MCP Apps support at initialize."""
+    try:
+        return bool(get_context().client_supports_extension(UI_EXTENSION_ID))
+    except Exception:
+        return False
+
+
+def _upload_error(e: UploadError) -> str:
+    hints = {
+        "upload_not_found": "Call request_cv_upload to start a new upload.",
+        "upload_expired": "The upload expired. Call request_cv_upload again and resend the file.",
+        "upload_already_used": "This upload has already been used. Call request_cv_upload for a new one.",
+        "unsupported_file_type": "Allowed CV types: " + ", ".join(sorted(ALLOWED_EXTENSIONS)) + ".",
+    }
+    body = {"error": e.code, "message": str(e)}
+    if e.code in hints:
+        body["hint"] = hints[e.code]
+    return format_response(body)
+
+
+def _load_received_upload(upload_id: str) -> tuple[dict | None, str | None]:
+    """Fetch a received upload for the caller. Returns ``(record, None)`` or ``(None, error_json)``.
+
+    The record keeps its bytes; the caller must call ``upload_store.mark_attached``
+    after a successful Bullhorn attach so the bytes are dropped (NFR-9).
+    """
+    unavailable = _uploads_unavailable()
+    if unavailable:
+        return None, unavailable
+    try:
+        sub = resolve_caller_sub()
+    except IdentityResolutionError as e:
+        return None, format_response({"error": "identity_resolution_failed", "message": str(e)})
+    try:
+        rec = upload_store.get(upload_id, sub)
+    except UploadError as e:
+        return None, _upload_error(e)
+    status = rec["status"]
+    if status == "received":
+        return rec, None
+    if status == "pending":
+        return None, format_response({
+            "error": "upload_pending",
+            "message": f"No file has been received for upload '{upload_id}' yet.",
+            "hint": (
+                "Send the file to the upload_url from request_cv_upload (or the upload box), "
+                "then check get_cv_upload(upload_id) shows status 'received'."
+            ),
+        })
+    if status == "attached":
+        return None, format_response({
+            "error": "upload_already_attached",
+            "message": f"Upload '{upload_id}' is already attached in Bullhorn and its file was deleted here.",
+            "hint": "Call request_cv_upload and resend the file to use it again.",
+        })
+    return None, format_response({
+        "error": "upload_expired",
+        "message": f"Upload '{upload_id}' has expired and its file was deleted.",
+        "hint": "Call request_cv_upload again and resend the file.",
+    })
+
+
+@mcp.tool()
+def request_cv_upload(filename: str, candidate_id: int | None = None) -> str:
+    """Start a CV file upload. Call this before parse_cv, create_candidate_from_cv or attach_cv.
+
+    Returns an upload_id, a single-use upload_url (15 minutes) and next_steps to follow.
+    Never pass file contents in a tool argument.
+
+    Args:
+        filename: The CV's original name exactly as the user attached it (e.g. "Jane_Doe_CV.pdf").
+        candidate_id: Optional existing Candidate the CV is for.
+    """
+    unavailable = _uploads_unavailable()
+    if unavailable:
+        return unavailable
+    try:
+        sub = resolve_caller_sub()
+    except IdentityResolutionError as e:
+        return format_response({"error": "identity_resolution_failed", "message": str(e)})
+    try:
+        upload_id, token, expires_at = upload_store.create(sub, filename, candidate_id)
+    except UploadError as e:
+        return _upload_error(e)
+
+    upload_url = _upload_url(token)
+    use_step = (
+        f"Then call get_cv_upload(upload_id='{upload_id}') and check status is 'received'. "
+        f"Then call create_candidate_from_cv(upload_id='{upload_id}') for a new candidate, or "
+        f"attach_cv(candidate_id=..., upload_id='{upload_id}') for an existing one."
+    )
+    if _client_supports_ui():
+        fallback = (
+            f"If curl fails or you cannot run shell commands, call "
+            f"show_cv_upload_box(upload_id='{upload_id}') so the user can drop the file into the chat."
+        )
+    else:
+        fallback = (
+            "If curl fails or you cannot run shell commands, tell the user the file could not "
+            "be sent and stop. Do not paste, retype or base64-encode the file."
+        )
+    return format_response({
+        "upload_id": upload_id,
+        "upload_url": upload_url,
+        "expires_at": expires_at.isoformat(timespec="seconds"),
+        "max_bytes": MAX_UPLOAD_BYTES,
+        "next_steps": [
+            (
+                "If the CV is a file in your environment and you can run shell commands, send it "
+                "(use its full path on disk, which may carry an extra prefix; the original name is kept): "
+                f"curl -sS -X POST -F file=@\"<full path to the attached file>\" {upload_url}"
+            ),
+            use_step,
+            fallback,
+        ],
+    })
+
+
+@mcp.tool()
+def get_cv_upload(upload_id: str) -> str:
+    """Check a CV upload's status: pending, received, attached or expired.
+
+    Args:
+        upload_id: The id returned by request_cv_upload.
+    """
+    unavailable = _uploads_unavailable()
+    if unavailable:
+        return unavailable
+    try:
+        sub = resolve_caller_sub()
+    except IdentityResolutionError as e:
+        return format_response({"error": "identity_resolution_failed", "message": str(e)})
+    try:
+        rec = upload_store.get(upload_id, sub)
+    except UploadError as e:
+        return _upload_error(e)
+    result = {
+        "upload_id": rec["upload_id"],
+        "status": rec["status"],
+        "filename": rec["filename"],
+        "size": rec["size"],
+        "candidate_id": rec["candidate_id"],
+    }
+    if rec["status"] == "attached":
+        result["file_id"] = rec["file_id"]
+    return format_response(result)
+
+
+def _upload_box_app_config(base_url: str | None) -> AppConfig:
+    """MCP Apps metadata for the upload box resource.
+
+    ``connectDomains`` lets the sandboxed iframe fetch our upload route. Claude
+    serves each server's apps from ``{sha256(server url)[:32]}.claudemcpcontent.com``;
+    the server url is the MCP endpoint, ``{MCP_BASE_URL}/mcp``. Both are derived
+    from MCP_BASE_URL so a different deployment needs no code change. With no
+    base URL (stdio) nothing is declared, and the box cannot upload anyway.
+    """
+    if not base_url:
+        return AppConfig(prefers_border=True)
+    parsed = urlparse(base_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    server_url = f"{base_url.rstrip('/')}/mcp"
+    domain = hashlib.sha256(server_url.encode("utf-8")).hexdigest()[:32] + ".claudemcpcontent.com"
+    return AppConfig(csp=ResourceCSP(connect_domains=[origin]), domain=domain, prefers_border=True)
+
+
+@mcp.resource(
+    _UPLOAD_BOX_URI,
+    name="cv_upload_box",
+    description="In-chat CV upload box (MCP App).",
+    app=_upload_box_app_config(os.environ.get("MCP_BASE_URL")),
+)
+def cv_upload_box_resource() -> str:
+    """Serve the upload box HTML (packaged beside this module)."""
+    return _pkg_resources.files("bullhorn_mcp").joinpath("upload_box.html").read_text(encoding="utf-8")
+
+
+@mcp.tool(app=AppConfig(resource_uri=_UPLOAD_BOX_URI))
+def show_cv_upload_box(upload_id: str) -> str:
+    """Show an upload box in the chat for a pending CV upload, when curl could not send the file.
+
+    Afterwards wait for the user to say the file is uploaded, then call get_cv_upload.
+
+    Args:
+        upload_id: The id returned by request_cv_upload.
+    """
+    unavailable = _uploads_unavailable()
+    if unavailable:
+        return unavailable
+    try:
+        sub = resolve_caller_sub()
+    except IdentityResolutionError as e:
+        return format_response({"error": "identity_resolution_failed", "message": str(e)})
+    try:
+        # The store keeps only token hashes, so the box gets a fresh token for the
+        # same ticket; the old URL stops working.
+        token, expires_at = upload_store.reissue_token(upload_id, sub)
+        rec = upload_store.get(upload_id, sub)
+    except UploadError as e:
+        return _upload_error(e)
+    return format_response({
+        "upload_id": upload_id,
+        "upload_url": _upload_url(token),
+        "filename": rec["filename"],
+        "expires_at": expires_at.isoformat(timespec="seconds"),
+        "max_bytes": MAX_UPLOAD_BYTES,
+        "allowed_extensions": [rec["extension"]],
+        "message": (
+            "An upload box is now shown in the chat. Wait for the user to drop the file, "
+            f"then call get_cv_upload(upload_id='{upload_id}')."
+        ),
+    })
+
+
+@mcp.tool()
+def parse_cv(upload_id: str) -> str:
+    """Parse an uploaded CV file and return the extracted fields without saving anything.
+
+    Call request_cv_upload first and send the file; pass the upload_id here.
     The CV is sent to Bullhorn's resume parser (POST /resume/parseToCandidate).
     Nothing is written to Bullhorn — this is a preview-only operation.
     Also runs a duplicate candidate check on the parsed name and email.
 
     Args:
-        file_b64: Base64-encoded CV file bytes (PDF, DOC, DOCX, HTML, or text)
-        filename: Original filename (e.g. "jane_doe_cv.pdf")
-        format: File format hint: pdf, doc, docx, html, text. Default: pdf
+        upload_id: The id from request_cv_upload, once get_cv_upload shows 'received'.
 
     Returns:
         JSON object:
@@ -2358,17 +2606,15 @@ def parse_cv(
         }
 
     Examples:
-        - parse_cv(file_b64="...", filename="cv.pdf")
-        - parse_cv(file_b64="...", filename="resume.docx", format="docx")
+        - parse_cv(upload_id="upl_...")
     """
+    upload, error = _load_received_upload(upload_id)
+    if error:
+        return error
     try:
         client = get_client()
-        try:
-            file_bytes = base64.b64decode(file_b64)
-        except Exception as e:
-            return format_response({"error": "invalid_base64", "message": f"Could not decode file_b64: {e}"})
-
-        parsed = client.parse_resume_file(file_bytes, filename, format)
+        # The upload is kept: the next call (create or attach) needs the same file.
+        parsed = client.parse_resume_file(upload["data"], upload["filename"], upload["format"])
 
         candidate_data = parsed.get("candidate", {})
         first_name = candidate_data.get("firstName", "")
@@ -2433,9 +2679,7 @@ def parse_cv_text(
 
 @mcp.tool()
 def create_candidate_from_cv(
-    file_b64: str | None = None,
-    filename: str | None = None,
-    format: str = "pdf",
+    upload_id: str | None = None,
     content: str | None = None,
     content_type: str = "text/plain",
     force: bool = False,
@@ -2444,18 +2688,17 @@ def create_candidate_from_cv(
     """Parse a CV and create a Candidate record in one operation.
 
     Supports two input modes:
-    - Binary: provide file_b64 + filename (PDF, DOC, DOCX, HTML)
+    - File: call request_cv_upload first, send the file, then pass upload_id
     - Text: provide content (plain text or HTML)
-    Exactly one mode must be used.
+    Exactly one of upload_id or content must be given.
 
     Flow: parse → duplicate check → create Candidate → write child records
-    (education, work history, skills) → attach CV file (binary only).
-    Child record failures are best-effort — warnings are included in the response.
+    (education, work history, skills) → attach CV file (file mode only, under its
+    original name). Child record failures are best-effort — warnings are included
+    in the response.
 
     Args:
-        file_b64: Base64-encoded CV bytes (binary mode)
-        filename: Original filename for the CV (binary mode)
-        format: File format hint: pdf, doc, docx, html, text. Default: pdf
+        upload_id: The id from request_cv_upload, once get_cv_upload shows 'received' (file mode)
         content: Plain text or HTML CV content (text mode)
         content_type: MIME type for text mode. Default: text/plain
         force: Skip duplicate check and create regardless. Default False.
@@ -2467,36 +2710,37 @@ def create_candidate_from_cv(
         If duplicate found: JSON with duplicate_found, match, and parsed fields.
 
     Examples:
-        - create_candidate_from_cv(file_b64="...", filename="cv.pdf")
+        - create_candidate_from_cv(upload_id="upl_...")
         - create_candidate_from_cv(content="Jane Doe\\nEngineer...", content_type="text/plain")
-        - create_candidate_from_cv(file_b64="...", filename="cv.pdf", force=True,
+        - create_candidate_from_cv(upload_id="upl_...", force=True,
                                    fields_override={"source": "Referral"})
     """
-    is_binary = file_b64 is not None and filename is not None
+    is_binary = upload_id is not None
     is_text = content is not None
 
     if not is_binary and not is_text:
         return format_response({
             "error": "input_required",
-            "message": "Provide either (file_b64 + filename) for binary input or content for text input.",
+            "message": "Provide either upload_id (from request_cv_upload) for a CV file or content for CV text.",
         })
     if is_binary and is_text:
         return format_response({
             "error": "ambiguous_input",
-            "message": "Provide either binary (file_b64 + filename) or text (content), not both.",
+            "message": "Provide either upload_id or content, not both.",
         })
+
+    upload: dict | None = None
+    if is_binary:
+        upload, error = _load_received_upload(upload_id)
+        if error:
+            return error
 
     try:
         client = get_client()
         metadata = get_metadata()
-        file_bytes: bytes | None = None
 
-        if is_binary:
-            try:
-                file_bytes = base64.b64decode(file_b64)
-            except Exception as e:
-                return format_response({"error": "invalid_base64", "message": f"Could not decode file_b64: {e}"})
-            parsed = client.parse_resume_file(file_bytes, filename, format)
+        if upload is not None:
+            parsed = client.parse_resume_file(upload["data"], upload["filename"], upload["format"])
         else:
             parsed = client.parse_resume_text(content, content_type)
 
@@ -2624,14 +2868,16 @@ def create_candidate_from_cv(
             except Exception as exc:
                 warnings.append(f"skillSet update failed: {exc}")
 
-        # Attach CV file (binary mode only)
+        # Attach CV file (file mode only). On success the upload's bytes are dropped
+        # at once (NFR-9); on failure they are kept so the user can retry.
         file_attachment = None
-        if is_binary and file_bytes is not None:
+        if upload is not None:
             try:
-                content_mime = client._guess_content_type(format)
+                content_mime = client._guess_content_type(upload["format"])
                 file_attachment = client.attach_file(
-                    "Candidate", candidate_id, file_bytes, filename, content_mime, file_type="CV"
+                    "Candidate", candidate_id, upload["data"], upload["filename"], content_mime, file_type="CV"
                 )
+                upload_store.mark_attached(upload_id, (file_attachment or {}).get("fileId"))
             except Exception as exc:
                 warnings.append(f"CV file attachment failed: {exc}")
 
@@ -2655,9 +2901,7 @@ def create_candidate_from_cv(
 @mcp.tool()
 def attach_cv(
     candidate_id: int,
-    file_b64: str,
-    filename: str,
-    format: str = "pdf",
+    upload_id: str,
     fields_to_update: list | None = None,
     include_work_history: bool = False,
     include_education: bool = False,
@@ -2666,21 +2910,22 @@ def attach_cv(
 ) -> str:
     """Attach a CV to an existing Candidate, with per-field diff and confirmation.
 
-    This tool uses a two-call confirmation flow:
+    Call request_cv_upload first and send the file; pass the upload_id here.
+    Both calls below use the same upload_id. This tool uses a two-call confirmation flow:
 
     **Call 1 — preview** (omit fields_to_update, force_all=False):
     Parses the CV, fetches the existing Candidate, diffs the fields, and returns
     a preview of what would change. Nothing is written. The CV is not yet attached.
+    The upload is kept for the commit call.
 
     **Call 2 — commit** (provide fields_to_update or force_all=True):
     Re-parses the CV, applies only the listed field updates, optionally writes
-    new work history / education / skills entries, and attaches the CV file.
+    new work history / education / skills entries, and attaches the CV file
+    under its original name.
 
     Args:
         candidate_id: Bullhorn Candidate ID of the existing record.
-        file_b64: Base64-encoded CV bytes (PDF, DOC, DOCX, HTML, or text).
-        filename: Original filename for the CV.
-        format: File format hint: pdf, doc, docx, html, text. Default: pdf.
+        upload_id: The id from request_cv_upload, once get_cv_upload shows 'received'.
         fields_to_update: List of Candidate field API names to apply from parsed data.
                           If None and force_all=False, returns preview only.
         include_work_history: If True (commit only), write new work history entries.
@@ -2698,21 +2943,19 @@ def attach_cv(
                  "skills_added": {...}, "file_attachment": {...}}
 
     Examples:
-        - attach_cv(candidate_id=123, file_b64="...", filename="cv.pdf")
-        - attach_cv(candidate_id=123, file_b64="...", filename="cv.pdf",
+        - attach_cv(candidate_id=123, upload_id="upl_...")
+        - attach_cv(candidate_id=123, upload_id="upl_...",
                     fields_to_update=["occupation", "email"], include_work_history=True)
-        - attach_cv(candidate_id=123, file_b64="...", filename="cv.pdf", force_all=True)
+        - attach_cv(candidate_id=123, upload_id="upl_...", force_all=True)
     """
+    upload, error = _load_received_upload(upload_id)
+    if error:
+        return error
     try:
         client = get_client()
         metadata = get_metadata()
 
-        try:
-            file_bytes = base64.b64decode(file_b64)
-        except Exception as e:
-            return format_response({"error": "invalid_base64", "message": f"Could not decode file_b64: {e}"})
-
-        parsed = client.parse_resume_file(file_bytes, filename, format)
+        parsed = client.parse_resume_file(upload["data"], upload["filename"], upload["format"])
         parsed_candidate = parsed.get("candidate", {})
 
         # Fetch current record (broad field set for diffing)
@@ -2878,11 +3121,13 @@ def attach_cv(
                 except Exception as exc:
                     warnings.append(f"skillSet update failed: {exc}")
 
-        # Always attach the CV file on commit
-        content_mime = client._guess_content_type(format)
+        # Always attach the CV file on commit, then drop the upload's bytes (NFR-9).
+        # If attach_file raises, the upload is kept so the commit can be retried.
+        content_mime = client._guess_content_type(upload["format"])
         file_attachment = client.attach_file(
-            "Candidate", candidate_id, file_bytes, filename, content_mime, file_type="CV"
+            "Candidate", candidate_id, upload["data"], upload["filename"], content_mime, file_type="CV"
         )
+        upload_store.mark_attached(upload_id, (file_attachment or {}).get("fileId"))
 
         result: dict = {
             "committed": True,
@@ -3583,89 +3828,124 @@ def people_search_perplexity(
     })
 
 
-async def _upload_cv_handler(request: Request) -> Response:
-    """Handle POST /upload-cv: accept a CV file and either parse+create or attach to a Candidate."""
-    upload_secret = os.environ.get("UPLOAD_SECRET")
-    if not upload_secret:
-        return JSONResponse({"error": "upload_secret_not_configured"}, status_code=400)
+# CR41: POST /upload/{token}. The token is the only authorisation (the route sits
+# outside Entra, like the CR27 upload route it replaces). It stores bytes in the in-memory
+# upload store and never calls Bullhorn: every Bullhorn write stays inside an MCP
+# tool, where the caller's Entra identity is available. Never log the token.
 
-    provided = request.headers.get("X-Upload-Secret", "")
-    if not provided or not hmac.compare_digest(provided, upload_secret):
-        _logger.warning(
-            "upload-cv auth failure from %s",
-            request.client.host if request.client else "?",
+# Multipart overhead allowance on top of the 10 MB file cap.
+_UPLOAD_BODY_LIMIT = MAX_UPLOAD_BYTES + 64 * 1024
+
+
+class _InMemoryMultiPartParser(MultiPartParser):
+    """Starlette's parser spools file parts above 1 MB to a temp file on disk.
+
+    NFR-9 says received files are held in memory only, so the spool threshold is
+    raised above the capped body size and the file part never rolls to disk.
+    """
+
+    spool_max_size = _UPLOAD_BODY_LIMIT + 1
+
+
+def _cors_origin(request: Request) -> str | None:
+    """Return the Origin to echo back when it is the Claude MCP App sandbox, else None."""
+    origin = request.headers.get("origin")
+    if not origin:
+        return None
+    parsed = urlparse(origin)
+    host = parsed.hostname or ""
+    if parsed.scheme == "https" and host.endswith(".claudemcpcontent.com"):
+        return origin
+    return None
+
+
+def _upload_json(request: Request, body: dict, status_code: int) -> JSONResponse:
+    response = JSONResponse(body, status_code=status_code)
+    origin = _cors_origin(request)
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    return response
+
+
+async def _read_capped_body(request: Request) -> bytes | None:
+    """Read the request body, or return None as soon as it exceeds the limit."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > _UPLOAD_BODY_LIMIT:
+        return None
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > _UPLOAD_BODY_LIMIT:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _upload_handler(request: Request) -> Response:
+    """Handle POST /upload/{token}: receive one CV file (multipart field ``file``)."""
+    if request.method == "OPTIONS":
+        origin = _cors_origin(request)
+        if not origin:
+            return Response(status_code=403)
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+                "Access-Control-Max-Age": "600",
+                "Vary": "Origin",
+            },
         )
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
 
-    form = await request.form()
-    upload = form.get("file")
-    filename = form.get("filename")
-    fmt = form.get("format") or "pdf"
-    candidate_id_raw = form.get("candidate_id")
-    force_raw = form.get("force") or "false"
-
-    if upload is None or not filename:
-        return JSONResponse(
-            {"error": "missing_field", "message": "file and filename are required"},
-            status_code=400,
-        )
-
-    if hasattr(upload, "read"):
-        file_bytes: bytes = await upload.read()
-    else:
-        file_bytes = bytes(upload)
-
-    force = str(force_raw).lower() == "true"
-
-    candidate_id: int | None = None
-    if candidate_id_raw:
-        try:
-            candidate_id = int(candidate_id_raw)
-        except (TypeError, ValueError):
-            return JSONResponse({"error": "invalid_candidate_id"}, status_code=400)
-
-    _logger.info("upload-cv attempt filename=%s candidate_id=%s", filename, candidate_id)
-
+    token = request.path_params.get("token", "")
+    too_large = {
+        "error": "file_too_large",
+        "message": f"The file is larger than the {MAX_UPLOAD_BYTES} byte (10 MB) limit.",
+    }
     try:
-        if candidate_id is not None:
-            client = get_client()
-            content_mime = client._guess_content_type(fmt)
-            result = await asyncio.to_thread(
-                client.attach_file,
-                "Candidate", candidate_id, file_bytes, str(filename), content_mime, None, "CV",
-            )
-            _logger.info("upload-cv success attach candidate_id=%s", candidate_id)
-            return JSONResponse(result, status_code=200)
-        else:
-            file_b64 = base64.b64encode(file_bytes).decode()
-            result_json = await asyncio.to_thread(
-                create_candidate_from_cv,
-                file_b64=file_b64,
-                filename=str(filename),
-                format=str(fmt),
-                force=force,
-            )
-            try:
-                parsed = json.loads(result_json)
-                if "error" in parsed:
-                    _logger.error(
-                        "upload-cv create error filename=%s error=%s",
-                        filename, parsed.get("error"),
-                    )
-                    return JSONResponse(parsed, status_code=500)
-            except (json.JSONDecodeError, TypeError):
-                pass
-            _logger.info("upload-cv success create filename=%s", filename)
-            return Response(content=result_json, media_type="application/json", status_code=200)
-    except BullhornAPIError as exc:
-        _logger.exception("upload-cv bullhorn error filename=%s", filename)
-        return JSONResponse({"error": "bullhorn_error", "message": str(exc)}, status_code=500)
-    except Exception as exc:
-        _logger.exception("upload-cv internal error filename=%s", filename)
-        return JSONResponse({"error": "internal_error", "message": str(exc)}, status_code=500)
+        # Refuse a dead ticket before reading up to 10 MB of body.
+        upload_store.check_token(token)
+
+        if not request.headers.get("content-type", "").startswith("multipart/form-data"):
+            return _upload_json(request, {
+                "error": "missing_file",
+                "message": "Send the CV as multipart/form-data in a field named 'file'.",
+            }, 400)
+
+        body = await _read_capped_body(request)
+        if body is None:
+            return _upload_json(request, too_large, 413)
+
+        async def _body_stream():
+            yield body
+
+        try:
+            form = await _InMemoryMultiPartParser(
+                request.headers, _body_stream(), max_files=1, max_fields=10
+            ).parse()
+        except MultiPartException as exc:
+            return _upload_json(request, {"error": "invalid_multipart", "message": str(exc)}, 400)
+
+        upload = form.get("file")
+        if upload is None or not hasattr(upload, "read"):
+            return _upload_json(request, {
+                "error": "missing_file",
+                "message": "Send the CV as multipart/form-data in a field named 'file'.",
+            }, 400)
+        data = await upload.read()
+        result = upload_store.redeem(token, upload.filename, data)
+    except UploadError as e:
+        _logger.info("cv upload rejected: %s", e.code)
+        return _upload_json(request, {"error": e.code, "message": str(e)}, e.http_status)
+
+    _logger.info("cv upload received upload_id=%s size=%s", result["upload_id"], result["size"])
+    return _upload_json(request, result, 200)
 
 
-mcp.custom_route("/upload-cv", methods=["POST"])(_upload_cv_handler)
+mcp.custom_route("/upload/{token}", methods=["POST", "OPTIONS"])(_upload_handler)
 
 
 def main():

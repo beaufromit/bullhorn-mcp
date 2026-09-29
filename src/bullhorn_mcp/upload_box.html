@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CV upload</title>
+<!--
+  CR41 Route B: the in-chat CV upload box (MCP App, US-49).
+  The host sends this frame the show_cv_upload_box tool result (upload_url,
+  filename, limits) over the MCP Apps postMessage bridge. The file goes straight
+  from the browser to POST {upload_url} as multipart form data. It never passes
+  through the model or a tool argument, and there is no base64 anywhere.
+  No external scripts: the host's default CSP allows inline script only, and
+  connect-src is widened to our server by the resource's connectDomains.
+-->
+<style>
+  :root { --fg: #1f2328; --muted: #656d76; --border: #d0d7de; --accent: #0969da; --ok: #1a7f37; --err: #cf222e; --bg: #ffffff; --drop: #f6f8fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --accent: #4493f8; --ok: #3fb950; --err: #f85149; --bg: #0d1117; --drop: #151b23; }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { padding: 12px 16px; }
+  #zone { border: 2px dashed var(--border); border-radius: 8px; background: var(--drop); padding: 20px 12px; text-align: center; cursor: pointer; }
+  #zone.over { border-color: var(--accent); }
+  #zone.busy { opacity: .6; pointer-events: none; }
+  .muted { color: var(--muted); font-size: 13px; }
+  #status { margin-top: 10px; min-height: 1.4em; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  button { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <div id="zone" role="button" tabindex="0" aria-describedby="hint">
+    <strong>Drop the CV here</strong> or <button type="button" id="pick">choose a file</button>
+    <div id="hint" class="muted">Waiting for upload details…</div>
+  </div>
+  <input type="file" id="file" hidden>
+  <div id="status" role="status" aria-live="polite"></div>
+</main>
+<script>
+(function () {
+  "use strict";
+  var zone = document.getElementById("zone");
+  var input = document.getElementById("file");
+  var hint = document.getElementById("hint");
+  var statusEl = document.getElementById("status");
+  var ticket = null;
+  var done = false;
+  var nextId = 1;
+  var pending = {};
+
+  function setStatus(text, kind) {
+    statusEl.textContent = text;
+    statusEl.className = kind || "";
+    reportSize();
+  }
+
+  // --- MCP Apps bridge (JSON-RPC 2.0 over postMessage to the host) ---
+  function send(msg) { window.parent.postMessage(msg, "*"); }
+  function request(method, params) {
+    var id = nextId++;
+    send({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
+    return new Promise(function (resolve, reject) { pending[id] = { resolve: resolve, reject: reject }; });
+  }
+  function notify(method, params) { send({ jsonrpc: "2.0", method: method, params: params || {} }); }
+  function reportSize() {
+    notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight });
+  }
+
+  function readTicket(result) {
+    if (!result) return null;
+    var data = result.structuredContent;
+    if (data && data.result && typeof data.result === "string") data = null;
+    if (!data || !data.upload_url) {
+      var blocks = result.content || [];
+      for (var i = 0; i < blocks.length; i++) {
+        if (blocks[i].type === "text" && blocks[i].text) {
+          try { data = JSON.parse(blocks[i].text); break; } catch (e) { /* not JSON */ }
+        }
+      }
+    }
+    return data && data.upload_url ? data : null;
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent) return;
+    var msg = event.data;
+    if (!msg || msg.jsonrpc !== "2.0") return;
+    if (msg.id !== undefined && pending[msg.id] && !msg.method) {
+      var p = pending[msg.id];
+      delete pending[msg.id];
+      if (msg.error) p.reject(msg.error); else p.resolve(msg.result);
+      return;
+    }
+    if (msg.method === "ui/notifications/tool-result") {
+      var t = readTicket(msg.params);
+      if (t) {
+        ticket = t;
+        var mb = Math.round((t.max_bytes || 10485760) / 1048576);
+        hint.textContent = "For " + t.filename + " (." + (t.allowed_extensions || []).join(", .") + ", up to " + mb + " MB)";
+        if (input && t.allowed_extensions) input.accept = t.allowed_extensions.map(function (e) { return "." + e; }).join(",");
+      } else {
+        var err = "The upload could not be started.";
+        try { var body = JSON.parse(msg.params.content[0].text); if (body.message) err = body.message; } catch (e) { /* keep default */ }
+        hint.textContent = err;
+        zone.classList.add("busy");
+      }
+      reportSize();
+    }
+  });
+
+  request("ui/initialize", {
+    protocolVersion: "2026-01-26",
+    capabilities: {},
+    clientInfo: { name: "bullhorn-cv-upload-box", version: "1.0.0" },
+    appCapabilities: {}
+  }).then(function () {
+    notify("ui/notifications/initialized", {});
+    reportSize();
+  }, function () { /* host without the bridge: nothing else to do */ });
+
+  // --- file handling ---
+  function extensionOf(name) {
+    var dot = name.lastIndexOf(".");
+    return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  }
+
+  function upload(file) {
+    if (done) return;
+    if (!ticket) { setStatus("Still waiting for upload details. Try again in a moment.", "err"); return; }
+    var allowed = ticket.allowed_extensions || [];
+    if (allowed.length && allowed.indexOf(extensionOf(file.name)) === -1) {
+      setStatus("That file is not a ." + allowed.join(", .") + " file.", "err");
+      return;
+    }
+    if (file.size === 0) { setStatus("That file is empty.", "err"); return; }
+    if (file.size > (ticket.max_bytes || 10485760)) { setStatus("That file is larger than 10 MB, which is Bullhorn's limit.", "err"); return; }
+
+    var form = new FormData();
+    form.append("file", file, file.name);
+    zone.classList.add("busy");
+    setStatus("Uploading " + file.name + "…");
+    fetch(ticket.upload_url, { method: "POST", body: form })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (body) { return { ok: res.ok, body: body }; });
+      })
+      .then(function (r) {
+        if (!r.ok) {
+          zone.classList.remove("busy");
+          setStatus((r.body && r.body.message) || "The upload failed. Try again.", "err");
+          return;
+        }
+        done = true;
+        setStatus("Received " + (r.body.filename || file.name) + ". You can tell Claude to continue.", "ok");
+        request("ui/message", {
+          role: "user",
+          content: { type: "text", text: "I've uploaded the CV in the upload box (upload_id " + ticket.upload_id + "). Please continue." }
+        }).catch(function () { /* the on-screen message is enough */ });
+      })
+      .catch(function () {
+        zone.classList.remove("busy");
+        setStatus("The upload could not reach the server. Tell Claude the file could not be sent.", "err");
+      });
+  }
+
+  document.getElementById("pick").addEventListener("click", function (e) { e.stopPropagation(); input.click(); });
+  zone.addEventListener("click", function () { input.click(); });
+  zone.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
+  input.addEventListener("change", function () { if (input.files && input.files[0]) upload(input.files[0]); });
+  zone.addEventListener("dragover", function (e) { e.preventDefault(); zone.classList.add("over"); });
+  zone.addEventListener("dragleave", function () { zone.classList.remove("over"); });
+  zone.addEventListener("drop", function (e) {
+    e.preventDefault();
+    zone.classList.remove("over");
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+  });
+})();
+</script>
+</body>
+</html>
