@@ -7,12 +7,15 @@ import pytest
 from bullhorn_mcp import uploads
 from bullhorn_mcp.uploads import (
     FILE_TTL_SECONDS,
+    MAX_OPEN_UPLOADS_PER_USER,
     MAX_UPLOAD_BYTES,
     TICKET_TTL_SECONDS,
     UploadAlreadyUsed,
     UploadBadType,
     UploadEmpty,
     UploadExpired,
+    UploadInUse,
+    UploadLimitReached,
     UploadNotFound,
     UploadStore,
     UploadTooLarge,
@@ -272,6 +275,47 @@ class TestGetAndAttach:
 
     def test_mark_attached_unknown_id_is_noop(self, store):
         assert store.mark_attached("upl_missing", file_id=1) is None
+
+
+class TestOpenUploadCap:
+    def test_cap_blocks_extra_ticket_for_same_user_only(self, store):
+        for _ in range(MAX_OPEN_UPLOADS_PER_USER):
+            store.create(OWNER, "cv.pdf")
+        with pytest.raises(UploadLimitReached) as exc:
+            store.create(OWNER, "cv.pdf")
+        assert exc.value.code == "too_many_uploads"
+        assert exc.value.http_status == 429
+        store.create(OTHER, "cv.pdf")  # another user is unaffected
+
+    def test_attached_and_expired_uploads_free_a_slot(self, store, clock):
+        first = _received(store)
+        for _ in range(MAX_OPEN_UPLOADS_PER_USER - 1):
+            store.create(OWNER, "cv.pdf")
+        store.mark_attached(first, file_id=1)
+        store.create(OWNER, "cv.pdf")  # the attached one no longer counts
+
+        clock.advance(TICKET_TTL_SECONDS)
+        store.create(OWNER, "cv.pdf")  # expired tickets no longer count
+
+
+class TestClaim:
+    def test_second_claim_refused_until_release(self, store):
+        upload_id = _received(store)
+        store.claim(upload_id, OWNER)
+        with pytest.raises(UploadInUse) as exc:
+            store.claim(upload_id, OWNER)
+        assert exc.value.code == "upload_in_use"
+
+        store.release(upload_id)
+        store.claim(upload_id, OWNER)
+
+    def test_other_user_cannot_claim(self, store):
+        upload_id = _received(store)
+        with pytest.raises(UploadNotFound):
+            store.claim(upload_id, OTHER)
+
+    def test_release_unclaimed_is_noop(self, store):
+        assert store.release("upl_missing") is None
 
 
 class TestHelpers:

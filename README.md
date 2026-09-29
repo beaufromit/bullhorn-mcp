@@ -316,6 +316,8 @@ CV files never travel through a tool argument. The server issues a single-use up
 - Maximum file size 10 MB (Bullhorn's attachment limit).
 - Allowed types: `pdf`, `doc`, `docx`, `rtf`, `odt`, `txt`, `html`, `htm`.
 - Tickets are single use and expire after 15 minutes. The token is stored only as a SHA-256 hash and is bound to the caller's Entra identity.
+- The token is blanked in the server's own access log (`/upload/<redacted>`). If the reverse proxy (Caddy) has access logging turned on, it will record the full path, so keep Caddy's access log off for this site or filter `/upload/*` out of it.
+- Each user can have at most 10 uploads open (pending or received) at once.
 - Files are held in server memory only, never on disk. A file is deleted as soon as it is attached in Bullhorn, otherwise purged 30 minutes after upload. A server restart drops any in-flight uploads.
 - The upload route never calls Bullhorn. Only the tools above do.
 - CORS is allowed only for `https://*.claudemcpcontent.com` (the MCP App sandbox).

@@ -18,7 +18,13 @@ Security and retention rules (NFR-9):
   "not found", never "forbidden", so ids cannot be probed.
 - Bytes live in memory only. They are dropped on attach, or 30 minutes after
   upload otherwise. A small tombstone survives so ``get`` can say ``attached``
-  or ``expired`` instead of "not found"; tombstones are removed 30 minutes later.
+  or ``expired`` instead of "not found". An ``attached`` tombstone is removed at
+  the original 30-minute purge time (30 minutes after upload, however soon the
+  attach happened); an ``expired`` one is removed 30 minutes after it expired.
+- Each user may hold at most ``MAX_OPEN_UPLOADS_PER_USER`` pending or received
+  uploads at once, so one caller cannot fill process memory with parked files.
+- A commit call ``claim``s the upload for the length of its Bullhorn writes, so
+  two overlapping calls on one ``upload_id`` cannot both write and attach.
 - Purging is lazy (on every call). No background thread.
 
 Production is one process, so this module-level store is shared by the MCP tools
@@ -42,6 +48,8 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 ALLOWED_EXTENSIONS = frozenset({"pdf", "doc", "docx", "rtf", "odt", "txt", "html", "htm"})
 TICKET_TTL_SECONDS = 15 * 60
 FILE_TTL_SECONDS = 30 * 60
+# Pending plus received uploads one user may hold at once (10 x 10 MB at most).
+MAX_OPEN_UPLOADS_PER_USER = 10
 
 # Bullhorn's parser takes "text" and "html" rather than the file suffixes.
 _PARSER_FORMAT = {"txt": "text", "htm": "html"}
@@ -82,6 +90,16 @@ class UploadBadType(UploadError):
 class UploadEmpty(UploadError):
     code = "empty_file"
     http_status = 400
+
+
+class UploadLimitReached(UploadError):
+    code = "too_many_uploads"
+    http_status = 429
+
+
+class UploadInUse(UploadError):
+    code = "upload_in_use"
+    http_status = 409
 
 
 def file_extension(filename: str | None) -> str | None:
@@ -131,6 +149,7 @@ class UploadStore:
         self._lock = threading.Lock()
         self._uploads: dict[str, _Upload] = {}
         self._by_token: dict[str, str] = {}  # token hash -> upload_id
+        self._claimed: set[str] = set()  # upload_ids a commit call is using
 
     # --- internal -------------------------------------------------------
 
@@ -194,6 +213,15 @@ class UploadStore:
         with self._lock:
             now = self._clock()
             self._purge(now)
+            open_count = sum(
+                1 for r in self._uploads.values()
+                if r.owner_sub == owner_sub and r.status in ("pending", "received")
+            )
+            if open_count >= MAX_OPEN_UPLOADS_PER_USER:
+                raise UploadLimitReached(
+                    f"You already have {open_count} open CV uploads (the limit is "
+                    f"{MAX_OPEN_UPLOADS_PER_USER}). Finish or wait out one of them first."
+                )
             upload_id = "upl_" + secrets.token_hex(12)
             rec = _Upload(
                 upload_id=upload_id,
@@ -298,6 +326,25 @@ class UploadStore:
                 "data": rec.data if rec.status == "received" else None,
             }
 
+    def claim(self, upload_id: str, owner_sub: str) -> None:
+        """Reserve a received upload for one commit call. Pair with ``release``.
+
+        Raises ``UploadInUse`` while another call holds it, so two overlapping
+        commits on one ``upload_id`` cannot both write to Bullhorn and attach.
+        """
+        with self._lock:
+            now = self._clock()
+            self._purge(now)
+            self._owned(upload_id, owner_sub)
+            if upload_id in self._claimed:
+                raise UploadInUse(f"Upload '{upload_id}' is being used by another call right now.")
+            self._claimed.add(upload_id)
+
+    def release(self, upload_id: str) -> None:
+        """End a ``claim``. Safe to call after ``mark_attached`` or a purge."""
+        with self._lock:
+            self._claimed.discard(upload_id)
+
     def mark_attached(self, upload_id: str, file_id: object = None) -> None:
         """Drop the bytes once Bullhorn holds the file; keep a tombstone until the purge."""
         with self._lock:
@@ -318,3 +365,4 @@ def _reset_upload_store() -> None:
     with upload_store._lock:
         upload_store._uploads.clear()
         upload_store._by_token.clear()
+        upload_store._claimed.clear()

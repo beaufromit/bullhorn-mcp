@@ -2380,6 +2380,8 @@ def _upload_error(e: UploadError) -> str:
         "upload_expired": "The upload expired. Call request_cv_upload again and resend the file.",
         "upload_already_used": "This upload has already been used. Call request_cv_upload for a new one.",
         "unsupported_file_type": "Allowed CV types: " + ", ".join(sorted(ALLOWED_EXTENSIONS)) + ".",
+        "too_many_uploads": "Use or finish the uploads already started; unused ones expire after 15 minutes.",
+        "upload_in_use": "Wait for the other call on this upload to finish, then check get_cv_upload(upload_id).",
     }
     body = {"error": e.code, "message": str(e)}
     if e.code in hints:
@@ -2387,11 +2389,17 @@ def _upload_error(e: UploadError) -> str:
     return format_response(body)
 
 
-def _load_received_upload(upload_id: str) -> tuple[dict | None, str | None]:
+def _load_received_upload(upload_id: str, claim: bool = False) -> tuple[dict | None, str | None]:
     """Fetch a received upload for the caller. Returns ``(record, None)`` or ``(None, error_json)``.
 
     The record keeps its bytes; the caller must call ``upload_store.mark_attached``
     after a successful Bullhorn attach so the bytes are dropped (NFR-9).
+
+    With ``claim=True`` (commit calls) the upload is reserved before its status is
+    read, so an overlapping commit on the same upload gets ``upload_in_use`` and a
+    call that waited for another's attach sees ``attached``. On success the caller
+    must ``upload_store.release(upload_id)`` in a ``finally``; on error it is
+    already released.
     """
     unavailable = _uploads_unavailable()
     if unavailable:
@@ -2401,12 +2409,18 @@ def _load_received_upload(upload_id: str) -> tuple[dict | None, str | None]:
     except IdentityResolutionError as e:
         return None, format_response({"error": "identity_resolution_failed", "message": str(e)})
     try:
+        if claim:
+            upload_store.claim(upload_id, sub)
         rec = upload_store.get(upload_id, sub)
     except UploadError as e:
+        if claim and e.code != "upload_in_use":
+            upload_store.release(upload_id)
         return None, _upload_error(e)
     status = rec["status"]
     if status == "received":
         return rec, None
+    if claim:
+        upload_store.release(upload_id)
     if status == "pending":
         return None, format_response({
             "error": "upload_pending",
@@ -2561,10 +2575,20 @@ def show_cv_upload_box(upload_id: str) -> str:
     except IdentityResolutionError as e:
         return format_response({"error": "identity_resolution_failed", "message": str(e)})
     try:
+        rec = upload_store.get(upload_id, sub)
+        if rec["status"] == "received":
+            # The file is already here; starting over would mean resending it.
+            return format_response({
+                "error": "upload_already_received",
+                "message": f"Upload '{upload_id}' has already received its file, so no upload box is needed.",
+                "hint": (
+                    f"Carry on with create_candidate_from_cv(upload_id='{upload_id}') for a new "
+                    f"candidate, or attach_cv(candidate_id=..., upload_id='{upload_id}') for an existing one."
+                ),
+            })
         # The store keeps only token hashes, so the box gets a fresh token for the
         # same ticket; the old URL stops working.
         token, expires_at = upload_store.reissue_token(upload_id, sub)
-        rec = upload_store.get(upload_id, sub)
     except UploadError as e:
         return _upload_error(e)
     return format_response({
@@ -2729,12 +2753,26 @@ def create_candidate_from_cv(
             "message": "Provide either upload_id or content, not both.",
         })
 
-    upload: dict | None = None
-    if is_binary:
-        upload, error = _load_received_upload(upload_id)
-        if error:
-            return error
+    if not is_binary:
+        return _create_candidate_from_cv(None, None, content, content_type, force, fields_override)
+    upload, error = _load_received_upload(upload_id, claim=True)
+    if error:
+        return error
+    try:
+        return _create_candidate_from_cv(upload, upload_id, None, content_type, force, fields_override)
+    finally:
+        upload_store.release(upload_id)
 
+
+def _create_candidate_from_cv(
+    upload: dict | None,
+    upload_id: str | None,
+    content: str | None,
+    content_type: str,
+    force: bool,
+    fields_override: dict | None,
+) -> str:
+    """Body of create_candidate_from_cv once the input is checked and any upload claimed."""
     try:
         client = get_client()
         metadata = get_metadata()
@@ -2891,6 +2929,18 @@ def create_candidate_from_cv(
         }
         if warnings:
             result["warnings"] = warnings
+        if upload is not None and file_attachment is None:
+            # The Candidate exists now. Calling this tool again would flag it as a
+            # duplicate, and force=True would create a second one, so point the
+            # retry at attach_cv on the new record instead.
+            result["cv_attach_retry"] = {
+                "message": (
+                    f"Candidate {candidate_id} was created but the CV file was not attached. "
+                    "Do not call create_candidate_from_cv again for this CV. To retry only the "
+                    "attachment, make the call below (the upload is kept until it expires)."
+                ),
+                "next_call": f"attach_cv(candidate_id={candidate_id}, upload_id='{upload_id}', fields_to_update=[])",
+            }
 
         return format_response(result)
 
@@ -2948,9 +2998,46 @@ def attach_cv(
                     fields_to_update=["occupation", "email"], include_work_history=True)
         - attach_cv(candidate_id=123, upload_id="upl_...", force_all=True)
     """
-    upload, error = _load_received_upload(upload_id)
+    # Only the commit writes and attaches, so only the commit claims the upload.
+    commit = fields_to_update is not None or force_all
+    upload, error = _load_received_upload(upload_id, claim=commit)
     if error:
         return error
+    try:
+        hinted = upload["candidate_id"]
+        if hinted is not None and hinted != candidate_id:
+            return format_response({
+                "error": "upload_candidate_mismatch",
+                "message": (
+                    f"Upload '{upload_id}' was started for Candidate {hinted}, "
+                    f"not Candidate {candidate_id}. Nothing was changed."
+                ),
+                "hint": (
+                    f"If the CV is for Candidate {hinted}, call attach_cv(candidate_id={hinted}, "
+                    f"upload_id='{upload_id}'). Otherwise call request_cv_upload with the right "
+                    "candidate_id (or none) and resend the file."
+                ),
+            })
+        return _attach_cv(
+            candidate_id, upload, upload_id, fields_to_update,
+            include_work_history, include_education, include_skills, force_all,
+        )
+    finally:
+        if commit:
+            upload_store.release(upload_id)
+
+
+def _attach_cv(
+    candidate_id: int,
+    upload: dict,
+    upload_id: str,
+    fields_to_update: list | None,
+    include_work_history: bool,
+    include_education: bool,
+    include_skills: bool,
+    force_all: bool,
+) -> str:
+    """Body of attach_cv once the upload is loaded (and claimed for a commit)."""
     try:
         client = get_client()
         metadata = get_metadata()
@@ -3948,6 +4035,21 @@ async def _upload_handler(request: Request) -> Response:
 mcp.custom_route("/upload/{token}", methods=["POST", "OPTIONS"])(_upload_handler)
 
 
+class _RedactUploadTokenFilter(logging.Filter):
+    """Blank the token in uvicorn access-log lines for ``/upload/{token}``.
+
+    A rejected file does not use up a ticket, so a token copied from a log would
+    stay redeemable for up to 15 minutes. uvicorn logs the path as the third arg.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) \
+                and args[2].startswith("/upload/"):
+            record.args = args[:2] + ("/upload/<redacted>",) + args[3:]
+        return True
+
+
 def main():
     """Run the MCP server.
 
@@ -3968,6 +4070,7 @@ def main():
         _logger.warning("Could not enrich tool descriptions at startup: %s", exc)
 
     if _transport_mode == "http":
+        logging.getLogger("uvicorn.access").addFilter(_RedactUploadTokenFilter())
         _logger.info(
             "Starting Bullhorn MCP server in HTTP mode on %s:%s", _host, _port
         )

@@ -6329,6 +6329,76 @@ class TestCreateCandidateFromCv:
         assert rec["status"] == "received"
         assert rec["data"] == _CV_BYTES
 
+    def test_create_attach_failure_points_retry_at_attach_cv(self, mock_client, mock_metadata, sample_parsed_resume):
+        """A failed attach says to retry with attach_cv on the new record, and that retry makes no second Candidate."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        mock_client.attach_file.side_effect = BullhornAPIError("attach boom")
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        candidate_id = data["candidate_id"]
+        retry = data["cv_attach_retry"]
+        assert retry["next_call"] == (
+            f"attach_cv(candidate_id={candidate_id}, upload_id='{upload_id}', fields_to_update=[])"
+        )
+        assert "Do not call create_candidate_from_cv again" in retry["message"]
+
+        # Follow the retry exactly as given.
+        creates_before = mock_client.create.call_count
+        mock_client.attach_file.side_effect = None
+        mock_client.attach_file.return_value = {"fileId": 56}
+        mock_client.update.reset_mock()
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            retried = json.loads(server.attach_cv(
+                candidate_id=candidate_id, upload_id=upload_id, fields_to_update=[],
+            ))
+
+        assert retried["committed"] is True
+        assert retried["fields_updated"] == []
+        assert mock_client.create.call_count == creates_before
+        mock_client.update.assert_not_called()
+        assert mock_client.attach_file.call_args.args[:2] == ("Candidate", candidate_id)
+        assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
+
+    def test_create_success_has_no_retry_block(self, mock_client, mock_metadata, sample_parsed_resume):
+        """A successful attach returns no cv_attach_retry."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["file_attachment"] is not None
+        assert "cv_attach_retry" not in data
+
+    def test_create_refused_while_upload_in_use(self, mock_client, mock_metadata, sample_parsed_resume):
+        """A second overlapping commit on one upload gets upload_in_use and writes nothing."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        server.upload_store.claim(upload_id, "user-a")  # another call holds it
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["error"] == "upload_in_use"
+        mock_client.parse_resume_file.assert_not_called()
+        mock_client.create.assert_not_called()
+        from bullhorn_mcp.uploads import UploadInUse
+        with pytest.raises(UploadInUse):
+            server.upload_store.claim(upload_id, "user-a")  # the other call still holds it
+
+    def test_create_releases_claim_on_duplicate(self, mock_client, mock_metadata, sample_parsed_resume):
+        """Returning early (duplicate found) still releases the upload for the next call."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        with patch.object(server, "_check_candidate_duplicates", return_value={"id": 9}):
+            data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["duplicate_found"] is True
+        server.upload_store.claim(upload_id, "user-a")  # does not raise
+
     def test_upload_pending_error(self, mock_client, mock_metadata):
         """A ticket with no file redeemed yet returns upload_pending and does not parse."""
         upload_id, _token, _ = server.upload_store.create("user-a", "Jane_Doe_CV.pdf")
@@ -6469,6 +6539,73 @@ class TestAttachCv:
         data = json.loads(result)
         assert data["committed"] is True
         mock_client.attach_file.assert_called_once()
+
+    def _attach(self, mock_client, mock_metadata, **kwargs):
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            return json.loads(server.attach_cv(**kwargs))
+
+    def test_attach_cv_refuses_other_candidate_than_ticket(self, mock_client, mock_metadata):
+        """An upload started for Candidate 111 cannot be attached to Candidate 222."""
+        upload_id = _seed_upload(candidate_id=111)
+
+        preview = self._attach(mock_client, mock_metadata, candidate_id=222, upload_id=upload_id)
+        commit = self._attach(mock_client, mock_metadata, candidate_id=222, upload_id=upload_id, force_all=True)
+
+        for data in (preview, commit):
+            assert data["error"] == "upload_candidate_mismatch"
+            assert "attach_cv(candidate_id=111" in data["hint"]
+        mock_client.parse_resume_file.assert_not_called()
+        mock_client.attach_file.assert_not_called()
+        server.upload_store.claim(upload_id, "user-a")  # the commit released it
+
+    def test_attach_cv_matching_ticket_candidate_proceeds(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """The ticket's candidate_id hint matching the call lets the preview run."""
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.get.return_value = dict(sample_candidate)
+        mock_client.query.return_value = []
+        upload_id = _seed_upload(candidate_id=sample_candidate["id"])
+
+        data = self._attach(mock_client, mock_metadata, candidate_id=sample_candidate["id"], upload_id=upload_id)
+
+        assert data["preview"] is True
+
+    def test_attach_cv_commit_refused_while_upload_in_use(self, mock_client, mock_metadata, sample_candidate):
+        """A commit overlapping another commit on the same upload gets upload_in_use."""
+        upload_id = _seed_upload()
+        server.upload_store.claim(upload_id, "user-a")
+
+        data = self._attach(mock_client, mock_metadata, candidate_id=sample_candidate["id"],
+                            upload_id=upload_id, force_all=True)
+
+        assert data["error"] == "upload_in_use"
+        mock_client.parse_resume_file.assert_not_called()
+
+    def test_attach_cv_preview_does_not_claim(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+        """A preview writes nothing, so it runs even while a commit holds the upload."""
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.get.return_value = dict(sample_candidate)
+        mock_client.query.return_value = []
+        upload_id = _seed_upload()
+        server.upload_store.claim(upload_id, "user-a")
+
+        data = self._attach(mock_client, mock_metadata, candidate_id=sample_candidate["id"], upload_id=upload_id)
+
+        assert data["preview"] is True
+
+    def test_attach_cv_commit_releases_claim_on_error(self, mock_client, mock_metadata, sample_candidate):
+        """A commit that fails at Bullhorn releases the upload so the user can retry."""
+        mock_client.parse_resume_file.side_effect = BullhornAPIError("Parse failed")
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            result = server.attach_cv(candidate_id=sample_candidate["id"], upload_id=upload_id, force_all=True)
+
+        assert result.startswith("ERROR:")
+        server.upload_store.claim(upload_id, "user-a")  # does not raise
 
     def test_attach_cv_api_error(self, mock_client, mock_metadata):
         """attach_cv returns ERROR: prefix on BullhornAPIError from parse."""
@@ -7193,6 +7330,25 @@ class TestUploadRoute:
 
     MCP_APP_ORIGIN = "https://abc123.claudemcpcontent.com"
 
+    def test_access_log_filter_redacts_upload_token(self):
+        """uvicorn's access line for /upload/<token> is logged with the token blanked."""
+        import logging
+        record = logging.LogRecord(
+            "uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+            ("1.2.3.4:5", "POST", "/upload/SECRETTOKEN", "1.1", 410), None,
+        )
+        assert server._RedactUploadTokenFilter().filter(record) is True
+        assert "SECRETTOKEN" not in record.getMessage()
+        assert "/upload/<redacted>" in record.getMessage()
+
+    def test_access_log_filter_leaves_other_paths(self):
+        """Lines for other paths are unchanged."""
+        import logging
+        args = ("1.2.3.4:5", "POST", "/mcp", "1.1", 200)
+        record = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, "%s %s %s %s %d", args, None)
+        server._RedactUploadTokenFilter().filter(record)
+        assert record.args == args
+
     @pytest.fixture
     def http(self):
         from starlette.testclient import TestClient
@@ -7532,9 +7688,10 @@ class TestShowCvUploadBox:
 
     def test_upload_box_ui_domain_hash(self):
         """The app domain is sha256 of the MCP endpoint URL, 32 hex chars, on claudemcpcontent.com."""
-        import hashlib
         from fastmcp.apps.config import app_config_to_meta_dict
-        expected = hashlib.sha256(b"https://mcp.thepanel.com/mcp").hexdigest()[:32] + ".claudemcpcontent.com"
+        # Literal, precomputed for the production endpoint, so the test does not
+        # rebuild the formula it checks.
+        expected = "8b033b271394feeafd205db9b9cd21d9.claudemcpcontent.com"
 
         plain = app_config_to_meta_dict(server._upload_box_app_config("https://mcp.thepanel.com"))
         slashed = app_config_to_meta_dict(server._upload_box_app_config("https://mcp.thepanel.com/"))
@@ -7592,12 +7749,25 @@ class TestShowCvUploadBox:
         assert data["error"] == "upload_not_found"
 
     def test_upload_box_on_received_upload_errors(self):
-        """A box for an upload that already holds its file is refused with upload_already_used."""
+        """A box for an upload that already holds its file says to carry on, not to start over."""
         upload_id = _seed_upload()
 
         data = self._show(upload_id)
 
+        assert data["error"] == "upload_already_received"
+        assert "create_candidate_from_cv" in data["hint"]
+        assert "request_cv_upload" not in data["hint"]
+        assert server.upload_store.get(upload_id, "user-a")["status"] == "received"
+
+    def test_upload_box_on_attached_upload_says_start_over(self):
+        """A box for an attached upload is refused and points at request_cv_upload."""
+        upload_id = _seed_upload()
+        server.upload_store.mark_attached(upload_id, 1)
+
+        data = self._show(upload_id)
+
         assert data["error"] == "upload_already_used"
+        assert "request_cv_upload" in data["hint"]
 
 
 class TestQueryEntitiesNoteGuard:
