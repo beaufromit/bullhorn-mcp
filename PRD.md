@@ -197,6 +197,7 @@ The MCP shall provide tools for creating Candidate records and processing CVs:
 - `parse_cv_text` shall accept raw CV text (as a string) and return the same structured field suggestions.
 - `create_candidate_from_cv` shall parse a CV and create a Candidate in one operation, applying the same field-injection rules as `create_candidate`.
 - `attach_cv` shall attach a CV file to an existing Candidate record using a two-call commit pattern: the first call returns a preview of parsed fields with `committed: false`; the second call (with `force_all=true` or a `fields_to_update` list) writes the fields and attaches the file.
+- CV parsing shall populate the parsed Candidate description with the CV: rendered as HTML for an uploaded file, and in the input's own form (plain text or HTML) for pasted text (CR42). Every CV tool path (`parse_cv`, `parse_cv_text`, `create_candidate_from_cv` in both modes, `attach_cv`) shall parse successfully against the live tenant.
 
 ### FR-15 Amendment: CV File Intake Without Base64 (CR41)
 
@@ -515,7 +516,7 @@ As an automated agent, before creating a candidate, I want to check whether they
 
 **US-31: Parse a CV and create or attach a candidate**
 As a recruiter, I want to upload or paste a CV and have the MCP extract candidate fields and optionally create or update the candidate, so that CV processing is automated.
-- **Acceptance**: `parse_cv` returns a structured field suggestion object from the uploaded file (`upload_id`, see US-48) without creating any record. `create_candidate_from_cv` parses the CV and creates the candidate in one step. `attach_cv` first returns a preview (`committed: false`) with parsed field suggestions; on second call with `force_all=true` or `fields_to_update`, the fields are written and the file attached to the existing candidate.
+- **Acceptance**: `parse_cv` returns a structured field suggestion object from the uploaded file (`upload_id`, see US-48) without creating any record. `create_candidate_from_cv` parses the CV and creates the candidate in one step. `attach_cv` first returns a preview (`committed: false`) with parsed field suggestions; on second call with `force_all=true` or `fields_to_update`, the fields are written and the file attached to the existing candidate. A Candidate created from an uploaded CV has the CV as HTML in its description (CR42).
 
 **US-48: Attach a CV once in Cowork**
 As a consultant, I want to attach a CV to a Cowork chat and ask Claude to add the candidate (or attach the CV to an existing one), so that the file is parsed and attached in Bullhorn without me selecting it again.

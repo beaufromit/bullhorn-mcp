@@ -205,14 +205,21 @@ class BullhornClient:
         Args:
             file_bytes: Raw file bytes (PDF, DOC, DOCX, HTML, text)
             filename: Original filename (used in the multipart upload)
-            format: File format hint (pdf, doc, docx, html, text)
+            format: Input file type (pdf, doc, docx, html, text)
+
+        On this endpoint ``format`` is the input file type, while
+        ``populateDescription`` must be ``text`` or ``html`` (not ``true``).
+        Bullhorn's 400 "Invalid format: Must be 'text' or 'html'." names the
+        wrong parameter: it is about ``populateDescription`` (CR42 live
+        evidence). ``html`` keeps the CV layout in the Candidate's
+        description / Resume tab (owner choice, CR42).
 
         Returns:
             Parsed resume data: candidate, candidateEducation, candidateWorkHistory, skillList
         """
         content_type = self._guess_content_type(format)
         files = {"resume": (filename, file_bytes, content_type)}
-        params = {"format": format, "populateDescription": "true"}
+        params = {"format": format, "populateDescription": "html"}
         return self._request_multipart("POST", "/resume/parseToCandidate", files=files, params=params)
 
     def parse_resume_text(
@@ -224,11 +231,21 @@ class BullhornClient:
             content: Plain text or HTML CV content
             content_type: MIME type of the content (text/plain or text/html)
 
+        On this endpoint ``format`` (``text`` or ``html``) is a required
+        **query** parameter; a copy in the JSON body is ignored and Bullhorn
+        returns 400 "Missing parameter format." (CR42 live evidence). The
+        description is populated in the input's own form, since pasted plain
+        text has no HTML layout to keep.
+
         Returns:
             Parsed resume data: candidate, candidateEducation, candidateWorkHistory, skillList
         """
-        body = {"resume": content, "type": content_type, "format": "text"}
-        return self._request("POST", "/resume/parseToCandidateViaJson", json=body)
+        fmt = "html" if content_type.startswith("text/html") else "text"
+        body = {"resume": content, "type": content_type}
+        params = {"format": fmt, "populateDescription": fmt}
+        return self._request(
+            "POST", "/resume/parseToCandidateViaJson", params=params, json=body
+        )
 
     def attach_file(
         self,

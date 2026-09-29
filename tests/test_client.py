@@ -1373,10 +1373,23 @@ class TestParseResume:
         result = client.parse_resume_file(b"%PDF-fake", "resume.pdf", "pdf")
 
         assert route.called
-        url = str(route.calls[0].request.url)
-        assert "format=pdf" in url
-        assert "populateDescription=true" in url
+        # Exact params: Bullhorn 400s on populateDescription=true (CR42)
+        params = dict(route.calls[0].request.url.params)
+        assert params == {"format": "pdf", "populateDescription": "html"}
         assert result["candidate"]["email"] == "jane.doe@example.com"
+
+    @respx.mock
+    def test_parse_resume_file_docx_params(self, mock_auth, mock_session, sample_parsed_resume):
+        """parse_resume_file() sends the file type as format and html description for docx."""
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidate").mock(
+            return_value=httpx.Response(200, json=sample_parsed_resume)
+        )
+
+        client = BullhornClient(mock_auth)
+        client.parse_resume_file(b"fake-docx-bytes", "resume.docx", "docx")
+
+        params = dict(route.calls[0].request.url.params)
+        assert params == {"format": "docx", "populateDescription": "html"}
 
     @respx.mock
     def test_parse_resume_file_infers_content_type(self, mock_auth, mock_session, sample_parsed_resume):
@@ -1403,15 +1416,16 @@ class TestParseResume:
         result = client.parse_resume_text("Jane Doe\nEngineer\njane@example.com", "text/plain")
 
         assert route.called
+        # format must be a query param; Bullhorn ignores a body copy (CR42)
+        params = dict(route.calls[0].request.url.params)
+        assert params == {"format": "text", "populateDescription": "text"}
         body = _json.loads(route.calls[0].request.content)
-        assert body["resume"] == "Jane Doe\nEngineer\njane@example.com"
-        assert body["type"] == "text/plain"
-        assert body["format"] == "text"
+        assert body == {"resume": "Jane Doe\nEngineer\njane@example.com", "type": "text/plain"}
         assert result["candidate"]["firstName"] == "Jane"
 
     @respx.mock
     def test_parse_resume_text_html_type(self, mock_auth, mock_session, sample_parsed_resume):
-        """parse_resume_text() passes content_type through to the JSON body."""
+        """parse_resume_text() sends format=html query params for text/html content."""
         import json as _json
         route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidateViaJson").mock(
             return_value=httpx.Response(200, json=sample_parsed_resume)
@@ -1420,8 +1434,36 @@ class TestParseResume:
         client = BullhornClient(mock_auth)
         client.parse_resume_text("<html><body>Jane Doe</body></html>", "text/html")
 
+        params = dict(route.calls[0].request.url.params)
+        assert params == {"format": "html", "populateDescription": "html"}
         body = _json.loads(route.calls[0].request.content)
-        assert body["type"] == "text/html"
+        assert body == {"resume": "<html><body>Jane Doe</body></html>", "type": "text/html"}
+
+    @respx.mock
+    def test_parse_resume_text_html_with_charset(self, mock_auth, mock_session, sample_parsed_resume):
+        """A text/html content type with a charset suffix still selects html."""
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidateViaJson").mock(
+            return_value=httpx.Response(200, json=sample_parsed_resume)
+        )
+
+        client = BullhornClient(mock_auth)
+        client.parse_resume_text("<p>Jane Doe</p>", "text/html; charset=utf-8")
+
+        params = dict(route.calls[0].request.url.params)
+        assert params == {"format": "html", "populateDescription": "html"}
+
+    @respx.mock
+    def test_parse_resume_text_unknown_type_defaults_to_text(self, mock_auth, mock_session, sample_parsed_resume):
+        """Any non-HTML content type falls back to format=text."""
+        route = respx.post(f"{mock_session.rest_url}/resume/parseToCandidateViaJson").mock(
+            return_value=httpx.Response(200, json=sample_parsed_resume)
+        )
+
+        client = BullhornClient(mock_auth)
+        client.parse_resume_text("Jane Doe", "application/octet-stream")
+
+        params = dict(route.calls[0].request.url.params)
+        assert params == {"format": "text", "populateDescription": "text"}
 
     def test_guess_content_type_known_formats(self, mock_auth):
         """_guess_content_type returns correct MIME type for known formats."""

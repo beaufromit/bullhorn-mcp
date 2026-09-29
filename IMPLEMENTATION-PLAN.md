@@ -2,7 +2,14 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29); T40.8 live acceptance waits on the owner's deploy.
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29), deployed 2026-09-29; T40.8 live acceptance found CV parsing broken since CR19 and is blocked on CR42. **Sprint 40B (CR42 resume parser parameters) is BUILT (2026-09-29) at 841 tests passing, committed locally; awaiting the T40B.3 live smoke check (owner approval), `/review`, and tag v0.0.53.**
+
+**Replan validation (2026-09-29, post-CR41):** Re-reconciled PRD, user stories, CRs, and source code. **838 tests passing, tagged v0.0.52** (`.venv/bin/pytest -q`: 838 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
+- **New CR42** (fix Bullhorn resume parser parameters, owner-APPROVED 2026-09-29, HTML description chosen, A1 to A4 accepted) is planned as patch **Sprint 40B** (target v0.0.53). Its PRD amendments were already applied (uncommitted): one new FR-15 sentence and one US-31 acceptance clause. Code search confirms nothing is implemented: `client.py:215` still sends `populateDescription: "true"`, and `client.py:230-231` still puts `format` in the JSON body with no query params. See Sprint 40B Current state.
+- Coverage: the new FR-15 sentence maps to US-31 (the new clause covers the uploaded-file HTML description; the "every CV path parses" clause is covered by US-31's existing acceptance for `parse_cv`, `create_candidate_from_cv` and `attach_cv`). Not a discrepancy, recorded for the reviewer: the applied FR-15 sentence is broader than CR42 change 3's draft wording, because it also states the text-mode rule (assumption A1). The PRD text is the owner-approved one; CR42.md's draft sentence is superseded by it.
+- Not a discrepancy: US-31 does not name `parse_cv_text`, but FR-15 does, and that gap predates CR42. Nothing planned.
+- Carried over: Sprint 40 T40.8 (live acceptance, parts 2-4) resumes after the v0.0.53 deploy (CR42 A3). It is the last Sprint 40B task, not a new Sprint 40 build.
+- `bha-expired-list-ids.md` (untracked data note) still has no PRD requirement; nothing planned. CR35 still reserved and unspecced.
 
 **Replan validation (2026-09-29, post-CR40):** Re-reconciled PRD, user stories, CRs, and source code. **762 tests passing, tagged v0.0.51** (`.venv/bin/pytest -q`: 762 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **New CR41** (CV file intake via upload tickets, owner-APPROVED 2026-09-29) is planned as **Sprint 40** (target v0.0.52). PRD amended at replan: FR-15 `parse_cv` sentence reworded, new **FR-15 Amendment** (CV File Intake Without Base64), new **NFR-9** (Upload Ticket Security and File Retention), US-31 acceptance reworded, new **US-48** and **US-49**, and the §1 overview scope line. Code search confirms nothing is implemented (see Sprint 40 Current state).
@@ -117,7 +124,8 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 37B | **COMPLETE** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Tagged v0.0.49 after 1 clean review cycle. See Sprint 37B detail. |
 | Sprint 38 | **COMPLETE** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. **743 tests passing.** Tagged v0.0.50. See Sprint 38 detail. |
 | Sprint 39 | **COMPLETE** | CR40: `add_note` always sends `personReference` (JobOrder, Placement and Opportunity attach to the logged-in consultant via the TO_MANY link; Lead to itself), adds `person_id`, and replaces ClientCorporation notes with a `company_notes_live_on_contacts` redirect. `get_notes_for_entity` and `search_notes` read `clientContactNotes` for companies (FR-7 Amendment 2, FR-16 Amendment; US-46, US-47). Tool count unchanged at 39. Target v0.0.51. See Sprint 39 detail. Reviewed (2 cycles; owner asked for minors fixed too), tagged v0.0.51, 762 tests. |
-| Sprint 40 | **COMPLETE** | CR41: CV file intake via single-use upload tickets (`request_cv_upload`, `POST /upload/{token}`, `get_cv_upload`, in-chat `show_cv_upload_box` fallback); `upload_id` replaces `file_b64` on `parse_cv` / `create_candidate_from_cv` / `attach_cv`; `/upload-cv` and `UPLOAD_SECRET` removed. FR-15 Amendment, NFR-9, US-48, US-49. Target v0.0.52. T40.1 owner hands-on test passed 2026-09-29. Built 2026-09-29 (T40.2-T40.7 plus T40.8 sample CVs): 819 tests, 42 tools. Reviewed (3 cycles; owner asked for minors fixed too), tagged v0.0.52, **838 tests passing**. T40.8 live acceptance waits on the owner's deploy. |
+| Sprint 40 | **COMPLETE** | CR41: CV file intake via single-use upload tickets (`request_cv_upload`, `POST /upload/{token}`, `get_cv_upload`, in-chat `show_cv_upload_box` fallback); `upload_id` replaces `file_b64` on `parse_cv` / `create_candidate_from_cv` / `attach_cv`; `/upload-cv` and `UPLOAD_SECRET` removed. FR-15 Amendment, NFR-9, US-48, US-49. Target v0.0.52. T40.1 owner hands-on test passed 2026-09-29. Built 2026-09-29 (T40.2-T40.7 plus T40.8 sample CVs): 819 tests, 42 tools. Reviewed (3 cycles; owner asked for minors fixed too), tagged v0.0.52, **838 tests passing**. Deployed 2026-09-29. T40.8 live acceptance found every CV parse failing (Bullhorn 400s, broken since CR19); T40.8 resumes after CR42 (Sprint 40B) is deployed. |
+| Sprint 40B | **BUILT, awaiting review** | CR42 (patch): fix Bullhorn resume parser parameters. `parse_resume_file` sends `populateDescription=html`; `parse_resume_text` sends `format` and `populateDescription` as query params (`text` or `html`, from `content_type`). FR-15, US-31. Target v0.0.53. Built 2026-09-29, **841 tests passing** (3 tests rewritten in place, 3 added). T40B.3 live smoke check pending owner approval. Ends with the carried-over Sprint 40 T40.8 live acceptance. |
 
 ### Sprint 15 post-tag regression note
 
@@ -3498,7 +3506,7 @@ Run in a Cowork chat with the current egress setting ("Package managers only" pl
 - [x] Server imports cleanly; `list_tools()` reports 42 tools (41 if T40.6 is skipped at the gate).
 - [x] Line endings: `server.py`, `uploads.py`, `test_uploads.py` LF; `test_server.py` and this file CRLF; `.env.example` CRLF. Check inserted blocks, not only whole files.
 - [x] Token never logged; route never calls Bullhorn (test asserts it).
-- [ ] T40.8 live acceptance run (owner-approved), results recorded here.
+- [ ] T40.8 live acceptance run (owner-approved), results recorded here. **Blocked 2026-09-29:** the upload ticket flow worked end to end (ticket, curl upload, `get_cv_upload` = `received`), but every parse failed with Bullhorn 400s ("Invalid format: Must be 'text' or 'html'." on file parses, "Missing parameter format." on text parses). Not a CR41 regression: the parser calls are unchanged since CR19. Fixed by CR42 (Sprint 40B); T40.8 is re-run as T40B.4.
 - [x] Local commit `feat: CR41 CV upload tickets ...`. No push.
 - [x] `/review` run manually, then `PROMPT_iterate.md` to a clean cycle (3 cycles, last one clean; owner asked for minors fixed too), push, tag **v0.0.52**.
 
@@ -3560,3 +3568,79 @@ Previous: 762 (Sprint 39 actual). Removed 9 (`TestCVUploadEndpoint`). Added abou
   - Fixed in commit `8f9d5d9`.
 - **Cycle 3 (`8f9d5d9`): clean** (`0fee1a3`).
 - **Learnings:** (1) a partial-write path (record created, attach failed) needs an explicit retry instruction in the response, or the agent's obvious retry duplicates the record. (2) A claim keyed only by id must be released only by the call that took it.
+
+---
+
+## Sprint 40B: CR42 Fix Bullhorn resume parser parameters (patch sprint) - BUILT (awaiting T40B.3, review, tag)
+
+**Change request:** CR42.md (APPROVED, owner, 2026-09-29; HTML description chosen; assumptions A1 to A4 accepted)
+**PRD requirement:** FR-15 (new sentence: parsing populates the Candidate description, HTML for an uploaded file, the input's own form for pasted text; every CV tool path parses against the live tenant). Already applied to PRD.md, uncommitted.
+**User stories:** US-31 (new acceptance clause: a Candidate created from an uploaded CV has the CV as HTML in its description). US-48 is exercised end to end by the carried-over T40.8.
+**Dependency:** Sprint 40 complete (baseline **v0.0.52, 838 tests**, measured 2026-09-29). Deployed build is 87c2f62.
+**Risk:** Low in code (two lines of params in `client.py`). The real risk is the live-API blind spot: the unit tests only pin what we send, so the fix is only proven by the live parse-only smoke check (T40B.3) and T40.8 (T40B.4).
+**Numbering:** "40B" follows the Sprint 37B precedent for a patch CR. Task IDs are `T40B.n`.
+
+### Current state (verified by code search 2026-09-29, nothing implemented)
+
+- `client.py:215` `parse_resume_file`: `params = {"format": format, "populateDescription": "true"}`. Bullhorn rejects `true` with 400 "Invalid format: Must be 'text' or 'html'." (the message's "format" means `populateDescription`). `format` itself is the input file type and is already correct.
+- `client.py:230-231` `parse_resume_text`: `body = {"resume": content, "type": content_type, "format": "text"}` and `self._request("POST", "/resume/parseToCandidateViaJson", json=body)` with no `params`. Bullhorn ignores the body `format` and returns 400 "Missing parameter format." `_request` (`client.py:129`) already accepts `params`, so no signature change is needed.
+- Call sites, all unchanged by this sprint: `server.py:2646` (`parse_cv`), `server.py:2694` (`parse_cv_text`), `server.py:2786` / `2788` (`_create_candidate_from_cv`, both modes), `server.py:3050` (`attach_cv`). `upload["format"]` comes from `parser_format(rec.extension)` in `uploads.py:321`, so it is the file type (`docx`, `pdf`, ...), which is what `parseToCandidate` wants.
+- `_create_candidate_from_cv` copies `parsed["candidate"]` wholesale into the create payload, so the parsed `description` reaches the Candidate with no server change (CR42 Non-goal).
+- Pinned-wrong tests to be **rewritten, not supplemented** (CR42 change 2), all in `tests/test_client.py::TestParseResume`:
+  - `test_parse_resume_file_calls_endpoint` (line 1366) asserts `"populateDescription=true" in url`.
+  - `test_parse_resume_text_uses_json_body` (line 1395) asserts `body["format"] == "text"` and checks no query params.
+  - `test_parse_resume_text_html_type` (line 1413) checks only `body["type"]`.
+- Server-level CV tests (`tests/test_server.py` around lines 5965-6240) mock `client.parse_resume_*` and are unaffected.
+- `.claude/skills/bullhorn-mcp-api-quirks/SKILL.md:109` says `parseToCandidate` "officially supports `html|text` only", which is the misreading that led here. It is gitignored agent context, updated in T40B.2.
+- Line endings: `client.py`, `tests/test_client.py` and this file are **CRLF**; `CR42.md` and `PRD.md` are LF. Match per file, including inserted blocks.
+
+### Tasks
+
+#### T40B.1, parser parameters
+**File:** `src/bullhorn_mcp/client.py`
+- `parse_resume_file`: `params = {"format": format, "populateDescription": "html"}`. Docstring: `format` is the input file type (pdf, doc, docx, ...), and `populateDescription` must be `text` or `html`; `html` keeps the CV layout in Bullhorn's Resume tab (owner choice, CR42). Record the WHY: Bullhorn's 400 message says "format" but means `populateDescription`.
+- `parse_resume_text`: `fmt = "html" if content_type.startswith("text/html") else "text"`; body `{"resume": content, "type": content_type}` (drop the ignored body `format`); call `self._request("POST", "/resume/parseToCandidateViaJson", params={"format": fmt, "populateDescription": fmt}, json=body)`. Docstring: `format` is a required **query** parameter on this endpoint; a body copy is ignored (CR42 live evidence).
+- **Unit tests** (`tests/test_client.py::TestParseResume`, respx, exact query-string assertions per the Sprint 9 payload-assertion pattern):
+  - Rewrite `test_parse_resume_file_calls_endpoint` to assert the request's query string is exactly `format=pdf&populateDescription=html` (via `route.calls[0].request.url.params`, both keys and no others), and that `"true"` is not sent.
+  - New `test_parse_resume_file_docx_params`: `format=docx&populateDescription=html`. (`test_parse_resume_file_infers_content_type` stays as is.)
+  - Rewrite `test_parse_resume_text_uses_json_body`: `text/plain` gives query params exactly `format=text&populateDescription=text`; body has `resume` equal to the CV and `type == "text/plain"`, and has no `format` key.
+  - Rewrite `test_parse_resume_text_html_type`: `text/html` gives `format=html&populateDescription=html`; body carries the CV under `resume`.
+  - New `test_parse_resume_text_html_with_charset`: `text/html; charset=utf-8` still gives `html` (pins the `startswith`).
+  - New `test_parse_resume_text_unknown_type_defaults_to_text`: `application/octet-stream` (or any non-HTML type) gives `text`.
+
+#### T40B.2, docs of record and skill reference
+**Files:** `CR42.md`, `IMPLEMENTATION-PLAN.md`, `.claude/skills/bullhorn-mcp-api-quirks/SKILL.md` (gitignored). PRD.md is already done.
+- `.claude/skills/bullhorn-mcp-api-quirks/SKILL.md`: replace the line-109 claim with the two quirks from CR42 (on `parseToCandidate`, `format` is the file type and `populateDescription` must be `text`/`html`, and the 400 "Invalid format" names the wrong parameter; on `parseToCandidateViaJson`, `format` is a required query parameter and a body copy is ignored). Label both UNIVERSAL unless evidence says otherwise; cite the 2026-09-29 live evidence.
+- `IMPLEMENTATION-PLAN.md`: header baseline, this sprint's Actual count, Current Status row.
+- Post-tag: `CR42.md` Status to `COMPLETE (shipped v0.0.53)`.
+- Doc edits need no tests, but they are reviewed.
+
+#### T40B.3, live parse-only smoke check (CR42 A4; owner permission as for the evidence run)
+- After the build, before tagging: call `client.parse_resume_file` with both fixtures (`tests/fixtures/sample_cv/cr41_test_candidate.docx` and `.pdf`), and `client.parse_resume_text` with a short plain-text CV (`text/plain`) and an HTML CV (`text/html`). Parse only, nothing written.
+- Pass: no 400; `candidate.firstName`, `lastName` and `email` parsed; `candidate.description` non-empty (HTML for the files). Record sizes and results in the build notes.
+- `parse_resume_*` is on the CLAUDE.md destructive list (`parse_resume_file`), so run it only with the owner's explicit go-ahead in that session.
+
+#### T40B.4, carried over: Sprint 40 T40.8 live acceptance (CR42 A3)
+- After the owner deploys v0.0.53, re-run T40.8 parts 2-4 exactly as written in the Sprint 40 section, and additionally confirm the new Candidate's description holds the CV as HTML (US-31 new clause).
+- Record results and the new Candidate id in the Sprint 40 section, tick its T40.8 box, and add the id to the approved live test records.
+- This is post-deploy; it does not block the v0.0.53 tag.
+
+### Verification
+
+- [x] `.venv/bin/pytest` green (841 passed, 2026-09-29). The only modified pre-existing tests are the three rewritten `TestParseResume` tests (T40B.1). All other tests pass unchanged.
+- [x] `grep -n '"populateDescription": "true"\|"format": "text"}' src/bullhorn_mcp/client.py` returns nothing.
+- [x] `git diff --stat` shows no line-ending churn (client.py +25/-4, test_client.py +58/-9, both still fully CRLF) in `client.py` or `tests/test_client.py`.
+- [ ] T40B.3 live parse-only smoke check passed, results recorded (owner-approved).
+- [ ] Local commit `fix: CR42 resume parser parameters` (done 2026-09-29), then `/review` (manual), then PROMPT_iterate (push, tag **v0.0.53**).
+- [ ] Owner deploys v0.0.53; T40B.4 (T40.8) run and recorded.
+
+### Expected test count after Sprint 40B
+
+Previous: 838 (Sprint 40 actual). Rewritten in place: 3 (net 0). Added: about 3 (`test_parse_resume_file_docx_params`, `test_parse_resume_text_html_with_charset`, `test_parse_resume_text_unknown_type_defaults_to_text`). **Expected: about 841, to be measured, not predicted.** **Actual: 841 passing, 0 failing** (2026-09-29). Not yet tagged.
+
+**Build notes (2026-09-29):** `test_parse_resume_text_uses_json_body` and `test_parse_resume_text_html_type` now assert the whole JSON body equals `{resume, type}`, which also pins that no body `format` key is sent. `test_parse_resume_file_infers_content_type` left as is, per plan. The skill quirk rows (T40B.2) were rewritten in `.claude/skills/bullhorn-mcp-api-quirks/SKILL.md`. T40B.3 was NOT run: `parse_resume_file` is on the CLAUDE.md destructive list and this build session had no explicit owner go-ahead; it must run before the v0.0.53 tag.
+
+### Concerns to verify (not bugs, not planned work)
+
+- **Response size.** `parse_cv`, the `attach_cv` preview and the `create_candidate_from_cv` duplicate response all return the whole `parsed` object, which will now include the HTML description (5,028 chars for the docx fixture, 3,402 for the pdf in the CR42 evidence). That is new tokens in every CV tool response. Out of CR42 scope (Non-goal: no change to responses); flag to the owner if T40.8 shows it is a problem.
+- **`attach_cv` and `description`.** With `force_all=True`, `attach_cv` will now write the parsed HTML `description` over an existing Candidate's description. That follows from the owner's HTML choice and the existing commit semantics, but the reviewer should confirm it is intended.
