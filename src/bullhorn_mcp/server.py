@@ -2410,10 +2410,15 @@ def _load_received_upload(upload_id: str, claim: bool = False) -> tuple[dict | N
         return None, format_response({"error": "identity_resolution_failed", "message": str(e)})
     try:
         if claim:
+            # A failed claim holds nothing, so there is nothing to release; releasing
+            # here would free a claim another call holds on the same upload_id.
             upload_store.claim(upload_id, sub)
+    except UploadError as e:
+        return None, _upload_error(e)
+    try:
         rec = upload_store.get(upload_id, sub)
     except UploadError as e:
-        if claim and e.code != "upload_in_use":
+        if claim:
             upload_store.release(upload_id)
         return None, _upload_error(e)
     status = rec["status"]
@@ -4070,7 +4075,9 @@ def main():
         _logger.warning("Could not enrich tool descriptions at startup: %s", exc)
 
     if _transport_mode == "http":
-        logging.getLogger("uvicorn.access").addFilter(_RedactUploadTokenFilter())
+        access_logger = logging.getLogger("uvicorn.access")
+        if not any(isinstance(f, _RedactUploadTokenFilter) for f in access_logger.filters):
+            access_logger.addFilter(_RedactUploadTokenFilter())
         _logger.info(
             "Starting Bullhorn MCP server in HTTP mode on %s:%s", _host, _port
         )

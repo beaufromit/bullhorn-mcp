@@ -3936,6 +3936,21 @@ class TestSprint15HttpTransport:
                 server.main()
         mock_run.assert_called_once_with(transport="streamable-http", host=ANY, port=ANY)
 
+    def test_main_http_redacts_upload_tokens_in_access_log(self):
+        """main() in HTTP mode adds the upload-token filter to uvicorn.access, once."""
+        import logging
+        access_logger = logging.getLogger("uvicorn.access")
+        before = list(access_logger.filters)
+        try:
+            with patch.object(server, "_transport_mode", "http"):
+                with patch.object(server.mcp, "run"):
+                    server.main()
+                    server.main()
+            added = [f for f in access_logger.filters if isinstance(f, server._RedactUploadTokenFilter)]
+            assert len(added) == 1
+        finally:
+            access_logger.filters[:] = before
+
     def test_main_stdio_explicit(self):
         """main() with _transport_mode=stdio calls mcp.run() with no transport kwarg."""
         with patch.object(server, "_transport_mode", "stdio"):
@@ -6593,6 +6608,23 @@ class TestAttachCv:
         data = self._attach(mock_client, mock_metadata, candidate_id=sample_candidate["id"], upload_id=upload_id)
 
         assert data["preview"] is True
+
+    def test_attach_cv_other_users_commit_leaves_owners_claim(self, mock_client, mock_metadata, sample_candidate):
+        """A commit by another user on the owner's upload_id is not_found and does not free the owner's claim."""
+        from bullhorn_mcp.uploads import UploadInUse
+        upload_id = _seed_upload(sub="user-a")
+        server.upload_store.claim(upload_id, "user-a")
+
+        with _http_as("user-b"), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            data = json.loads(server.attach_cv(
+                candidate_id=sample_candidate["id"], upload_id=upload_id, force_all=True,
+            ))
+
+        assert data["error"] == "upload_not_found"
+        with pytest.raises(UploadInUse):
+            server.upload_store.claim(upload_id, "user-a")  # still held by the owner's call
 
     def test_attach_cv_commit_releases_claim_on_error(self, mock_client, mock_metadata, sample_candidate):
         """A commit that fails at Bullhorn releases the upload so the user can retry."""
