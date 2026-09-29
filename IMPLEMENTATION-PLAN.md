@@ -2,7 +2,7 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is PLANNED** (2026-09-29), target v0.0.52; T40.1 (owner hands-on test) passed 2026-09-29, ready to build.
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29); T40.8 live acceptance waits on the owner's deploy.
 
 **Replan validation (2026-09-29, post-CR40):** Re-reconciled PRD, user stories, CRs, and source code. **762 tests passing, tagged v0.0.51** (`.venv/bin/pytest -q`: 762 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **New CR41** (CV file intake via upload tickets, owner-APPROVED 2026-09-29) is planned as **Sprint 40** (target v0.0.52). PRD amended at replan: FR-15 `parse_cv` sentence reworded, new **FR-15 Amendment** (CV File Intake Without Base64), new **NFR-9** (Upload Ticket Security and File Retention), US-31 acceptance reworded, new **US-48** and **US-49**, and the §1 overview scope line. Code search confirms nothing is implemented (see Sprint 40 Current state).
@@ -117,7 +117,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 37B | **COMPLETE** | CR39 (patch): escape apostrophes (`'` to `''`) in the `resolve_owner` / `resolve_caller` CorporateUser lookups instead of rejecting them (FR-2, FR-12; US-4, US-23). Tool count unchanged at 38. **720 tests passing.** Tagged v0.0.49 after 1 clean review cycle. See Sprint 37B detail. |
 | Sprint 38 | **COMPLETE** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. **743 tests passing.** Tagged v0.0.50. See Sprint 38 detail. |
 | Sprint 39 | **COMPLETE** | CR40: `add_note` always sends `personReference` (JobOrder, Placement and Opportunity attach to the logged-in consultant via the TO_MANY link; Lead to itself), adds `person_id`, and replaces ClientCorporation notes with a `company_notes_live_on_contacts` redirect. `get_notes_for_entity` and `search_notes` read `clientContactNotes` for companies (FR-7 Amendment 2, FR-16 Amendment; US-46, US-47). Tool count unchanged at 39. Target v0.0.51. See Sprint 39 detail. Reviewed (2 cycles; owner asked for minors fixed too), tagged v0.0.51, 762 tests. |
-| Sprint 40 | **BUILT, awaiting /review** | CR41: CV file intake via single-use upload tickets (`request_cv_upload`, `POST /upload/{token}`, `get_cv_upload`, in-chat `show_cv_upload_box` fallback); `upload_id` replaces `file_b64` on `parse_cv` / `create_candidate_from_cv` / `attach_cv`; `/upload-cv` and `UPLOAD_SECRET` removed. FR-15 Amendment, NFR-9, US-48, US-49. Target v0.0.52. T40.1 owner hands-on test passed 2026-09-29. Built 2026-09-29 (T40.2-T40.7 plus T40.8 sample CVs): **819 tests passing**, 42 tools. T40.8 live acceptance waits on the owner's deploy. |
+| Sprint 40 | **COMPLETE** | CR41: CV file intake via single-use upload tickets (`request_cv_upload`, `POST /upload/{token}`, `get_cv_upload`, in-chat `show_cv_upload_box` fallback); `upload_id` replaces `file_b64` on `parse_cv` / `create_candidate_from_cv` / `attach_cv`; `/upload-cv` and `UPLOAD_SECRET` removed. FR-15 Amendment, NFR-9, US-48, US-49. Target v0.0.52. T40.1 owner hands-on test passed 2026-09-29. Built 2026-09-29 (T40.2-T40.7 plus T40.8 sample CVs): 819 tests, 42 tools. Reviewed (3 cycles; owner asked for minors fixed too), tagged v0.0.52, **838 tests passing**. T40.8 live acceptance waits on the owner's deploy. |
 
 ### Sprint 15 post-tag regression note
 
@@ -3400,7 +3400,7 @@ Previous: 743 (Sprint 38 actual). Added about 18 new (T39.1 8, T39.2 7, T39.3 3)
 
 ---
 
-## Sprint 40: CR41 CV file intake via upload tickets (replaces /upload-cv and base64 inputs) - BUILT, awaiting /review
+## Sprint 40: CR41 CV file intake via upload tickets (replaces /upload-cv and base64 inputs) - COMPLETE
 
 **Change request:** CR41.md (APPROVED, owner, 2026-09-29)
 **PRD requirement:** FR-15 Amendment (CV File Intake Without Base64), NFR-9 (Upload Ticket Security and File Retention)
@@ -3500,7 +3500,7 @@ Run in a Cowork chat with the current egress setting ("Package managers only" pl
 - [x] Token never logged; route never calls Bullhorn (test asserts it).
 - [ ] T40.8 live acceptance run (owner-approved), results recorded here.
 - [x] Local commit `feat: CR41 CV upload tickets ...`. No push.
-- [ ] `/review` run manually, then `PROMPT_iterate.md` to a clean cycle, push, tag **v0.0.52**.
+- [x] `/review` run manually, then `PROMPT_iterate.md` to a clean cycle (3 cycles, last one clean; owner asked for minors fixed too), push, tag **v0.0.52**.
 
 ### T40.1 findings
 
@@ -3537,3 +3537,26 @@ Run in a Cowork chat with the current egress setting ("Package managers only" pl
 ### Expected test count after Sprint 40
 
 Previous: 762 (Sprint 39 actual). Removed 9 (`TestCVUploadEndpoint`). Added about 13 (T40.2) + 11 (T40.3) + 8 (T40.4) + 9 (T40.5) + 5 (T40.6), about 46 new. About 20 pre-existing CV tests rewritten in place (not new). **Expected: about 799 (about 794 if T40.6 is skipped), to be measured, not predicted.** **Actual: 819 passed, 0 failing** (762 - 9 removed + 23 in `test_uploads.py` + 43 net new in `test_server.py`: 31 in the four new classes and 12 in the CV classes; 14 pre-existing CV tests were rewritten and 2 replaced in place). More than predicted because the route, box and store each got extra edge-case tests (reissue, CORS look-alike origins, rejected file does not consume the ticket, token not logged).
+
+**After review: 838 passed, 0 failing** (819 + 17 in cycle 1 `a3a1db0` + 2 in cycle 2 `8f9d5d9`). Tool count 42.
+
+### Review cycle findings
+
+- **Cycle 1 (reviewed `412f1d1`):**
+  - **M1:** when `create_candidate_from_cv(upload_id)` created the Candidate but `attach_file` failed, nothing told the agent to retry with `attach_cv`. Re-calling create hits the duplicate check, and `force=True` would make a second Candidate. Fixed: the result now carries `cv_attach_retry` with the exact `attach_cv(candidate_id=<new id>, upload_id=..., fields_to_update=[])` call.
+  - Minors, all fixed at the owner's request:
+  - **m1:** `show_cv_upload_box` on a received upload now returns `upload_already_received` with a carry-on hint.
+  - **m2:** `attach_cv` now refuses `upload_candidate_mismatch` when the ticket's `candidate_id` differs from the call's.
+  - **m3:** the tombstone-lifetime docstring and build note were corrected.
+  - **m4:** `UploadStore.claim` / `release` added; commit calls `claim` before reading status, and overlapping calls get `upload_in_use` (409).
+  - **m5:** the uvicorn access log redacts `/upload/<token>`; the README says to keep the Caddy access log off or filter `/upload/*`. (Closes the build-notes concern "Token in the access log".)
+  - **m6:** `MAX_OPEN_UPLOADS_PER_USER = 10` (pending or received); over the cap returns `too_many_uploads` (429). (Closes the build-notes concern "No per-user cap on pending uploads".)
+  - **m7:** the domain-hash test uses a precomputed literal. The production value is still unverified until T40.8.
+  - Fixed in commit `a3a1db0`.
+- **Cycle 2 (reviewed `a3a1db0`):**
+  - **M1:** a failed claim (`not_found`) released a claim it never took, so another user's commit on the owner's `upload_id` could free the owner's claim. Fixed: release only after a successful claim.
+  - **m1:** `candidate_id` enforcement noted in the Sprint 40 build notes.
+  - **m2:** the `main()` access-log filter wiring is now tested and made idempotent.
+  - Fixed in commit `8f9d5d9`.
+- **Cycle 3 (`8f9d5d9`): clean** (`0fee1a3`).
+- **Learnings:** (1) a partial-write path (record created, attach failed) needs an explicit retry instruction in the response, or the agent's obvious retry duplicates the record. (2) A claim keyed only by id must be released only by the call that took it.
