@@ -158,6 +158,52 @@ class TestMatchConfig:
         with pytest.raises(MatchConfigError, match="'version' must be a string"):
             load_match_config(_write(tmp_path, bad))
 
+    @pytest.mark.parametrize(
+        "path_parts, value",
+        [
+            (("forename", "exact"), {}),
+            (("surname", "fuzzy"), {"m": 0.04}),
+            (("identifiers", "phone"), {"u": 1e-09, "differ_points": -2}),
+        ],
+    )
+    def test_level_without_m_and_u_rejected(self, tmp_path, config, path_parts, value):
+        bad = copy.deepcopy(config)
+        bad[path_parts[0]][path_parts[1]] = value
+        with pytest.raises(MatchConfigError, match=re.escape(".".join(path_parts))):
+            load_match_config(_write(tmp_path, bad))
+
+    @pytest.mark.parametrize(
+        "path_parts, value",
+        [
+            (("forename", "different", "points"), 6),
+            (("surname", "different", "points"), "-5"),
+            (("identifiers", "email", "differ_points"), 2),
+            (("caps", "max_employers"), 0),
+            (("caps", "max_employers"), 2.5),
+            (("caps", "education_points"), -1),
+            (("identifier_guard", "generic_min_holders"), "25"),
+            (("employer", "overlap_bonus"), -1.5),
+            (("employer", "title_bonus"), None),
+            (("education", "school"), -1),
+            (("education", "year_tolerance"), "1"),
+            (("education", "year_tolerance"), True),
+        ],
+    )
+    def test_bad_number_rejected_naming_key(self, tmp_path, config, path_parts, value):
+        bad = copy.deepcopy(config)
+        node = bad
+        for part in path_parts[:-1]:
+            node = node[part]
+        node[path_parts[-1]] = value
+        with pytest.raises(MatchConfigError, match=re.escape(".".join(path_parts))):
+            load_match_config(_write(tmp_path, bad))
+
+    def test_penalty_level_missing_points_rejected(self, tmp_path, config):
+        bad = copy.deepcopy(config)
+        bad["forename"]["different"] = {}
+        with pytest.raises(MatchConfigError, match=re.escape("forename.different.points")):
+            load_match_config(_write(tmp_path, bad))
+
     def test_invalid_json_raises_match_config_error(self, tmp_path):
         path = tmp_path / "broken.json"
         path.write_text("{not json", encoding="utf-8")
@@ -784,6 +830,24 @@ class TestProfile:
         profile = profile_from_fields(fields, work)
         assert profile.to_echo(config)["employers"] == ["acme"]
         assert _employers(profile, config)["acme"].spans == [(2018, None)]
+
+    def test_key_variants_of_one_employer_merged_under_shorter_key(self, config):
+        work = [
+            {"companyName": "Corporate with Quillon Brewer", "title": "Analyst", "startDate": EPOCH_2018_JAN_1},
+            {"companyName": "Quillon Brewer Ltd", "title": "Manager", "startDate": EPOCH_2019_JAN_1},
+        ]
+        profile = profile_from_fields({"companyName": "Glenmoor Foods"}, work)
+        employers = _employers(profile, config)
+        assert list(employers) == ["quillon brewer", "glenmoor foods"]
+        assert employers["quillon brewer"].display == "Quillon Brewer Ltd"
+        assert employers["quillon brewer"].spans == [(2018, None), (2019, None)]
+        assert employers["quillon brewer"].titles == ["Analyst", "Manager"]
+
+    def test_current_company_variant_merged_into_work_history(self, config):
+        work = [{"companyName": "Quillon Brewer", "startDate": EPOCH_2018_JAN_1}]
+        profile = profile_from_fields({"companyName": "Corporate with Quillon Brewer"}, work)
+        assert profile.to_echo(config)["employers"] == ["quillon brewer"]
+        assert _employers(profile, config)["quillon brewer"].spans == [(2018, None)]
 
     def test_repeated_employer_rows_counted_once(self, config):
         work = [

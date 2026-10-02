@@ -272,6 +272,12 @@ class TestEmployers:
         assert len(entries(run(a, b, cfg), "employer")) == 1
 
 
+    def test_key_variants_of_one_employer_not_counted_twice(self, cfg):
+        rows = [work("Quillon Brewer", "Analyst", 2010, 2012), work("Corporate with Quillon Brewer", "Analyst", 2010, 2012)]
+        res = run(prof(wh=rows), prof(wh=list(rows)), cfg)
+        assert len(entries(res, "employer")) == 1
+
+
 # ---------------------------------------------------------------------------
 # Education
 # ---------------------------------------------------------------------------
@@ -425,6 +431,19 @@ class TestMath:
         a = prof({"firstName": "Niamh", "lastName": "B", "email": "n@example.test", "mobile": "0877260864"})
         res = run(a, a, cfg)
         assert res["percentage"] <= 100.0
+
+    @pytest.mark.parametrize("raw,shown,expected_band", [
+        (97.996, 97.99, "uncertain"),
+        (19.996, 19.99, "low"),
+        (98.004, 98.0, "high"),
+        (99.996, 99.99, "high"),
+    ])
+    def test_shown_percentage_agrees_with_band(self, cfg, monkeypatch, raw, shown, expected_band):
+        monkeypatch.setattr("bullhorn_mcp.duplicates.to_percentage", lambda points, prior_points: raw)
+        res = run(prof({"firstName": "Niamh"}), prof({"firstName": "Niamh"}), cfg)
+        assert res["percentage"] == shown
+        assert res["band"] == expected_band
+        assert band(res["percentage"], cfg) == expected_band
 
     def test_n_defaults_to_fallback(self, cfg):
         a = prof({"firstName": "Niamh", "lastName": "Brennan"})

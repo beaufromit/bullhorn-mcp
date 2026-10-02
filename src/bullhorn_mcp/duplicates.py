@@ -105,6 +105,52 @@ def _check_m_u(node, path: str) -> None:
                 _check_m_u(value, sub)
 
 
+def _check_number(path: str, value, minimum=None, maximum=None, integer: bool = False) -> None:
+    kind = "an integer" if integer else "a number"
+    if isinstance(value, bool) or not isinstance(value, int if integer else (int, float)):
+        raise MatchConfigError(f"match config '{path}' must be {kind}, got {value!r}")
+    if minimum is not None and value < minimum:
+        raise MatchConfigError(f"match config '{path}' must be {kind} of at least {minimum}, got {value!r}")
+    if maximum is not None and value > maximum:
+        raise MatchConfigError(f"match config '{path}' must be {kind} of at most {maximum}, got {value!r}")
+
+
+# Levels scored from m/u, and the "different" levels that hold fixed points.
+_M_U_LEVELS = (
+    "forename.exact", "forename.equivalent", "forename.initial", "forename.typo",
+    "surname.exact", "surname.fuzzy",
+    "identifiers.email", "identifiers.phone", "identifiers.linkedin",
+)
+_PENALTY_LEVELS = ("forename.different", "surname.different")
+
+# (path, integer, minimum) for the plain numbers the scorer reads.
+_NUMBER_KEYS = (
+    ("caps.max_employers", True, 1),
+    ("caps.education_points", False, 0),
+    ("identifier_guard.generic_min_holders", True, 1),
+    ("employer.overlap_bonus", False, 0),
+    ("employer.title_bonus", False, 0),
+    ("education.school_and_year", False, 0),
+    ("education.school", False, 0),
+    ("education.qualification", False, 0),
+    ("education.year_tolerance", True, 0),
+)
+
+
+def _check_shapes(config: dict) -> None:
+    """Each level and number holds what the scorer reads, with the right sign."""
+    for path in _M_U_LEVELS:
+        for key in ("m", "u"):
+            _lookup(config, f"{path}.{key}")
+    for path in _PENALTY_LEVELS:
+        _check_number(f"{path}.points", _lookup(config, f"{path}.points"), maximum=0)
+    for kind in ("email", "phone", "linkedin"):
+        path = f"identifiers.{kind}.differ_points"
+        _check_number(path, _lookup(config, path), maximum=0)
+    for path, integer, minimum in _NUMBER_KEYS:
+        _check_number(path, _lookup(config, path), minimum=minimum, integer=integer)
+
+
 def validate_match_config(config: dict) -> dict:
     """Raise ``MatchConfigError`` naming the bad key; return the config unchanged."""
     if not isinstance(config, dict):
@@ -112,6 +158,7 @@ def validate_match_config(config: dict) -> dict:
     for path in _REQUIRED_KEYS:
         _lookup(config, path)
     _check_m_u(config, "")
+    _check_shapes(config)
     for path in _PROBABILITY_KEYS:
         _check_probability(path, _lookup(config, path))
     low, high = _lookup(config, "bands.low"), _lookup(config, "bands.high")
@@ -756,20 +803,35 @@ class _Employer:
 def _employers(profile: CandidateProfile, config: dict) -> dict[str, _Employer]:
     """Distinct employers by normalised key (rows are never counted twice).
 
-    ``Candidate.companyName`` is one more employer with no dates.
+    Two keys in one record that match each other (for example "abbey capital"
+    and the parser's "corporate with abbey capital") are one employer, kept
+    under the key with fewer words. ``Candidate.companyName`` is one more
+    employer with no dates.
     """
     out: dict[str, _Employer] = {}
-    for w in profile.work_history:
-        key = normalize_employer(w.company, config)
+
+    def merge(name, span, title):
+        key = normalize_employer(name, config)
         if not key:
-            continue
-        emp = out.setdefault(key, _Employer(key, w.company))
-        emp.spans.append((w.start_year, w.end_year))
-        if w.title:
-            emp.titles.append(w.title)
-    key = normalize_employer(profile.current_company, config)
-    if key and key not in out:
-        out[key] = _Employer(key, profile.current_company)
+            return
+        same = next((k for k in out if _employers_match(k, key, config)), None)
+        if same is None:
+            emp = out[key] = _Employer(key, name)
+        else:
+            emp = out[same]
+            if len(key.split()) < len(same.split()):
+                emp.key, emp.display = key, name
+                items = list(out.items())  # re-key in place, keeping order
+                out.clear()
+                out.update(((key if k == same else k), v) for k, v in items)
+        if span is not None:
+            emp.spans.append(span)
+        if title:
+            emp.titles.append(title)
+
+    for w in profile.work_history:
+        merge(w.company, (w.start_year, w.end_year), w.title)
+    merge(profile.current_company, None, None)
     return out
 
 
@@ -801,7 +863,9 @@ def _contains_employer(text: str | None, key: str, config: dict) -> bool:
 
 
 def _spans_overlap(spans_a, spans_b) -> bool:
-    # Year granularity (D3); a missing end year is a current role.
+    # Year granularity (D3); a missing end year is a current role (CR44), though
+    # only as of when the record was written, so an old open-ended role overlaps
+    # any later one at the same employer. Accepted (Sprint 42 review m3).
     for sa, ea in spans_a:
         for sb, eb in spans_b:
             if sa is None or sb is None:
@@ -942,6 +1006,10 @@ def score_pair(profile: CandidateProfile, existing: CandidateProfile, context: M
     shown = round(percentage, 2)
     if shown >= 100.0 and percentage < 100.0:
         shown = 99.99
+    # Rounding never lifts the shown value over a band threshold the band is below.
+    for threshold in (config["bands"]["high"], config["bands"]["low"]):
+        if percentage < threshold <= shown:
+            shown = round(threshold - 0.01, 2)
     for e in breakdown:
         del e["_raw"]
     return {
