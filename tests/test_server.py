@@ -7300,6 +7300,54 @@ class TestAttachCv:
         plan = self._plan({"description": "<p>Old CV</p>"}, {"description": "<p>New CV here</p>"})
         assert plan["overwrites"] == [{"field": "description", "current_length": 13, "proposed_length": 18}]
 
+    # --- education matching (live tenant shapes, 2026-10-02 sample) ---------------
+
+    def _plan_edu(self, existing_edu, education):
+        return server._plan_cv_update({}, {}, None, [], existing_edu, [], education, [], [], "", [])
+
+    def test_plan_education_different_certifications_both_added(self):
+        """Certification-only entries with different text never match (the old key merged them all)."""
+        plan = self._plan_edu([{"id": 1, "certification": "ACCA"}], [{"certification": "CIMA"}, {"certification": "PMP"}])
+        assert plan["additions"]["education"] == [{"certification": "CIMA"}, {"certification": "PMP"}]
+        assert plan["already_present"]["education"] == 0
+
+    def test_plan_education_certification_matches_degree_only(self):
+        """A parsed certification matches an older record holding the same text as a bare degree."""
+        plan = self._plan_edu([{"id": 1, "degree": "ACCA", "school": None}], [{"certification": " acca "}])
+        assert plan["additions"]["education"] == []
+        assert plan["already_present"]["education"] == 1
+
+    def test_plan_education_missing_field_one_side_matches(self):
+        """A field filled on one side only does not block the match."""
+        existing = [{"id": 1, "school": "University College Dublin", "degree": "bachelors",
+                     "major": "Accounting", "graduationDate": 1214870400000}]
+        plan = self._plan_edu(existing, [{"school": "University College Dublin", "major": "accounting"}])
+        assert plan["additions"]["education"] == []
+
+    def test_plan_education_conflicting_field_not_matched(self):
+        """Same school, different degree: a second qualification, so it is added."""
+        existing = [{"id": 1, "school": "UCD", "degree": "bachelors"}]
+        new = [{"school": "UCD", "degree": "masters"}]
+        assert self._plan_edu(existing, new)["additions"]["education"] == new
+
+    def test_plan_education_needs_shared_identity_field(self):
+        """Only a shared graduationDate (no shared school/degree/major/certification) is not a match."""
+        existing = [{"id": 1, "school": "UCD", "graduationDate": 1214870400000}]
+        new = [{"degree": "MBA", "graduationDate": 1214870400000}]
+        assert self._plan_edu(existing, new)["additions"]["education"] == new
+
+    def test_plan_education_shared_generic_degree_alone_not_matched(self):
+        """Live replay case: a shared degree value ("first class honours") is not enough to match."""
+        existing = [{"id": 1, "degree": "First Class Honours", "major": "Econometrics"}]
+        new = [{"school": "University of Delhi", "degree": "First Class Honours", "graduationDate": 1451667600000}]
+        assert self._plan_edu(existing, new)["additions"]["education"] == new
+
+    def test_plan_education_degree_with_school_is_not_a_credential(self):
+        """'ACCA' as a degree at a school is a full entry, not a bare credential, so a bare certification does not match it."""
+        existing = [{"id": 1, "school": "Griffith College", "degree": "ACCA"}]
+        new = [{"certification": "ACCA"}]
+        assert self._plan_edu(existing, new)["additions"]["education"] == new
+
     # --- Contract ---------------------------------------------------------------
 
     def test_attach_without_confirm_writes_additions_only(self, mock_client, mock_metadata, sample_parsed_resume):

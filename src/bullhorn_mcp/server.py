@@ -2685,6 +2685,53 @@ def _is_blank(value: object) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+# Fields that say which qualification an education entry is.
+_EDUCATION_IDENTITY = ("school", "degree", "major", "certification")
+# Two entries are only compared if they share one of these. A shared ``degree``
+# alone does not count: on this tenant it is mostly a generic level or grade
+# ("bachelors", "unspecified", "first class honours"), so it says little on its own.
+_EDUCATION_MATCH_ON = frozenset({"school", "major", "certification", "credential"})
+
+
+def _education_view(entry: dict) -> dict:
+    """Normalized filled fields of an education entry, for matching.
+
+    A certification-only entry and a degree-only entry are both reduced to one
+    ``credential`` field: before the parser used ``certification``, this tenant
+    stored certifications as a bare ``degree`` ("ACCA", "PMP"; 550 of 1,000
+    records sampled from 2024), so the same certification arrives in either field.
+    """
+    view = {
+        k: (v.strip().lower() if isinstance(v, str) else v)
+        for k in _EDUCATION_KEYS
+        if not _is_blank(v := entry.get(k))
+    }
+    identity = [k for k in _EDUCATION_IDENTITY if k in view]
+    if identity in (["degree"], ["certification"]):
+        view["credential"] = view.pop(identity[0])
+    return view
+
+
+def _education_matches(a: dict, b: dict) -> bool:
+    """True when two education entries describe the same qualification.
+
+    Every field filled on both sides must agree, and at least one of school, major,
+    certification or the credential must be filled on both (a shared generic
+    degree alone matched "First Class Honours, Econometrics" to "University of
+    Delhi, First Class Honours" in the live replay). A field filled on one side only does not block the match, because a
+    record and a new CV often differ in detail (a major or graduationDate on one
+    and not the other). Different certifications never match. Live sample
+    (2026-10-02, 2,000 recent records): ``startDate``/``endDate`` are never filled
+    and half the entries are certification-only, which is why exact matching on
+    the old school/degree/startDate/endDate key wrongly merged them.
+    """
+    va, vb = _education_view(a), _education_view(b)
+    shared = va.keys() & vb.keys()
+    if not shared & _EDUCATION_MATCH_ON:
+        return False
+    return all(va[k] == vb[k] for k in shared)
+
+
 def _plan_cv_update(
     existing: dict,
     proposed_fields: dict,
@@ -2705,8 +2752,9 @@ def _plan_cv_update(
     the proposed value is blank (a blank parse never clears a field).
     ``fields_to_update`` limits which fields are considered. A description
     overwrite shows only both lengths (CR43 A6). Work history and education are
-    de-duplicated against the record by their key fields, so a confirm call after
-    the additions call adds nothing twice; skills already listed or linked are skipped.
+    de-duplicated against the record (work history by its key fields, education by
+    ``_education_matches``), so a confirm call after the additions call adds nothing
+    twice; skills already listed or linked are skipped.
     """
     if fields_to_update is not None:
         proposed_fields = {k: v for k, v in proposed_fields.items() if k in fields_to_update}
@@ -2737,9 +2785,11 @@ def _plan_cv_update(
             overwrites.append({"field": field, "current": current, "proposed": proposed})
 
     wh_keys = {_text_key(*(r.get(k) for k in _WORK_HISTORY_KEYS)) for r in existing_wh}
-    edu_keys = {_text_key(*(r.get(k) for k in _EDUCATION_KEYS)) for r in existing_edu}
     new_wh = [e for e in work_history if not isinstance(e, dict) or _text_key(*(e.get(k) for k in _WORK_HISTORY_KEYS)) not in wh_keys]
-    new_edu = [e for e in education if not isinstance(e, dict) or _text_key(*(e.get(k) for k in _EDUCATION_KEYS)) not in edu_keys]
+    new_edu = [
+        e for e in education
+        if not isinstance(e, dict) or not any(_education_matches(e, r) for r in existing_edu if isinstance(r, dict))
+    ]
 
     present = _skill_set_names(existing_skillset)
     return {
