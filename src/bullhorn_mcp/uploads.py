@@ -143,6 +143,7 @@ class _Upload:
     remove_at: float | None = None  # set once the record is a tombstone
     parsed: dict | None = None  # stored resume parse (no file bytes)
     attached_candidate_id: int | None = None
+    created_candidate_id: int | None = None  # Candidate create_candidate_from_cv made from it
 
 
 class UploadStore:
@@ -314,7 +315,8 @@ class UploadStore:
 
         Keys: upload_id, status, filename, extension, format, candidate_id, size,
         sha256, file_id, ``parsed`` (stored resume parse or None),
-        ``attached_candidate_id``, and ``data`` (bytes, only while ``received``).
+        ``attached_candidate_id``, ``created_candidate_id``, and ``data`` (bytes,
+        only while ``received``).
         """
         with self._lock:
             now = self._clock()
@@ -332,6 +334,7 @@ class UploadStore:
                 "file_id": rec.file_id,
                 "parsed": rec.parsed,
                 "attached_candidate_id": rec.attached_candidate_id,
+                "created_candidate_id": rec.created_candidate_id,
                 "data": rec.data if rec.status == "received" else None,
             }
 
@@ -365,6 +368,13 @@ class UploadStore:
         """End a ``claim``. Safe to call after ``mark_attached`` or a purge."""
         with self._lock:
             self._claimed.discard(upload_id)
+
+    def mark_created(self, upload_id: str, candidate_id: int) -> None:
+        """Record the Candidate created from this upload, so a later attach_cv only attaches the file."""
+        with self._lock:
+            rec = self._uploads.get(upload_id)
+            if rec is not None:
+                rec.created_candidate_id = candidate_id
 
     def mark_attached(
         self, upload_id: str, file_id: object = None, candidate_id: int | None = None

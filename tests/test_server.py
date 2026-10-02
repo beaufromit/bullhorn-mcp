@@ -6859,6 +6859,74 @@ class TestCreateCandidateFromCv:
         assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
         mock_client.parse_resume_file.assert_called_once()  # the retry used the stored parse
 
+    def test_create_retry_with_corrections_attaches_file_only(self, mock_client, mock_metadata, sample_parsed_resume):
+        """CR43 review C1: the retry after a corrected create attaches only the file, never the raw parse."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        mock_client.attach_file.side_effect = BullhornAPIError("attach boom")
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(
+            mock_client, mock_metadata, upload_id,
+            fields_override={"companyName": "Sample Gadgets Ireland"},
+            work_history=[{"companyName": "Sample Gadgets Ireland", "title": "Financial Accountant"}],
+            skills=["EXCEL", "IFRS"], primary_skills=[1000125],
+        ))
+        candidate_id = data["candidate_id"]
+        assert "only attaches the file" in data["cv_attach_retry"]["message"]
+
+        for m in (mock_client.create, mock_client.update, mock_client.add_association, mock_client.get, mock_client.query):
+            m.reset_mock()
+        mock_client.attach_file.reset_mock()
+        mock_client.attach_file.side_effect = None
+        mock_client.attach_file.return_value = {"fileId": 56}
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            retried = json.loads(server.attach_cv(candidate_id=candidate_id, upload_id=upload_id))
+
+        assert retried == {
+            "committed": True, "candidate_id": candidate_id,
+            "written": {"fields": [], "work_history": [], "education": [], "skill_set": [],
+                        "primary_skills": [], "file": {"file_id": 56, "name": "Jane_Doe_CV.pdf"}},
+        }
+        mock_client.create.assert_not_called()
+        mock_client.update.assert_not_called()
+        mock_client.add_association.assert_not_called()
+        mock_client.get.assert_not_called()
+        mock_client.attach_file.assert_called_once_with(
+            "Candidate", candidate_id, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", file_type="CV"
+        )
+        assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
+
+    def test_attach_after_successful_create_writes_nothing(self, mock_client, mock_metadata, sample_parsed_resume):
+        """attach_cv on the created record after the file attached writes nothing and says corrections were ignored."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+        candidate_id = data["candidate_id"]
+
+        for m in (mock_client.create, mock_client.update, mock_client.add_association, mock_client.attach_file):
+            m.reset_mock()
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            again = json.loads(server.attach_cv(candidate_id=candidate_id, upload_id=upload_id, skills=["Python"]))
+
+        assert again["written"]["file"] == {"file_id": 55, "name": "Jane_Doe_CV.pdf", "already_attached": True}
+        assert "Corrections were ignored" in again["warnings"][0]
+        for m in (mock_client.create, mock_client.update, mock_client.add_association, mock_client.attach_file):
+            m.assert_not_called()
+
+    def test_create_skill_set_written_omits_truncated_names(self, mock_client, mock_metadata, sample_parsed_resume):
+        """CR43 review m1: names cut by the skillSet maxLength clip are not reported as written."""
+        self._wire_create(mock_client, sample_parsed_resume, text=True)
+        mock_metadata.get_fields.return_value = [{"name": "skillSet", "maxLength": 12}]
+
+        data = json.loads(self._run_text(mock_client, mock_metadata, skills=["EXCEL", "IFRS", "ANNUAL BUDGET"]))
+
+        assert mock_client.create.call_args_list[0].args[1]["skillSet"] == "EXCEL, IFRS,"
+        assert data["written"]["skill_set"] == ["EXCEL", "IFRS"]
+
     def test_create_success_has_no_retry_block(self, mock_client, mock_metadata, sample_parsed_resume):
         """A successful attach returns no cv_attach_retry."""
         self._wire_create(mock_client, sample_parsed_resume)
@@ -7348,6 +7416,32 @@ class TestAttachCv:
         new = [{"certification": "ACCA"}]
         assert self._plan_edu(existing, new)["additions"]["education"] == new
 
+    def test_plan_education_same_school_degree_vs_certification_both_kept(self):
+        """CR43 review M1: a BComm and a later diploma at the same school are two qualifications."""
+        existing = [{"id": 1, "school": "UCD", "degree": "BComm"}]
+        new = [{"school": "UCD", "certification": "Professional Diploma in Tax"}]
+        assert self._plan_edu(existing, new)["additions"]["education"] == new
+
+    def test_plan_education_same_school_degree_vs_major_both_kept(self):
+        """CR43 review M1: an MSc entry with only a major is not the BComm at the same school."""
+        existing = [{"id": 1, "school": "UCD", "degree": "BComm"}]
+        new = [{"school": "UCD", "major": "Finance"}]
+        assert self._plan_edu(existing, new)["additions"]["education"] == new
+
+    def test_plan_education_same_value_as_degree_and_certification_matches(self):
+        """The same qualification text stored as a degree on one side and a certification on the other is one entry."""
+        existing = [{"id": 1, "school": "Chartered Accountants Ireland", "degree": "ACA"}]
+        new = [{"school": "Chartered Accountants Ireland", "certification": "aca"}]
+        assert self._plan_edu(existing, new)["additions"]["education"] == []
+
+    def test_plan_duplicates_within_given_lists_written_once(self):
+        """CR43 review m3: identical entries in one work_history or education argument are added once."""
+        wh = [{"companyName": "Acme", "title": "Accountant"}, {"companyName": " acme ", "title": "ACCOUNTANT"}]
+        edu = [{"certification": "ACCA"}, {"certification": "ACCA"}]
+        plan = server._plan_cv_update({}, {}, None, [], [], wh, edu, [], [], "", [])
+        assert plan["additions"]["work_history"] == [wh[0]]
+        assert plan["additions"]["education"] == [edu[0]]
+
     # --- Contract ---------------------------------------------------------------
 
     def test_attach_without_confirm_writes_additions_only(self, mock_client, mock_metadata, sample_parsed_resume):
@@ -7386,6 +7480,35 @@ class TestAttachCv:
             {"field": "occupation", "current": "Junior Developer", "proposed": "Financial Accountant"}
         ]
         assert "confirm=True" in data["hint"]
+
+    def test_attach_fields_to_update_resolves_labels(self, mock_client, mock_metadata, sample_parsed_resume):
+        """CR43 review m2: fields_to_update labels resolve like fields_override ("Job Title" -> occupation)."""
+        mock_metadata.resolve_fields.side_effect = lambda entity, fields: {
+            ("occupation" if k == "Job Title" else k): v for k, v in fields.items()
+        }
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id, fields_to_update=["Job Title"])
+
+        assert [c["field"] for c in data["pending_overwrites"]] == ["occupation"]
+        assert "warnings" not in data
+
+    def test_attach_truncated_addition_not_offered_as_overwrite(self, mock_client, mock_metadata, sample_parsed_resume):
+        """CR43 review m4: a field written clipped by the additions call is equal on the confirm call."""
+        mock_metadata.get_fields.return_value = [{"name": "phone", "maxLength": 4}]
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        first = self._attach(mock_client, mock_metadata, upload_id=upload_id)
+        assert call("Candidate", self.CID, {"phone": "555-", "description": self.DESC}) in mock_client.update.call_args_list
+
+        existing, wh, edu, linked = self._written_state(sample_parsed_resume)
+        existing["phone"] = "555-"
+        self._prep(mock_client, sample_parsed_resume, existing, wh, edu, linked)
+        second = self._attach(mock_client, mock_metadata, upload_id=upload_id)
+
+        assert [c["field"] for c in first["pending_overwrites"]] == ["occupation"]
+        assert [c["field"] for c in second["pending_overwrites"]] == ["occupation"]
 
     def test_attach_pending_description_overwrite_shows_lengths(self, mock_client, mock_metadata, sample_parsed_resume):
         self._prep(mock_client, sample_parsed_resume, existing=self._existing(phone="555-0001", description="<p>Old</p>"))

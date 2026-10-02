@@ -2691,6 +2691,8 @@ _EDUCATION_IDENTITY = ("school", "degree", "major", "certification")
 # alone does not count: on this tenant it is mostly a generic level or grade
 # ("bachelors", "unspecified", "first class honours"), so it says little on its own.
 _EDUCATION_MATCH_ON = frozenset({"school", "major", "certification", "credential"})
+# Fields that name the qualification itself, as opposed to where it was taken.
+_EDUCATION_QUALIFICATION = ("degree", "major", "certification", "credential")
 
 
 def _education_view(entry: dict) -> dict:
@@ -2718,18 +2720,26 @@ def _education_matches(a: dict, b: dict) -> bool:
     Every field filled on both sides must agree, and at least one of school, major,
     certification or the credential must be filled on both (a shared generic
     degree alone matched "First Class Honours, Econometrics" to "University of
-    Delhi, First Class Honours" in the live replay). A field filled on one side only does not block the match, because a
-    record and a new CV often differ in detail (a major or graduationDate on one
-    and not the other). Different certifications never match. Live sample
-    (2026-10-02, 2,000 recent records): ``startDate``/``endDate`` are never filled
-    and half the entries are certification-only, which is why exact matching on
-    the old school/degree/startDate/endDate key wrongly merged them.
+    Delhi, First Class Honours" in the live replay). A field filled on one side
+    only does not block the match, because a record and a new CV often differ in
+    detail (a major or graduationDate on one and not the other). But when both
+    sides name a qualification (degree, major, certification), they must share
+    one value: a BComm and a later diploma or MSc at the same school are two
+    entries (CR43 review M1), while "ACA" as a degree on one side and as a
+    certification on the other is one. Different certifications never match.
+    Live sample (2026-10-02, 2,000 recent records): ``startDate``/``endDate`` are
+    never filled and half the entries are certification-only, which is why exact
+    matching on the old school/degree/startDate/endDate key wrongly merged them.
     """
     va, vb = _education_view(a), _education_view(b)
     shared = va.keys() & vb.keys()
     if not shared & _EDUCATION_MATCH_ON:
         return False
-    return all(va[k] == vb[k] for k in shared)
+    if not all(va[k] == vb[k] for k in shared):
+        return False
+    qa = {va[k] for k in _EDUCATION_QUALIFICATION if k in va}
+    qb = {vb[k] for k in _EDUCATION_QUALIFICATION if k in vb}
+    return not (qa and qb) or bool(qa & qb)
 
 
 def _plan_cv_update(
@@ -2784,12 +2794,24 @@ def _plan_cv_update(
         else:
             overwrites.append({"field": field, "current": current, "proposed": proposed})
 
+    # De-duplicated against the record and against earlier entries in the same list.
     wh_keys = {_text_key(*(r.get(k) for k in _WORK_HISTORY_KEYS)) for r in existing_wh}
-    new_wh = [e for e in work_history if not isinstance(e, dict) or _text_key(*(e.get(k) for k in _WORK_HISTORY_KEYS)) not in wh_keys]
-    new_edu = [
-        e for e in education
-        if not isinstance(e, dict) or not any(_education_matches(e, r) for r in existing_edu if isinstance(r, dict))
-    ]
+    new_wh = []
+    for e in work_history:
+        if isinstance(e, dict):
+            key = _text_key(*(e.get(k) for k in _WORK_HISTORY_KEYS))
+            if key in wh_keys:
+                continue
+            wh_keys.add(key)
+        new_wh.append(e)
+    seen_edu = [r for r in existing_edu if isinstance(r, dict)]
+    new_edu = []
+    for e in education:
+        if isinstance(e, dict):
+            if any(_education_matches(e, r) for r in seen_edu):
+                continue
+            seen_edu.append(e)
+        new_edu.append(e)
 
     present = _skill_set_names(existing_skillset)
     return {
@@ -3207,6 +3229,10 @@ def _create_candidate_from_cv(
             # Names go in the create payload, one write fewer (CR43 P4).
             resolved["skillSet"], skill_set_written = _merge_skill_set(resolved.get("skillSet"), skill_names)
         resolved = _truncate_against_meta(metadata, "Candidate", resolved)
+        if skill_set_written:
+            # Report only the names that survived the skillSet maxLength clip.
+            kept = _skill_set_names(resolved.get("skillSet"))
+            skill_set_written = [n for n in skill_set_written if n.lower() in kept]
 
         env_required = get_candidate_required()
         if env_required:
@@ -3238,6 +3264,11 @@ def _create_candidate_from_cv(
         "file": None,
     }
     result: dict = {"created": True, "candidate_id": candidate_id, "written": written}
+    if upload is not None:
+        # Everything from this CV is written below with Claude's corrections; a later
+        # attach_cv for this Candidate must only attach the file, never replay the
+        # raw parse over those corrections.
+        upload_store.mark_created(upload_id, candidate_id)
     try:
         children, child_warnings = _write_candidate_children(
             client, metadata, candidate_id, work_history, education, [], primary_ids, "", [],
@@ -3272,7 +3303,8 @@ def _create_candidate_from_cv(
             "message": (
                 f"Candidate {candidate_id} was created but the CV file was not attached. "
                 "Do not call create_candidate_from_cv again for this CV. To retry the "
-                "attachment, make the call below (the upload is kept until it expires)."
+                "attachment, make the call below (the upload is kept until it expires). "
+                "It only attaches the file: everything else was written above."
             ),
             "next_call": f"attach_cv(candidate_id={candidate_id}, upload_id='{upload_id}')",
         }
@@ -3369,6 +3401,9 @@ def _attach_cv(
     confirm: bool,
 ) -> str:
     """Body of attach_cv once the upload is loaded and claimed."""
+    if upload.get("created_candidate_id") == candidate_id:
+        corrections = (fields_to_update, fields_override, work_history, education, skills, primary_skills)
+        return _attach_created_cv_file(candidate_id, upload, upload_id, any(c is not None for c in corrections))
     warnings: list[str] = []
     try:
         client = get_client()
@@ -3386,7 +3421,12 @@ def _attach_cv(
             k: v for k, v in candidate_fields.items()
             if k not in _ATTACH_SKIP_FIELDS and isinstance(v, (str, int, float, bool))
         }
+        # Clip before planning, so a value written clipped by the additions call is
+        # equal on the confirm call instead of coming back as an overwrite.
+        proposed_fields = _truncate_against_meta(metadata, "Candidate", proposed_fields)
         if fields_to_update is not None:
+            # Labels resolve as in fields_override ("Job Title" -> occupation).
+            fields_to_update = list(metadata.resolve_fields("Candidate", {f: None for f in fields_to_update}))
             unknown = [f for f in fields_to_update if f not in proposed_fields]
             if unknown:
                 warnings.append(f"fields_to_update not in the parse or fields_override, ignored: {unknown}")
@@ -3505,6 +3545,43 @@ def _attach_cv(
             "consultant; only after they say yes, call attach_cv again with the same arguments "
             "and confirm=True. Nothing above will be added twice."
         )
+    if warnings:
+        result["warnings"] = warnings
+    return format_response(result)
+
+
+def _attach_created_cv_file(candidate_id: int, upload: dict, upload_id: str, had_corrections: bool) -> str:
+    """attach_cv for the Candidate create_candidate_from_cv made from this upload: the file only.
+
+    The create already wrote the fields, work history, education and skills with
+    Claude's corrections. Planning again from the stored parse would add the raw
+    parser entries next to the corrected ones and offer to revert the corrected
+    fields (CR43 review C1), so nothing but the file is written here.
+    """
+    warnings: list[str] = []
+    if had_corrections:
+        warnings.append(
+            "Corrections were ignored: this Candidate was created from this CV and already holds "
+            "what was written then. Use update_record to change it."
+        )
+    written: dict = {"fields": [], "work_history": [], "education": [], "skill_set": [], "primary_skills": [], "file": None}
+    result: dict = {"committed": True, "candidate_id": candidate_id, "written": written}
+    if upload["status"] != "received":
+        written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "already_attached": True}
+    else:
+        try:
+            client = get_client()
+            content_mime = client._guess_content_type(upload["format"])
+            file_attachment = client.attach_file(
+                "Candidate", candidate_id, upload["data"], upload["filename"], content_mime, file_type="CV"
+            )
+            written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
+            upload_store.mark_attached(upload_id, written["file"]["file_id"], candidate_id)
+        except Exception as exc:
+            warnings.append(
+                f"CV file attachment failed: {exc}. Retry with attach_cv(candidate_id={candidate_id}, "
+                f"upload_id='{upload_id}'); the upload is kept until it expires."
+            )
     if warnings:
         result["warnings"] = warnings
     return format_response(result)
