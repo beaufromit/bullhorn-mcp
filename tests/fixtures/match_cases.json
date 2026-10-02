@@ -1,0 +1,335 @@
+[
+  {
+    "name": "returning_candidate_no_contact_details",
+    "profile": {
+      "fields": {
+        "firstName": "Ciaran",
+        "lastName": "Dunmore"
+      },
+      "work_history": [
+        {
+          "companyName": "Halvergate Capital Ltd",
+          "title": "Senior Analyst",
+          "startDate": 1338508800000,
+          "endDate": 1464739200000
+        },
+        {
+          "companyName": "Pellinore Systems",
+          "title": "Manager",
+          "startDate": 1464739200000,
+          "endDate": 1590969600000
+        },
+        {
+          "companyName": "Freelance",
+          "title": "Consultant at Ostrava Brokers",
+          "startDate": 1590969600000,
+          "endDate": 1654041600000
+        }
+      ],
+      "education": [
+        {
+          "school": "Tarnmoor Institute",
+          "degree": "Bachelors",
+          "graduationDate": 1212278400000
+        }
+      ]
+    },
+    "existing": {
+      "fields": {
+        "id": 90308,
+        "firstName": "Ciaran",
+        "lastName": "Dunmore",
+        "email": "ciaran.dunmore@example.test",
+        "mobile": "087 555 0142"
+      },
+      "work_history": [
+        {
+          "companyName": "Halvergate Capital",
+          "title": "Analyst",
+          "startDate": 1338508800000,
+          "endDate": 1464739200000
+        },
+        {
+          "companyName": "Pellinore Systems",
+          "title": "Manager",
+          "startDate": 1464739200000,
+          "endDate": 1590969600000
+        },
+        {
+          "companyName": "Ostrava Brokers",
+          "title": "Consultant",
+          "startDate": 1590969600000,
+          "endDate": 1654041600000
+        }
+      ],
+      "education": [
+        {
+          "school": "Tarnmoor Institute",
+          "degree": "BSc",
+          "graduationDate": 1243814400000
+        }
+      ]
+    },
+    "context": {
+      "n": 73815,
+      "surname_counts": {
+        "dunmore": 70
+      },
+      "forename_counts": {
+        "ciaran": 900
+      },
+      "employer_counts": {
+        "halvergate capital": 120,
+        "pellinore systems": 300,
+        "ostrava brokers": 30
+      }
+    },
+    "expected_band": "high"
+  },
+  {
+    "name": "common_name_different_people",
+    "profile": {
+      "fields": {
+        "firstName": "Sean",
+        "lastName": "Murphy"
+      },
+      "work_history": [
+        {
+          "companyName": "Quillon Brewery",
+          "title": "Operator",
+          "startDate": 1275350400000,
+          "endDate": 1401580800000
+        }
+      ],
+      "education": [
+        {
+          "school": "Marlow Academy",
+          "degree": "Diploma",
+          "graduationDate": 1117584000000
+        }
+      ]
+    },
+    "existing": {
+      "fields": {
+        "id": 2,
+        "firstName": "Sean",
+        "lastName": "Murphy",
+        "email": "sm@example.test"
+      },
+      "work_history": [
+        {
+          "companyName": "Dunsany Freight",
+          "title": "Driver",
+          "startDate": 1306886400000,
+          "endDate": 1527811200000
+        }
+      ],
+      "education": [
+        {
+          "school": "Corrib College",
+          "degree": "Diploma",
+          "graduationDate": 1149120000000
+        }
+      ]
+    },
+    "context": {
+      "n": 73815,
+      "surname_counts": {
+        "murphy": 2000
+      },
+      "forename_counts": {
+        "sean": 3000
+      }
+    },
+    "expected_band": "low"
+  },
+  {
+    "name": "married_name",
+    "profile": {
+      "fields": {
+        "firstName": "Aoibhinn",
+        "lastName": "Garrick",
+        "email": "aoibhinn@example.test"
+      },
+      "work_history": [
+        {
+          "companyName": "Wexmoor Logistics",
+          "title": "Planner",
+          "startDate": 1401580800000,
+          "endDate": 1527811200000
+        },
+        {
+          "companyName": "Tolbrook Freight",
+          "title": "Lead",
+          "startDate": 1527811200000,
+          "endDate": 1654041600000
+        }
+      ],
+      "education": []
+    },
+    "existing": {
+      "fields": {
+        "id": 3,
+        "firstName": "Aoibhinn",
+        "lastName": "Teague",
+        "email": "aoibhinn@example.test"
+      },
+      "work_history": [
+        {
+          "companyName": "Wexmoor Logistics Ltd",
+          "title": "Planner",
+          "startDate": 1401580800000,
+          "endDate": 1527811200000
+        },
+        {
+          "companyName": "Tolbrook Freight",
+          "title": "Lead",
+          "startDate": 1527811200000,
+          "endDate": 1654041600000
+        }
+      ],
+      "education": []
+    },
+    "context": {
+      "n": 73815,
+      "identifier_holders": {
+        "email": {
+          "aoibhinn@example.test": 1
+        }
+      }
+    },
+    "expected_band": "high",
+    "expected_flags": [
+      "guaranteed_match:email"
+    ]
+  },
+  {
+    "name": "shared_agency_mailbox",
+    "profile": {
+      "fields": {
+        "firstName": "Fintan",
+        "lastName": "Rourke",
+        "email": "cv@brightlark-recruit.test"
+      },
+      "work_history": [
+        {
+          "companyName": "Alderwick Works",
+          "title": "Fitter"
+        }
+      ],
+      "education": []
+    },
+    "existing": {
+      "fields": {
+        "id": 4,
+        "firstName": "Grainne",
+        "lastName": "Hollis",
+        "email": "cv@brightlark-recruit.test"
+      },
+      "work_history": [
+        {
+          "companyName": "Cresswell Mills",
+          "title": "Clerk"
+        }
+      ],
+      "education": []
+    },
+    "context": {
+      "n": 73815,
+      "identifier_holders": {
+        "email": {
+          "cv@brightlark-recruit.test": 40
+        }
+      }
+    },
+    "expected_band": "low",
+    "expected_flags": [
+      "guard_tripped:email"
+    ]
+  },
+  {
+    "name": "swapped_first_last",
+    "profile": {
+      "fields": {
+        "firstName": "Ruairi",
+        "lastName": "Delaney"
+      },
+      "work_history": [
+        {
+          "companyName": "Tolbrook Freight",
+          "title": "Planner",
+          "startDate": 1433116800000,
+          "endDate": 1559347200000
+        }
+      ],
+      "education": []
+    },
+    "existing": {
+      "fields": {
+        "id": 5,
+        "firstName": "Delaney",
+        "lastName": "Ruairi"
+      },
+      "work_history": [
+        {
+          "companyName": "Tolbrook Freight Ltd",
+          "title": "Planner",
+          "startDate": 1433116800000,
+          "endDate": 1559347200000
+        }
+      ],
+      "education": []
+    },
+    "context": {
+      "n": 73815
+    },
+    "expected_band": "high",
+    "expected_flags": [
+      "names_swapped"
+    ]
+  },
+  {
+    "name": "internal_panel_email",
+    "profile": {
+      "fields": {
+        "firstName": "Odhran",
+        "lastName": "Vance",
+        "email": "consultant@thepanel.com"
+      },
+      "work_history": [
+        {
+          "companyName": "Eastvale Foods",
+          "title": "Buyer"
+        }
+      ],
+      "education": []
+    },
+    "existing": {
+      "fields": {
+        "id": 6,
+        "firstName": "Maebh",
+        "lastName": "Larkin",
+        "email": "consultant@thepanel.com"
+      },
+      "work_history": [
+        {
+          "companyName": "Dunmarrow Textiles",
+          "title": "Buyer"
+        }
+      ],
+      "education": []
+    },
+    "context": {
+      "n": 73815,
+      "identifier_holders": {
+        "email": {
+          "consultant@thepanel.com": 2
+        }
+      }
+    },
+    "expected_band_not": "high",
+    "expected_flags": [
+      "guard_tripped:email"
+    ]
+  }
+]

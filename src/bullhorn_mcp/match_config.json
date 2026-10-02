@@ -1,0 +1,109 @@
+{
+  "version": "1",
+  "_comment": "CR44 match-check weights. Placeholder values until calibration (Sprint 42B T42B.6, then match-log outcomes). Each agreeing signal adds log2(m/u) points; 'points' entries are fixed values. Any change here is a reviewed change and should bump version once shipped.",
+  "population": {
+    "fallback_n": 73815,
+    "pi_numerator": 0.3
+  },
+  "bands": {
+    "high": 98,
+    "low": 20
+  },
+  "caps": {
+    "name_only_percentage": 90,
+    "max_employers": 3,
+    "education_points": 2.5
+  },
+  "identifiers": {
+    "email": {"m": 0.95, "u": 1e-09, "differ_points": -2},
+    "phone": {"m": 0.9, "u": 1e-09, "differ_points": -2},
+    "linkedin": {"m": 0.95, "u": 1e-09, "differ_points": -2}
+  },
+  "identifier_guard": {
+    "m": 0.85,
+    "generic_min_holders": 25
+  },
+  "forename": {
+    "exact": {"m": 0.88, "u": 0.015},
+    "equivalent": {"m": 0.05, "u": 0.004},
+    "initial": {"m": 0.04, "u": 0.01},
+    "typo": {"m": 0.03, "u": 0.003},
+    "different": {"points": -6}
+  },
+  "surname": {
+    "exact": {"m": 0.9, "u": 0.001},
+    "fuzzy": {"m": 0.04, "u": 0.003},
+    "different": {"points": -5}
+  },
+  "employer": {
+    "m": 0.6,
+    "default_u": 0.001,
+    "overlap_bonus": 1.5,
+    "title_bonus": 1.0
+  },
+  "education": {
+    "school_and_year": 2.0,
+    "school": 1.0,
+    "qualification": 0.5,
+    "year_tolerance": 1
+  },
+  "default_country_code": "353",
+  "generic_mailbox_prefixes": [
+    "info", "cv", "cvs", "jobs", "careers", "recruitment", "recruiting", "hr", "admin",
+    "office", "hello", "contact", "enquiries", "apply", "applications", "mail",
+    "noreply", "no-reply", "talent", "resumes"
+  ],
+  "internal_domains": ["thepanel.com"],
+  "employer_suffixes": [
+    "ltd", "limited", "plc", "dac", "group", "ireland", "llp", "llc", "inc", "uc", "clg"
+  ],
+  "generic_employer_words": [
+    "bank", "group", "ireland", "irish", "services", "solutions", "consulting", "consultants",
+    "holdings", "international", "financial", "finance", "management", "capital", "partners",
+    "company", "associates", "global", "europe", "european", "technologies", "technology",
+    "systems", "insurance", "investments", "fund", "funds", "dublin", "cork", "galway",
+    "limerick", "national", "university", "college", "school", "institute", "department"
+  ],
+  "generic_degrees": [
+    "unspecified", "bachelors", "bachelor", "masters", "master", "degree", "diploma",
+    "certificate", "honours", "first class honours", "second class honours", "leaving certificate",
+    "phd", "doctorate", "postgraduate", "undergraduate",
+    "ba", "bsc", "bcomm", "bcom", "bbs", "ma", "msc", "mba", "llb", "llm", "beng", "meng",
+    "higher diploma", "postgraduate diploma"
+  ],
+  "forename_equivalents": [
+    ["john", "sean", "shaun", "shawn", "eoin", "jack", "johnny"],
+    ["james", "seamus", "jim", "jimmy", "jamie"],
+    ["patrick", "padraig", "padraic", "pat", "paddy"],
+    ["patricia", "pat", "trish", "tricia"],
+    ["william", "liam", "bill", "billy", "will", "willie"],
+    ["joan", "siobhan"],
+    ["michael", "micheal", "mick", "mike", "mikey"],
+    ["thomas", "tomas", "tom", "tommy"],
+    ["robert", "rob", "robbie", "bob", "bobby"],
+    ["richard", "risteard", "rick", "rich", "dick"],
+    ["edward", "eamon", "eamonn", "ed", "eddie", "ned"],
+    ["joseph", "seosamh", "joe", "joey"],
+    ["peter", "peadar", "pete"],
+    ["stephen", "steven", "stiofan", "steve"],
+    ["gerard", "gearoid", "ger", "gerry"],
+    ["david", "daithi", "dave"],
+    ["dermot", "diarmuid", "diarmaid"],
+    ["owen", "eoghan"],
+    ["hugh", "aodh"],
+    ["kevin", "caoimhin"],
+    ["anthony", "tony"],
+    ["christopher", "chris"],
+    ["matthew", "matt"],
+    ["andrew", "aindreas", "andy"],
+    ["alexander", "alex"],
+    ["nicholas", "nick", "nicky"],
+    ["elizabeth", "liz", "lizzie", "beth", "eliza"],
+    ["catherine", "katherine", "kathryn", "kate", "katie", "cathy", "kathy", "caitriona"],
+    ["kathleen", "caitlin"],
+    ["margaret", "mairead", "maggie", "peggy"],
+    ["mary", "maire", "maura"],
+    ["susan", "sue", "susie"],
+    ["deborah", "debbie", "debra"]
+  ]
+}
