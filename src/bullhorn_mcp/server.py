@@ -2742,6 +2742,32 @@ def _education_matches(a: dict, b: dict) -> bool:
     return not (qa and qb) or bool(qa & qb)
 
 
+def _new_cv_children(existing_wh: list, existing_edu: list, work_history: list, education: list) -> tuple[list, list]:
+    """Work history and education entries not on the record and not repeated earlier in the same list.
+
+    Work history matches on its key fields, education on ``_education_matches``.
+    Non-dict entries pass through so the write reports them as failed.
+    """
+    wh_keys = {_text_key(*(r.get(k) for k in _WORK_HISTORY_KEYS)) for r in existing_wh}
+    new_wh = []
+    for e in work_history:
+        if isinstance(e, dict):
+            key = _text_key(*(e.get(k) for k in _WORK_HISTORY_KEYS))
+            if key in wh_keys:
+                continue
+            wh_keys.add(key)
+        new_wh.append(e)
+    seen_edu = [r for r in existing_edu if isinstance(r, dict)]
+    new_edu = []
+    for e in education:
+        if isinstance(e, dict):
+            if any(_education_matches(e, r) for r in seen_edu):
+                continue
+            seen_edu.append(e)
+        new_edu.append(e)
+    return new_wh, new_edu
+
+
 def _plan_cv_update(
     existing: dict,
     proposed_fields: dict,
@@ -2794,24 +2820,7 @@ def _plan_cv_update(
         else:
             overwrites.append({"field": field, "current": current, "proposed": proposed})
 
-    # De-duplicated against the record and against earlier entries in the same list.
-    wh_keys = {_text_key(*(r.get(k) for k in _WORK_HISTORY_KEYS)) for r in existing_wh}
-    new_wh = []
-    for e in work_history:
-        if isinstance(e, dict):
-            key = _text_key(*(e.get(k) for k in _WORK_HISTORY_KEYS))
-            if key in wh_keys:
-                continue
-            wh_keys.add(key)
-        new_wh.append(e)
-    seen_edu = [r for r in existing_edu if isinstance(r, dict)]
-    new_edu = []
-    for e in education:
-        if isinstance(e, dict):
-            if any(_education_matches(e, r) for r in seen_edu):
-                continue
-            seen_edu.append(e)
-        new_edu.append(e)
+    new_wh, new_edu = _new_cv_children(existing_wh, existing_edu, work_history, education)
 
     present = _skill_set_names(existing_skillset)
     return {
@@ -3179,6 +3188,8 @@ def _create_candidate_from_cv(
         given_names, given_ids = _normalize_skills(skills, primary_skills)
         skill_names = given_names if skills is not None else parsed_names
         primary_ids = given_ids if primary_skills is not None else parsed_ids
+        # An entry repeated in one list is written once, as in attach_cv.
+        work_history, education = _new_cv_children([], [], work_history, education)
 
         # The check runs on the corrected names and email (CR43 P5).
         dup = None
@@ -3426,8 +3437,10 @@ def _attach_cv(
         proposed_fields = _truncate_against_meta(metadata, "Candidate", proposed_fields)
         if fields_to_update is not None:
             # Labels resolve as in fields_override ("Job Title" -> occupation).
-            fields_to_update = list(metadata.resolve_fields("Candidate", {f: None for f in fields_to_update}))
-            unknown = [f for f in fields_to_update if f not in proposed_fields]
+            api_names = {f: next(iter(metadata.resolve_fields("Candidate", {f: None}))) for f in fields_to_update}
+            fields_to_update = list(dict.fromkeys(api_names.values()))
+            # The warning names fields as the caller sent them.
+            unknown = [f for f, api in api_names.items() if api not in proposed_fields]
             if unknown:
                 warnings.append(f"fields_to_update not in the parse or fields_override, ignored: {unknown}")
 

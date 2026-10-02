@@ -302,6 +302,17 @@ class TestStoredParse:
         store.mark_attached(upload_id, file_id=5, candidate_id=42)
         assert store.get(upload_id, OWNER)["attached_candidate_id"] == 42
 
+    def test_mark_created_records_candidate_id_through_attach(self, store):
+        upload_id = _received(store)
+        assert store.get(upload_id, OWNER)["created_candidate_id"] is None
+        store.mark_created(upload_id, 42)
+        assert store.get(upload_id, OWNER)["created_candidate_id"] == 42
+        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        assert store.get(upload_id, OWNER)["created_candidate_id"] == 42
+
+    def test_mark_created_unknown_upload_is_noop(self, store):
+        store.mark_created("no-such-upload", 42)
+
     def test_bytes_still_dropped_on_attach_with_parse_kept(self, store):
         upload_id = _received(store)
         store.set_parsed(upload_id, OWNER, self.PARSED)

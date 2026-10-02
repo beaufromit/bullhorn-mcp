@@ -6927,6 +6927,17 @@ class TestCreateCandidateFromCv:
         assert mock_client.create.call_args_list[0].args[1]["skillSet"] == "EXCEL, IFRS,"
         assert data["written"]["skill_set"] == ["EXCEL", "IFRS"]
 
+    def test_create_writes_repeated_list_entries_once(self, mock_client, mock_metadata, sample_parsed_resume):
+        """CR43 review cycle 2 m1: an entry repeated in one work_history or education argument is written once."""
+        self._wire_create(mock_client, sample_parsed_resume, text=True)
+        wh = {"companyName": "Acme", "title": "Accountant"}
+        edu = {"certification": "ACCA"}
+
+        self._run_text(mock_client, mock_metadata, work_history=[wh, dict(wh)], education=[edu, dict(edu)])
+
+        children = [c.args[0] for c in mock_client.create.call_args_list[1:]]
+        assert children == ["CandidateWorkHistory", "CandidateEducation"]
+
     def test_create_success_has_no_retry_block(self, mock_client, mock_metadata, sample_parsed_resume):
         """A successful attach returns no cv_attach_retry."""
         self._wire_create(mock_client, sample_parsed_resume)
@@ -7493,6 +7504,18 @@ class TestAttachCv:
 
         assert [c["field"] for c in data["pending_overwrites"]] == ["occupation"]
         assert "warnings" not in data
+
+    def test_attach_fields_to_update_warning_names_field_as_sent(self, mock_client, mock_metadata, sample_parsed_resume):
+        """CR43 review cycle 2 m2: an unknown label is reported as the caller typed it, not its API name."""
+        mock_metadata.resolve_fields.side_effect = lambda entity, fields: {
+            ("customText9" if k == "Notice Period" else k): v for k, v in fields.items()
+        }
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id, fields_to_update=["Notice Period"])
+
+        assert data["warnings"] == ["fields_to_update not in the parse or fields_override, ignored: ['Notice Period']"]
 
     def test_attach_truncated_addition_not_offered_as_overwrite(self, mock_client, mock_metadata, sample_parsed_resume):
         """CR43 review m4: a field written clipped by the additions call is equal on the confirm call."""
