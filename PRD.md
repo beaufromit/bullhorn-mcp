@@ -4,7 +4,7 @@
 
 The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, field metadata resolution, hosted HTTP access, authenticated-user owner stamping, first-class JobOrder create/update workflows, and JobSubmission (shortlist) write tools.
 
-Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15, with CV files delivered through single-use upload tickets rather than base64 per the FR-15 Amendment), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), tearsheet (hotlist) management tools (FR-21), and a read-only external people search via Perplexity for sourcing candidates not yet in Bullhorn (FR-22).
+Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15, with CV files delivered through single-use upload tickets rather than base64 per the FR-15 Amendment), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), tearsheet (hotlist) management tools (FR-21), a read-only external people search via Perplexity for sourcing candidates not yet in Bullhorn (FR-22), reviewed CV parsing that writes work history, education and skills (FR-15 Amendment 2), and candidate duplicate detection by weighted evidence (FR-23).
 
 The MCP serves two classes of consumer:
 
@@ -210,6 +210,16 @@ CV files shall reach the server out of band, never as file contents in a tool ar
 - The primary route is the agent sending an attached file itself (for example `curl` from a Cowork session). Where the client supports MCP Apps, an upload box shown in the same chat shall be the fallback when the agent cannot send the file. There is no separate browser upload page and no paste-the-text fallback in this flow.
 - The `POST /upload-cv` endpoint (CR27) and the `UPLOAD_SECRET` variable are withdrawn.
 
+### FR-15 Amendment 2: Reviewed CV Parsing and Candidate Child Records (CR43)
+
+- `parse_cv` shall keep the parse with the upload for its lifetime, so the write uses exactly the parse Claude reviewed.
+- `create_candidate_from_cv` and `attach_cv` shall accept corrected Candidate fields, work history, education, free-text skills and matched skill ids, which replace the parsed values; the description comes from the parse.
+- Creating a new Candidate (from a CV or from supplied details) shall write immediately and return a full account of what was written.
+- Updating an existing Candidate from a CV shall apply additions (the file, new work history, education and skills, empty fields) immediately, and shall replace an existing value only on an explicit confirmation, which a caller with no consultant present may give up front.
+- `create_candidate` shall accept optional work history, education and skills.
+- Candidate duplicate detection shall be one shared function used by `find_duplicate_candidates` and all create paths.
+- After a Candidate has been created, a later failure shall never hide its id.
+
 ### FR-16: Note Reading and Search
 
 The MCP shall provide read tools for Bullhorn Note records:
@@ -293,6 +303,13 @@ The MCP shall provide a `people_search_perplexity` tool for finding people (cand
 - The integration shall be isolated from the Bullhorn client and authentication (its own module and error type) so a Perplexity failure cannot affect Bullhorn tools, and a Bullhorn failure cannot affect it.
 - The tool has no Bullhorn entity and shall not be registered in the `descriptions.py` startup enrichment.
 - The tool description shall steer usage: it is strongest for sourcing or mapping populations of people; for a single named individual, a general web search is preferred first, with this tool as a fallback. Multi-query market-mapping orchestration and cross-referencing against Bullhorn are out of scope for this requirement and belong to client-side skills.
+
+### FR-23: Candidate Duplicate Detection by Weighted Evidence (CR44)
+
+- Candidate duplicate detection shall score existing candidates against a profile using names, contact identifiers, LinkedIn profile, employers and education, where a missing value is never evidence against a match.
+- It shall return each likely match with a percentage, a band and a plain-English reason per signal, flag guaranteed identifier matches and multiple strong matches, and never write to Bullhorn.
+- One implementation shall serve the duplicate tool and every candidate create and update path, and its weights and thresholds shall be versioned configuration.
+- Each check shall be logged (without CV contents) with its outcome, for calibration.
 
 ## 7. Non-Functional Requirements
 
@@ -525,6 +542,18 @@ As a consultant, I want to attach a CV to a Cowork chat and ask Claude to add th
 **US-49: Upload box fallback in the same chat**
 As a consultant, if Claude cannot send the file itself, I want an upload box to appear in the same chat, so that I can drop the CV there and Claude carries on without sending me to another page.
 - **Acceptance**: when the upload fails (for example the network blocks it) and the client supports MCP Apps, Claude calls `show_cv_upload_box`, an upload box renders in the chat, the dropped file is received against the same ticket, and the create or attach flow completes. When the client does not support MCP Apps, Claude reports that the file could not be sent and stops.
+
+**US-50: Claude checks a parsed CV before it is written**
+As a consultant, I want Claude to check what Bullhorn's parser read from a CV against the CV itself and fix mistakes before anything is saved, so that the record, its work history, education and skills are right first time.
+- **Acceptance**: for a new candidate, one write creates the Candidate with Claude's corrected fields, work history, education and both skill lists, attaches the CV, and Claude tells the consultant exactly what was written. For an existing candidate, the CV and any new information are added straight away, and Claude shows any value that would be replaced and replaces it only after the consultant confirms. A failure after the create still returns the new Candidate id.
+
+**US-51: Add a candidate from sourced details with their history**
+As a consultant, I want a candidate found through LinkedIn or a Perplexity search added with their work history, education and skills, not just their name and current role.
+- **Acceptance**: `create_candidate` with work history, education and skills creates the Candidate and those records, and reports what was written.
+
+**US-52: Spot a returning candidate even without contact details**
+As a consultant, I want Bullhorn to recognise a candidate who is already on file from their name, employers and education, even when the new CV has no email or phone, so that I update their record instead of creating a duplicate.
+- **Acceptance**: a profile matching an existing candidate on name, employers and school but with no email or phone is returned as a high match with its reasons, and the consultant is shown them; two different people sharing a common name are not; a match against a soft-deleted candidate is flagged. Each check is logged without CV contents, with its `match_check_id`, the configuration version that scored it and, once a create or attach call reports it, the outcome, so the weights can be recalibrated. (Live check uses the Kevin Cassidy 90308 pattern, dry-run only.)
 
 ### Note Reading and Search
 

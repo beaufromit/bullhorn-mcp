@@ -2,7 +2,18 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29), deployed 2026-09-29; T40.8 live acceptance found CV parsing broken since CR19 and is blocked on CR42. **Sprint 40B (CR42 resume parser parameters) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.53 at 843 tests passing** (2026-09-29). T40B.3 live smoke check passed; T40B.4 (T40.8) waits on the v0.0.53 deploy.
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29), deployed 2026-09-29; T40.8 live acceptance found CV parsing broken since CR19 and is blocked on CR42. **Sprint 40B (CR42 resume parser parameters) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.53 at 843 tests passing** (2026-09-29). T40B.3 live smoke check passed. v0.0.53 is deployed; the T40B.4 (T40.8) re-run created test Candidate 173063 and then crashed on skills, which led to CR43. **Sprint 41 (CR43) is BUILT at 911 tests passing (2026-10-02), committed locally, awaiting /review then PROMPT_iterate (target v0.0.54). Sprints 42 and 42B (CR44, v0.0.55 and v0.0.56) are PLANNED** (replan 2026-10-02); only v0.0.56 is deployed, carrying all three.
+
+**Replan validation (2026-10-02, post-CR42; CR43 and CR44):** Re-reconciled PRD, user stories, CRs, and source code. **843 tests passing, tagged v0.0.53** (`.venv/bin/pytest -q`: 843 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
+- **CR43** (reviewed CV flow) is planned as **Sprint 41** (v0.0.54) and **CR44** (weighted duplicate match check) as **Sprints 42 and 42B** (v0.0.55, v0.0.56). Both were owner-APPROVED 2026-10-02, with PRD amendments already applied (uncommitted at replan): FR-15 Amendment 2, FR-23, US-50, US-51, US-52, and the §1 scope line. Code search confirms nothing is implemented (see each sprint's Current state).
+- **Discrepancy 1 (resolved with the owner):** CR43 kept `attach_cv`'s `include_work_history` / `include_education` / `include_skills` flags (default False), which contradicts D4 ("additions apply straight away"). The owner chose to remove them and `force_all`. An omitted list uses the parse, an empty list adds nothing, and `fields_to_update` only limits the fields considered. Written back as CR43 D8.
+- **Discrepancy 2 (resolved with the owner):** FR-23 requires each check to be logged "with its outcome", but CR44 never decided how outcomes get in (critique 12 open), or what `attach_cv` does with the check. Decided: every check returns a `match_check_id`; the three write tools accept it and log the outcome automatically; `attach_cv` runs no check of its own; no new tool. Written back as CR43 D9 and CR44 D12.
+- **Discrepancy 3 (resolved with the owner):** FR-23's versioned-config and log bullets had no user story. US-52 gained one acceptance sentence (CR44 D13; PRD.md and CR44.md updated).
+- **Sizing (resolved with the owner):** CR44 is well over one ~100k-token sprint, so it is split. Sprint 42 is the pure scorer and config, not wired in. Sprint 42B is retrieval, wiring, policy, log and calibration. This amends CR44 D11. One deploy after 42B; v0.0.54 and v0.0.55 are never deployed.
+- Carried over: Sprint 40 T40.8 / Sprint 40B T40B.4 live acceptance. The 2026-09-29 re-run on v0.0.53 created test Candidate 173063, then crashed on skills (the CR43 motivation). It is re-run after the v0.0.56 deploy as **T42B.8**.
+- Read-only live check at replan: `CandidateWorkHistory` and `CandidateEducation` both have `isDeleted`, so `client.query` already filters soft-deleted child rows (CR44 D2). `Candidate.primarySkills` is TO_MANY; `companyURL`, `email2`, `email3` are 100-char strings, and phone fields are 50.
+- Found during planning: the current candidate duplicate search interpolates names and email into quoted Lucene phrases unescaped (`server.py:93-111`, `:2299-2316`), and `src/` has no Lucene escape helper. It is fixed by the new retrieval module (T42B.1), not patched separately.
+- Tool count unchanged at 42 across all three sprints. `bha-expired-list-ids.md` (untracked data note) still has no PRD requirement; nothing planned. CR35 still reserved and unspecced. CR45 (generic upload) follows after the deploy (owner asked to be reminded).
 
 **Replan validation (2026-09-29, post-CR41):** Re-reconciled PRD, user stories, CRs, and source code. **838 tests passing, tagged v0.0.52** (`.venv/bin/pytest -q`: 838 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **New CR42** (fix Bullhorn resume parser parameters, owner-APPROVED 2026-09-29, HTML description chosen, A1 to A4 accepted) is planned as patch **Sprint 40B** (target v0.0.53). Its PRD amendments were applied before the build (committed in 58fbf1d): one new FR-15 sentence and one US-31 acceptance clause. Code search confirms nothing is implemented: `client.py:215` still sends `populateDescription: "true"`, and `client.py:230-231` still puts `format` in the JSON body with no query params. See Sprint 40B Current state.
@@ -125,7 +136,10 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 38 | **COMPLETE** | CR38: `people_search_perplexity`. New isolated `perplexity.py` module and one read-only tool (Perplexity people index, FR-22 / US-45). Tool count 38 to 39. **743 tests passing.** Tagged v0.0.50. See Sprint 38 detail. |
 | Sprint 39 | **COMPLETE** | CR40: `add_note` always sends `personReference` (JobOrder, Placement and Opportunity attach to the logged-in consultant via the TO_MANY link; Lead to itself), adds `person_id`, and replaces ClientCorporation notes with a `company_notes_live_on_contacts` redirect. `get_notes_for_entity` and `search_notes` read `clientContactNotes` for companies (FR-7 Amendment 2, FR-16 Amendment; US-46, US-47). Tool count unchanged at 39. Target v0.0.51. See Sprint 39 detail. Reviewed (2 cycles; owner asked for minors fixed too), tagged v0.0.51, 762 tests. |
 | Sprint 40 | **COMPLETE** | CR41: CV file intake via single-use upload tickets (`request_cv_upload`, `POST /upload/{token}`, `get_cv_upload`, in-chat `show_cv_upload_box` fallback); `upload_id` replaces `file_b64` on `parse_cv` / `create_candidate_from_cv` / `attach_cv`; `/upload-cv` and `UPLOAD_SECRET` removed. FR-15 Amendment, NFR-9, US-48, US-49. Target v0.0.52. T40.1 owner hands-on test passed 2026-09-29. Built 2026-09-29 (T40.2-T40.7 plus T40.8 sample CVs): 819 tests, 42 tools. Reviewed (3 cycles; owner asked for minors fixed too), tagged v0.0.52, **838 tests passing**. Deployed 2026-09-29. T40.8 live acceptance found every CV parse failing (Bullhorn 400s, broken since CR19); T40.8 resumes after CR42 (Sprint 40B) is deployed. |
-| Sprint 40B | **COMPLETE** | CR42 (patch): fix Bullhorn resume parser parameters. `parse_resume_file` sends `populateDescription=html`; `parse_resume_text` sends `format` and `populateDescription` as query params (`text` or `html`, from `content_type`). FR-15, US-31. Target v0.0.53. Built 2026-09-29 at 841 tests (3 rewritten in place, 3 added). T40B.3 live smoke check passed 2026-09-29. Reviewed (2 cycles; owner asked for minors fixed too), tagged v0.0.53, **843 tests passing**. Deploy and T40B.4 pending. Ends with the carried-over Sprint 40 T40.8 live acceptance. |
+| Sprint 40B | **COMPLETE** | CR42 (patch): fix Bullhorn resume parser parameters. `parse_resume_file` sends `populateDescription=html`; `parse_resume_text` sends `format` and `populateDescription` as query params (`text` or `html`, from `content_type`). FR-15, US-31. Target v0.0.53. Built 2026-09-29 at 841 tests (3 rewritten in place, 3 added). T40B.3 live smoke check passed 2026-09-29. Reviewed (2 cycles; owner asked for minors fixed too), tagged v0.0.53, **843 tests passing**. Deployed. The T40B.4 re-run created test Candidate 173063, then crashed on skills (CR43); carried over to T42B.8. Ends with the carried-over Sprint 40 T40.8 live acceptance. |
+| Sprint 41 | **BUILT** (awaiting review) | CR43: reviewed CV flow. The parse is stored on the upload; Claude's corrected fields, work history, education and skills are written; `skillSet` plus `primarySkills` by association PUT; `attach_cv` writes additions at once and overwrites only on `confirm=True` (`include_*` and `force_all` removed); `create_candidate` takes child lists; one shared duplicate function; a created id is never hidden. FR-15 Amendment 2, US-50, US-51. Target v0.0.54, **not deployed alone**. Built 2026-10-02: **911 tests passing** (843 + 68), 42 tools. T41.7 live association check passed. |
+| Sprint 42 | PLANNED | CR44 part 1: pure match-check scorer (log2(m/u) points, guards, names, employers, education), normalisers, versioned `match_config.json`, synthetic fixtures. Not wired in. FR-23, US-52. Target v0.0.55, not deployed. |
+| Sprint 42B | PLANNED | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
 
 ### Sprint 15 post-tag regression note
 
@@ -3571,7 +3585,7 @@ Previous: 762 (Sprint 39 actual). Removed 9 (`TestCVUploadEndpoint`). Added abou
 
 ---
 
-## Sprint 40B: CR42 Fix Bullhorn resume parser parameters (patch sprint) - COMPLETE (v0.0.53; T40B.4 pending deploy)
+## Sprint 40B: CR42 Fix Bullhorn resume parser parameters (patch sprint) - COMPLETE (v0.0.53; T40B.4 carried over to T42B.8)
 
 **Change request:** CR42.md (APPROVED, owner, 2026-09-29; HTML description chosen; assumptions A1 to A4 accepted)
 **PRD requirement:** FR-15 (new sentence: parsing populates the Candidate description, HTML for an uploaded file, the input's own form for pasted text; every CV tool path parses against the live tenant). Applied to PRD.md, committed in 58fbf1d.
@@ -3632,7 +3646,7 @@ Previous: 762 (Sprint 39 actual). Removed 9 (`TestCVUploadEndpoint`). Added abou
 - [x] `git diff --stat` shows no line-ending churn (client.py +25/-4, test_client.py +58/-9, both still fully CRLF) in `client.py` or `tests/test_client.py`.
 - [x] T40B.3 live parse-only smoke check passed, results recorded (owner-approved 2026-09-29).
 - [x] Local commit `fix: CR42 resume parser parameters` (done 2026-09-29), then `/review` (manual), then PROMPT_iterate (push, tag **v0.0.53**).
-- [ ] Owner deploys v0.0.53; T40B.4 (T40.8) run and recorded.
+- [ ] Owner deploys v0.0.53; T40B.4 (T40.8) run and recorded. **Partly run 2026-09-29:** v0.0.53 deployed; the re-run created test Candidate 173063 (fields, description, 2 work history, 2 education) and then crashed on skills (`skillList` is strings). No skills, no file. Root cause and fix are CR43 (Sprint 41); the acceptance is re-run as T42B.8 after the v0.0.56 deploy.
 
 ### Expected test count after Sprint 40B
 
@@ -3651,3 +3665,294 @@ Previous: 838 (Sprint 40 actual). Rewritten in place: 3 (net 0). Added: about 3 
 - **Cycle 1** (review of 58fbf1d + 62f73c6): M1 `attach_cv` preview reported `current: null` for `description` because the diff's `client.get` field list omitted it, while the parser now returns a populated HTML description; a `force_all=True` commit would overwrite against a false preview. Fixed by adding `description` to the fetched fields, pinned by `test_attach_cv_preview_shows_current_description`. Minors fixed at the owner's request: m1 `content_type` check made case- and whitespace-insensitive (new test); m2 response inflation measured in the concerns section; m3 to m5 stale plan and CR text. Commit 508a70f.
 - **Cycle 2**: clean (no CRITICAL, no MODERATE). Three minors: m1 preview size (above, owner chose to leave it), m2 and m3 stale doc text and counts, fixed in the Step 5 docs commit.
 - **Learning:** a client-layer fix that makes Bullhorn start returning a field it never returned before can change behaviour in unchanged callers. When a parser or read path gains a field, grep every caller that diffs or copies that response (`_attach_cv` diffs against a hand-listed field set).
+
+---
+
+## Sprint 41: CR43 Reviewed CV flow (parse once, Claude corrects, write children and skills) - BUILT (awaiting review)
+
+**Change request:** CR43.md (APPROVED, owner, 2026-10-02; D8 and D9 added at this replan)
+**PRD requirement:** FR-15 Amendment 2 (Reviewed CV Parsing and Candidate Child Records)
+**User stories:** US-50 (Claude checks a parsed CV before it is written), US-51 (add a sourced candidate with history). US-31 and US-48 are exercised again by the carried-over T40.8 (now T42B.8).
+**Dependency:** Sprint 40B complete (baseline **v0.0.53, 843 tests**, measured 2026-10-02). Production runs v0.0.53.
+**Risk:** High. It rewrites the three CV write paths and `create_candidate`, changes `attach_cv`'s call contract (D8), and replaces the CV test fixture with the live shape, so many existing CV tests change. **v0.0.54 is never deployed on its own** (CR43 A7, CR44 D11): new candidates write with no preview, and the duplicate check stays the weak one until Sprint 42B.
+**Tool count:** unchanged (42). Parameters change, no tools are added.
+
+### Current state (verified by code search, 2026-10-02)
+
+- **Nothing in CR43 is implemented.** No `parsed` on `_Upload` (`uploads.py:127`), no `set_parsed`, no `_parse_upload`, `_split_parsed_skills`, `_write_candidate_children` or `_find_candidate_duplicates` in `server.py`.
+- **Skills crash (CR43 motivation 1):** `_create_candidate_from_cv` (`server.py:2886-2892`) and `_attach_cv` (`server.py:3116-3117`) call `skill.get("id")` on `parsed["skillList"]`, which is a list of strings on the live tenant. `tests/conftest.py:111` `sample_parsed_resume` uses `[{id, name}]` (line 149), so no test catches it. In `_attach_cv` the crash is before the preview/commit split.
+- **primarySkills write does nothing (CR43 A2, live 2026-10-02):** both paths send `client.update("Candidate", id, {"primarySkills": {"data": [...]}})` (`server.py:2898`, `3201`). Bullhorn answers 200 with an `ATTEMPT_TO_SET_TO_MANY` warning and writes nothing. `client.add_association(entity, id, association, ids)` (`client.py:648`, PUT with comma-separated ids, used by the tearsheet tools) is the right call and already exists.
+- **Hidden records (motivation 2):** `_create_candidate_from_cv` catches only `AuthenticationError` / `BullhornAPIError` (`server.py:2952`); any other exception after `client.create` (`:2852-2853`) loses the id.
+- **No corrections:** `create_candidate_from_cv` (`server.py:2710`) takes only `fields_override`; work history, education and skills are copied raw from the parse (`:2860-2915`). `attach_cv` (`server.py:2957`) takes `fields_to_update`, `include_work_history`, `include_education`, `include_skills`, `force_all` and no values. It re-parses on every call (`:3050`).
+- **Two duplicate checks (motivation 4):** `_check_candidate_duplicates` (`server.py:81`, used by `create_candidate` `:2250`, `parse_cv` `:2653`, `parse_cv_text` `:2701`, `_create_candidate_from_cv` `:2796`) and `find_duplicate_candidates` (`server.py:2275`) repeat the same search and scoring. The helper swallows search errors and returns `None`; the tool reports them as `ERROR:`.
+- `create_candidate(fields, force=False)` (`server.py:2145`) has no child-record parameters.
+- `required_fields_missing` (`server.py:2226`, `:2843`) gives no hint.
+- `parse_cv` and `parse_cv_text` return the whole `parsed` object, including the HTML description (Sprint 40B concern: about 1,250 tokens per response for the docx fixture).
+- `CandidateWorkHistory` and `CandidateEducation` both have `isDeleted` (read-only `/meta` check 2026-10-02), so `client.query` already appends `isDeleted=false` to the existing `attach_cv` de-dup queries.
+- Line endings: `server.py`, `uploads.py`, `test_uploads.py`, `CR43.md`, `README.md` LF; `tests/conftest.py`, `tests/test_server.py`, this file CRLF.
+- 843 tests passing. No skips, xfails, TODOs or FIXMEs in `src/` or `tests/`.
+
+### Decisions and assumptions
+
+- CR43 D1 to D9 and A1 to A7 hold. In particular D8 (this replan): `attach_cv` loses `include_work_history`, `include_education`, `include_skills` and `force_all`. An omitted list means "use the stored parse", an empty list means "add none of this". `fields_to_update` omitted means every parsed scalar field is considered; given, only those.
+- **P1 (planning choice).** Every `attach_cv` call can now write (additions apply at once), so every call claims the upload, not only the commit.
+- **P2 (planning choice).** A confirm call on an upload whose file is already attached is allowed only for the same Candidate the file was attached to. `mark_attached` records that Candidate id; any other use still gets `upload_already_attached`.
+- **P3 (planning choice).** A `description` passed in `fields_override` is ignored with a warning, because CR43 goal 2 says the description always comes from the parse.
+- **P4 (planning choice).** For a new Candidate the joined `skillSet` goes into the create payload (one write fewer); `primarySkills` are linked with one association PUT after the create. On an update both are appended.
+- **P5 (planning choice).** The duplicate check runs on Claude's corrected names and email, not the raw parse.
+- **P6 (planning choice).** `create_candidate` keeps its current response keys (`changedEntityId`, `changeType`, `data`) and adds `written` only when child lists are passed, so existing callers are unaffected.
+
+### Tasks
+
+#### T41.1, real parse fixture and stored parse on the upload
+**Files:** `tests/conftest.py` (CRLF), `src/bullhorn_mcp/uploads.py` (LF), `tests/test_uploads.py` (LF)
+- Replace `sample_parsed_resume` with the live shape (CR43 live evidence), all synthetic: `confidenceScore`, `candidate` (with an HTML `description` and an empty `companyName`), `candidateWorkHistory` (one entry without `companyName`, one with the employer merged into `title`), `candidateEducation`, `skillList` as strings, `primarySkills` as `[{name, id}]`. Leave out `rawParsedOutput`. Every CV test then runs against reality; list every test that had to change in the build notes.
+- `_Upload.parsed: dict | None` and `_Upload.attached_candidate_id: int | None`. `set_parsed(upload_id, owner_sub, parsed)` works on `received` and `attached` records. `get` returns `parsed` and `attached_candidate_id`. `mark_attached(upload_id, file_id=None, candidate_id=None)` drops the bytes but keeps `parsed` on the tombstone until the purge (CR43 change 1; NFR-9 covers the file bytes, which are still dropped at once).
+- **Unit tests** (`tests/test_uploads.py`): `test_set_parsed_round_trip`, `test_parsed_kept_after_mark_attached`, `test_mark_attached_records_candidate_id`, `test_parsed_dropped_at_purge`, `test_set_parsed_other_user_not_found`, `test_bytes_still_dropped_on_attach_with_parse_kept`.
+
+#### T41.2, shared helpers: stored parse, skill split, child writer, required-field hint
+**File:** `src/bullhorn_mcp/server.py`
+- `_load_received_upload(upload_id, claim=False, attached_ok_for=None)`: with `attached_ok_for=<candidate_id>`, an `attached` upload with a stored parse and the same `attached_candidate_id` is returned (no bytes) instead of `upload_already_attached` (P2). The record also carries the caller's `sub` so the helpers below can call `set_parsed`.
+- `_parse_upload(client, upload)`: return `upload["parsed"]` if present, else parse the bytes and `set_parsed`. One parser call per upload, whatever is called after.
+- `_split_parsed_skills(parsed) -> (names, ids)`: names from `skillList` (strings; a dict entry gives its `name`, so an old-shape response cannot crash), ids from `primarySkills[].id`. Missing keys give empty lists. Dedupe, names case-insensitively, keeping order.
+- `_cv_response_view(parsed)`: the parse as Claude sees it. Candidate fields without `description` (shown as `description_length`), work history, education, `skillList`, `primarySkills`, `confidenceScore`. Used by `parse_cv`, `parse_cv_text` and the duplicate-found response (cuts the Sprint 40B response-size concern).
+- `_write_candidate_children(client, metadata, candidate_id, work_history, education, skill_names, primary_skill_ids, existing_skillset, existing_primary_ids) -> (written, warnings)`: each work history and education entry is copied, `id` dropped, `candidate` set, truncated against `/meta`, then created, best-effort per item as today. Skill names not already in `existing_skillset` (case-insensitive, comma-split) are appended in one `skillSet` update. Ids not in `existing_primary_ids` are linked with one `client.add_association("Candidate", id, "primarySkills", ids)`. A response with a `messages` warning, or without `changeType: ASSOCIATE`, is reported as a warning, not a success (CR43 A2). `written` lists each child with its new id and key fields, the names appended, the ids linked and those skipped as already present.
+- `_required_fields_missing_response(missing, retry_arg)`: adds a hint to retry with `fields_override` (or `fields` for `create_candidate`) and, when `companyName` is missing, to take the current employer from the CV (CR43 goal 8).
+- **Unit tests** (`tests/test_server.py`, new `TestCvHelpers`): `test_split_skills_live_shape`, `test_split_skills_tolerates_missing_keys_and_dict_entries`, `test_parse_upload_parses_once_and_stores`, `test_parse_upload_uses_stored_parse`, `test_cv_view_omits_description_shows_length`, `test_children_payloads_carry_given_values` (payload assertion on each `client.create`), `test_children_primary_skills_use_association_put` (asserts `add_association` called with the ids and `client.update` never called with `primarySkills`), `test_children_association_warning_reported_as_failure`, `test_children_skillset_appends_not_replaces`, `test_children_skip_already_present_skills`, `test_children_item_failure_is_best_effort`, `test_required_fields_hint_mentions_companyname`.
+
+#### T41.3, `create_candidate_from_cv` writes Claude's version and never hides the id
+**File:** `src/bullhorn_mcp/server.py`
+- Signature: `create_candidate_from_cv(upload_id=None, content=None, content_type="text/plain", force=False, fields_override=None, work_history=None, education=None, skills=None, primary_skills=None)`.
+- File mode uses `_parse_upload` (stored parse, A1: parses and stores if `parse_cv` was not called). Text mode parses each time (there is no upload to store on).
+- Corrections: `fields_override` merges over the parsed candidate (P3 for `description`); each list Claude passes replaces the parsed one, omitted lists use the parse.
+- The duplicate check uses the corrected names and email (P5) through `_check_candidate_duplicates` (made shared in T41.6; matching logic unchanged until Sprint 42B).
+- After `client.create` succeeds, everything else runs inside a guard that catches **any** exception and still returns `created: true`, the id, the warnings, the error text and `cv_attach_retry` when the file is not attached (CR43 goal 5). The existing `cv_attach_retry` call text drops `fields_to_update=[]` (no longer needed: additions are only the file and anything missing).
+- `skillSet` in the create payload (P4); children and `primarySkills` through `_write_candidate_children`; then the file, then `mark_attached(upload_id, file_id, candidate_id)`.
+- Response: `created`, `candidate_id`, `written` (`fields` as written without `description`, plus `description_length`; `work_history`, `education`, `skill_set`, `primary_skills`, `file`), `warnings`, `cv_attach_retry` when needed, `duplicate_check` (the best match, same form as the tool).
+- **Tests** (`tests/test_server.py::TestCreateCandidateFromCv`; rewrite the skill assertions of the existing tests in place onto the live shape): `test_create_uses_stored_parse_without_reparsing` (parser mock called zero times after `parse_cv`), `test_create_without_prior_parse_parses_and_stores`, `test_create_writes_corrected_work_history` (payload), `test_create_writes_corrected_education` (payload), `test_create_empty_list_writes_none`, `test_create_skillset_in_create_payload`, `test_create_links_primary_skills_by_association`, `test_create_description_override_ignored_with_warning`, `test_create_dup_check_uses_corrected_names`, `test_create_unexpected_exception_after_create_returns_id` (a `RuntimeError` from the child writer), `test_create_reports_everything_written`, `test_create_marks_attached_with_candidate_id`, `test_create_required_fields_hint`, `test_create_text_mode_accepts_corrections`.
+
+#### T41.4, `attach_cv`: additions now, overwrites on `confirm`
+**File:** `src/bullhorn_mcp/server.py`
+- Signature (D8): `attach_cv(candidate_id, upload_id, fields_to_update=None, fields_override=None, work_history=None, education=None, skills=None, primary_skills=None, confirm=False)`. `include_*` and `force_all` removed. Every call claims the upload (P1) and uses `_load_received_upload(..., attached_ok_for=candidate_id)` (P2).
+- `_plan_cv_update(existing, proposed_fields, fields_to_update, existing_wh, existing_edu, work_history, education, skill_names, primary_ids, existing_skillset, existing_primary_ids)`, a pure function returning `{additions: {fields, work_history, education, skill_names, primary_skill_ids}, overwrites: [{field, current, proposed}]}`. A field is an addition when the record's value is `None` or blank, an overwrite when it holds a different value, and skipped when equal after trimming. `description` overwrites show only both lengths (A6). Work history and education de-dup keeps today's keys, compared after trimming and lowercasing the text parts, so a confirm call after the additions adds nothing twice.
+- Existing primary skills are read with `client.get_association("Candidate", id, "primarySkills", fields="id")`.
+- Without `confirm`: write the additions (fields through `client.update` with the existing name recompute, children through `_write_candidate_children`), attach the file if this upload is not yet attached, and return `written` plus `pending_overwrites` and a hint: show these to the consultant and call again with `confirm=True` only after a yes. With `confirm=True`: also write exactly the planned overwrites. Unattended callers pass `confirm=True` on the first call (D4).
+- A file attach failure no longer turns the whole call into `ERROR:`; it is a warning with a retry hint (the upload keeps its bytes). Any exception after the first write returns `committed: true`, `partial: true`, what was written and the error.
+- **Tests** (`tests/test_server.py::TestAttachCv`; the 15 existing tests are rewritten in place where they used `include_*` / `force_all`, each listed in the build notes): `test_plan_empty_field_is_addition`, `test_plan_filled_field_is_overwrite`, `test_plan_equal_after_trim_skipped`, `test_plan_fields_to_update_limits_fields`, `test_plan_description_overwrite_shows_lengths_only`, `test_attach_without_confirm_writes_additions_only` (payload assertion: no overwrite field in any `update` call), `test_attach_without_confirm_returns_pending_overwrites`, `test_attach_confirm_writes_exactly_previewed_overwrites`, `test_attach_confirm_after_additions_adds_nothing_twice` (second call: no child creates, no association PUT, no second `attach_file`), `test_attach_confirm_on_attached_upload_same_candidate_allowed`, `test_attach_attached_upload_other_candidate_refused`, `test_attach_uses_stored_parse`, `test_attach_corrected_lists_replace_parse`, `test_attach_empty_list_adds_none`, `test_attach_file_failure_is_warning_with_retry`, `test_attach_unexpected_exception_returns_partial`, `test_attach_removed_params_absent_from_schema` (via `mcp.get_tool`, not `__doc__`).
+
+#### T41.5, `create_candidate` with work history, education and skills (D5, US-51)
+**File:** `src/bullhorn_mcp/server.py`
+- Signature: `create_candidate(fields, force=False, work_history=None, education=None, skills=None, primary_skills=None)`. After the create, `_write_candidate_children` (skill names are merged with any `skillSet` in `fields`, P4 style, so the name list is in the create payload). Same after-create guard as T41.3. Response per P6.
+- **Tests** (`tests/test_server.py::TestCreateCandidate`): `test_create_candidate_writes_children` (payloads), `test_create_candidate_links_primary_skills`, `test_create_candidate_merges_skills_into_skillset`, `test_create_candidate_without_lists_response_unchanged`, `test_create_candidate_exception_after_create_returns_id`, `test_create_candidate_required_fields_hint`.
+
+#### T41.6, one duplicate function, parse responses, tool guidance
+**File:** `src/bullhorn_mcp/server.py`
+- `_find_candidate_duplicates(client, first, last, email)` returns the tool's full result (`query`, `matches`, `exact_match`). `find_duplicate_candidates` returns it; `_check_candidate_duplicates` becomes a thin wrapper returning the best match in the same match form, or `None`, and keeps swallowing search errors (the tool keeps reporting them). Logic unchanged (CR44 replaces it in Sprint 42B).
+- `parse_cv` stores the parse (`_parse_upload`) and returns `_cv_response_view` plus `duplicate_check`. `parse_cv_text` returns the same view (nothing stored).
+- Tool descriptions (text before `Args:` only, because FastMCP drops the rest) and `request_cv_upload` `next_steps`: parse first, check the parse against the CV and correct it, then create or attach; tell the consultant what was written; with a consultant present, get their yes before `confirm=True`.
+- Run `.venv/bin/python scripts/measure_descriptions.py` before and after; record the delta (NFR-8).
+- **Tests:** `test_tool_and_create_path_agree_on_same_fixture` (`TestFindDuplicateCandidates`), `test_check_wrapper_swallows_search_error`, `test_parse_cv_stores_parse_and_omits_description` (`TestParseCv`), `test_parse_cv_text_returns_view` (`TestParseCvText`), `test_request_cv_upload_next_steps_mention_review` (`TestRequestCvUpload`).
+
+#### T41.7, live association check and docs
+- **Live write check (owner's explicit go-ahead in the build session; test Candidate 173063 only, per the approved live test records):** `add_association("Candidate", 173063, "primarySkills", [<two ids>])` in one PUT, read back, then `remove_association` both. Pass: one `ASSOCIATE` response, both linked, then none. Record the response shape. If comma-separated ids fail, `_write_candidate_children` links one id per call and the build notes say why.
+- README: CV flow section (parse, review, create or attach, confirm for overwrites; `attach_cv` parameters changed).
+- `.claude/skills/bullhorn-mcp-api-quirks/SKILL.md` (gitignored): `skillList` strings vs `primarySkills` objects, and the `ATTEMPT_TO_SET_TO_MANY` silent no-op.
+- Plan bookkeeping (Actual count, Current Status row). PRD is already amended.
+
+### Verification
+
+- [x] `.venv/bin/pytest` green: **911 passed** (2026-10-02). Rewritten and deleted tests are listed in the build notes below.
+- [x] `grep -n 'skill.get("id")\|"primarySkills": {"data"' src/bullhorn_mcp/server.py` returns nothing.
+- [x] `grep -n "include_work_history\|force_all" src/bullhorn_mcp/server.py` returns nothing.
+- [x] Server imports cleanly; `list_tools()` reports 42 tools.
+- [x] Line endings: `server.py`, `uploads.py`, `test_uploads.py`, `README.md` LF (0 CR); `tests/conftest.py` (150/150) and `tests/test_server.py` (9149/9149) fully CRLF; this file CRLF.
+- [x] T41.7 live association check run with the owner's go-ahead (2026-10-02), result recorded below.
+- [x] NFR-8 description delta recorded below.
+- [x] Local commit `feat: CR43 reviewed CV flow ...`. No push. Next: `/review` (manual), then `PROMPT_iterate.md` to a clean cycle, push, tag **v0.0.54**. **Do not deploy** (v0.0.56 carries CR43 and CR44 together).
+
+### Build notes (2026-10-02)
+
+**Built as planned:** T41.1 to T41.7. `_find_candidate_duplicates` is the one duplicate check; `_check_candidate_duplicates` wraps it (best match or None, search errors swallowed) and `find_duplicate_candidates` returns it (errors reported). Helpers in the "CR43: reviewed CV flow helpers" block of `server.py`: `_parse_upload`, `_split_parsed_skills`, `_normalize_skills` (Claude's `skills` / `primary_skills` go through the same tolerant splitter as a parse), `_merge_skill_set`, `_cv_response_view`, `_write_candidate_children`, `_required_fields_missing_response`, `_plan_cv_update`.
+
+**Choices made in the build (beyond P1 to P6), for the reviewer to check:**
+- **B1. Education de-dup key extended.** The plan said "keep today's keys" (`school, degree, startDate, endDate`). Live data on 173063 (read-only, 2026-10-02) shows a certification entry with every one of those null (`{certification: "ACCA"}`), so any two certifications would collide and the second would never be added. The key is now `school, degree, major, certification, graduationDate, startDate, endDate`; all seven fields exist on `/meta/CandidateEducation` (checked live). Work history keeps `companyName, title, startDate, endDate`.
+- **B2. A blank proposed value is never planned.** The live parse leaves `companyName` as `""`; without this an attach would offer to blank a filled field as an overwrite.
+- **B3. `skillSet` is never a scalar field in the `attach_cv` plan** (`_ATTACH_SKIP_FIELDS`); it is only appended through the skills logic, so it is never replaced.
+- **B4. `attach_cv` fetches every field it compares** (base list plus each proposed field). Otherwise a filled field that was not fetched would look empty and be written as an "addition" over the real value. A `fields_override` key Bullhorn does not know therefore fails the fetch with `ERROR:` before anything is written.
+- **B5. `attach_cv` resolves `fields_override` labels** with `metadata.resolve_fields`, like the create paths.
+- **B6. The `attach_cv` name recompute uses the fetched record** (it already holds firstName and lastName), so the old extra `client.get` is gone.
+- **B7. Partial failures.** `attach_cv`: an Auth/API error before the first write is still `ERROR:`; from the first write attempt on, any exception returns `committed: true, partial: true`, `error` and what was written. `overwritten` lists only overwrite fields actually written.
+- **B8. Response shapes.** `create_candidate_from_cv`: `created`, `candidate_id`, `written` (`fields` without `description`, `description_length`, `work_history`, `education`, `skill_set`, `primary_skills`, `file`), `warnings`, `duplicate_check`, `cv_attach_retry`, and `error` on a failure after the create. `attach_cv`: `committed`, `candidate_id`, `written`, `already_present`, `pending_overwrites` plus `hint` (without confirm) or `overwritten` (with confirm), `warnings`. `parse_cv` and `parse_cv_text` keep the `parsed` key, now holding the view.
+
+**T41.7 live association check (owner go-ahead in the build session, test Candidate 173063 only):** before: no primary skills. `PUT /entity/Candidate/173063/primarySkills/1000125,1000835` (IFRS, ESG) returned `{changeType: ASSOCIATE, data: {primarySkills: {add: [1000125, 1000835]}}}` and both were linked. A second PUT of the already linked 1000125 returned `ASSOCIATE` **plus** `messages: [{type: ASSOCIATION_ERROR, severity: ERROR, detailMessage: "ID 1000125 was already associated to entity 173063"}]`. `DELETE` of both returned `DISASSOCIATE`; 173063 is back to no primary skills. **Pass:** one comma-separated PUT works, so `_write_candidate_children` links all new ids in one call. Because a re-link answers with an ERROR message, the writer filters already linked ids first and treats any `messages` as "not confirmed". **Known limit (MINOR):** if the read of existing links fails (swallowed to `[]`) and the batch mixes new and already linked ids, the whole batch is reported as not linked although Bullhorn linked the new ones.
+
+**NFR-8 description delta** (`scripts/measure_descriptions.py`): 69,383 to 70,314 characters, about **17,345 to 17,578 tokens (+233)**. Per tool: `attach_cv` 2908 to 3020, `parse_cv` 2540 to 2897, `create_candidate_from_cv` 2672 to 2884, `create_candidate` 2219 to 2465, `parse_cv_text` 2476 to 2480, `find_duplicate_candidates` unchanged.
+
+**Tests rewritten or removed (pre-existing tests):**
+- `tests/conftest.py` `sample_parsed_resume` replaced with the live shape (strings in `skillList`, `primarySkills` objects, empty `companyName`, HTML `description`, employer merged into a title, a certification-only education entry).
+- `TestCreateCandidateFromCv`: new class autouse `cv_config` (patches `get_candidate_required` to `[]`, defaults to `{}`, source to "Claude"), because `.env` requires `companyName` and the live-shape parse leaves it empty. Rewritten onto the `written` response and the live fixture: `test_create_from_cv_binary_success`, `test_create_from_cv_text_success`, `test_create_from_cv_duplicate_found`, `test_create_from_cv_force_bypasses_dup`, `test_create_from_cv_child_record_failure_best_effort`, `test_source_auto_stamped_when_not_provided`, `test_user_supplied_source_wins_in_cv_flow`, `test_create_attach_failure_keeps_upload`, `test_create_success_has_no_retry_block`, `test_create_attach_failure_points_retry_at_attach_cv` (retry call no longer passes `fields_to_update=[]`; it is followed through the real `attach_cv` and asserted to write nothing twice).
+- `TestAttachCv` (removed `include_*` / `force_all`, every call claims, additions at once): rewritten `test_attach_cv_commit_applies_selected_fields` (overwrite needs `confirm=True`), `test_attach_cv_refuses_other_candidate_than_ticket`, `test_attach_cv_matching_ticket_candidate_proceeds`, `test_attach_cv_api_error`, `test_attach_cv_upload_not_found`; renamed and rewritten `test_attach_cv_commit_refused_while_upload_in_use` -> `test_attach_cv_refused_while_upload_in_use`, `test_attach_cv_other_users_commit_leaves_owners_claim` -> `test_attach_cv_other_users_call_leaves_owners_claim`, `test_attach_cv_commit_releases_claim_on_error` -> `test_attach_cv_releases_claim_on_error`, `test_attach_cv_commit_recomputes_name_both_components` / `_single_component` -> `test_attach_cv_recomputes_name_*` (single component: one `get`, see B6), `test_attach_cv_preview_keeps_then_commit_drops` -> `test_attach_cv_drops_bytes_and_keeps_parse`. **Deleted** (the flows no longer exist): `test_attach_cv_preview_returns_diff`, `test_attach_cv_preview_shows_current_description` (replaced by `test_attach_cv_get_fetches_description` and `test_attach_pending_description_overwrite_shows_lengths`), `test_attach_cv_force_all_applies_everything`, `test_attach_cv_preview_does_not_claim` (every call claims; covered by the in-use test).
+- `tests/test_server.py` now imports `call` from `unittest.mock` at the top.
+
+**Build learning:** two parallel test agents splicing the same file each re-read before writing, but one write still dropped a line the other had added a moment earlier (a module-level import). Parallel agents on one file need either disjoint files or one agent; check the full suite after they finish, not only each agent's classes.
+
+### Expected test count after Sprint 41
+
+Previous: 843 (Sprint 40B actual). Added about 6 (T41.1) + 12 (T41.2) + 14 (T41.3) + 17 (T41.4) + 6 (T41.5) + 5 (T41.6), about 60 new. Many existing CV tests are rewritten in place (net 0). **Expected: about 903, to be measured, not predicted.** **Actual: 911 passing, 0 failing** (843 + 68: 8 in `test_uploads.py`, 60 in `test_server.py`, net of 4 deleted). Tag pending review.
+
+---
+
+## Sprint 42: CR44 part 1, match-check scorer and versioned config (pure, not wired) - PLANNED
+
+**Change request:** CR44.md (APPROVED, owner, 2026-10-02; split into 42 and 42B at this replan, D11 amended)
+**PRD requirement:** FR-23 (Candidate Duplicate Detection by Weighted Evidence), bullets 1 to 3 (scoring, output, versioned config)
+**User stories:** US-52 (spot a returning candidate even without contact details). This sprint proves the scoring part offline; 42B makes it reachable.
+**Dependency:** Sprint 41 complete (v0.0.54).
+**Risk:** Medium. Pure functions with no I/O and no tool changes, so nothing user-facing moves. The risk is in the model: placeholder weights until calibration (42B T42B.6, then match-log outcomes). **v0.0.55 is never deployed.**
+
+### Current state (verified by code search, 2026-10-02)
+
+- No `duplicates.py`, `duplicate_retrieval.py`, `match_config.json` or `test_duplicates.py`. No weighted or log-odds scoring anywhere in `src/`.
+- `fuzzy.py` (CRLF) has `normalize` (company suffix strip), `score_company_match`, `score_contact_match`, `categorize_score`, used by the company and contact checks and by today's candidate check. Those stay as they are (CR44 non-goal: ClientContact and company checks unchanged). The new scorer does not import `score_contact_match`.
+- `pyproject.toml` packages `src/bullhorn_mcp` with hatchling, which already ships non-Python files there (`upload_box.html`), so `match_config.json` needs no packaging change. Confirm with a test that loads it through `importlib.resources`.
+- `tests/fixtures/` has only `sample_cv/`.
+
+### Decisions and assumptions
+
+- CR44 D1 to D13 hold. D10: every fixture is synthetic; no real person's data in the repo, including the stand-in for the 90308 pattern.
+- **P7 (planning choice).** "A name match alone can never reach a match band" is read as: name-only evidence is capped below the **high** band. A rare full-name match can still land in **uncertain**, so the consultant sees it (D9 then stops the create and lists it). The cap is a config value. Flag for the reviewer.
+- **P8 (planning choice).** Years come from the UTC year of the epoch-ms date (D3). Year-only dates stored as 1 or 2 January come out as the right year.
+- **P9 (planning choice).** The forename equivalents table (nicknames and Irish-English pairs, for example Seán/John, Séamus/James, Pádraig/Patrick, Liam/William, Siobhán/Joan, Bill/William) lives in `match_config.json` as a small curated list, so additions go through review like any weight.
+
+### Tasks
+
+#### T42.1, `match_config.json` and loader
+**Files:** new `src/bullhorn_mcp/match_config.json`, new `src/bullhorn_mcp/duplicates.py` (LF)
+- One versioned file (`"version": "1"`): m and u per signal level, caps (name-only cap per P7, employer max 3, education cap), guard values (tripped identifier m 0.85, u = holders/N; differing identifiers about -2; different forename about -6; different surname about -5), `pi_numerator` 0.3, a fallback `N` (73,815 from the 2026-09-30 count), band thresholds (high >= 0.98, low < 0.20), generic mailbox prefixes, internal domains (`thepanel.com`), employer suffix list (trailing only, critique 6), forename equivalents (P9).
+- `load_match_config(path=None)` validates the required keys, that every m and u is in (0, 1), and that thresholds are ordered; a bad file raises at load with the key named.
+- **Unit tests** (`tests/test_duplicates.py`, new, LF): `test_config_loads_from_package`, `test_config_has_version`, `test_config_rejects_probability_out_of_range`, `test_config_rejects_unordered_thresholds`, `test_config_rejects_missing_key`.
+
+#### T42.2, normalisers
+**File:** `src/bullhorn_mcp/duplicates.py`
+- `normalize_email` (trim, lowercase; `is_generic_mailbox`, `is_internal`).
+- `normalize_phone` (D1: strip spaces, dashes, brackets and `(0)`; `00353` and a leading national `0` become `+353`; under 7 digits gives `None`) and `phone_search_variants(phone)` (`+353...`, national `0...`, unquoted digits; CR44 "phones are stored in many formats").
+- `linkedin_key(url)`: `/in/<slug>` and old `/pub/<name>/<x>/<y>/<z>` forms, country subdomains, any case, with or without scheme or trailing slash, URL-decoded (critique 7). Non-LinkedIn URLs give `None`.
+- `normalize_employer(name)`: lowercase, `&` to `and`, punctuation off, trailing legal or jurisdiction suffixes (Ltd, Limited, plc, DAC, Group, Ireland) and a leading "The" removed, never down to zero distinctive words ("Bank of Ireland" stays "bank of ireland"). `employer_words(name)` for the nested search.
+- `normalize_person_name(name)`: lowercase, accents folded, apostrophe and no-apostrophe forms both kept (`o'brien`, `obrien`).
+- `forename_relation(a, b)` returns exact / equivalent / initial / typo / different / missing. `surname_relation(a, b)` returns exact / fuzzy (one edit, covering O'/Mc/Mac/fada) / different / missing.
+- **Unit tests:** about 25, one per rule above, plus `test_bank_of_ireland_not_stripped`, `test_pub_linkedin_url_normalised`, `test_phone_variants_for_national_number`, `test_short_number_ignored`, `test_fada_folds`, `test_mc_mac_is_fuzzy_surname`.
+
+#### T42.3, candidate profile shape (D7)
+**File:** `src/bullhorn_mcp/duplicates.py`
+- `CandidateProfile` dataclass: names, emails, phones, LinkedIn URL, current company, work history (`company`, `title`, `start_year`, `end_year`), education (`school`, `degree`, `year`).
+- Pure builders: `profile_from_parse(parsed, corrections)`, `profile_from_fields(fields, work_history, education)`, `profile_from_record(candidate, work_history_rows, education_rows)`. `to_echo()` gives the normalised profile for the output (D7).
+- **Unit tests:** `test_profile_from_parse_applies_corrections`, `test_profile_from_fields`, `test_profile_from_record_collects_all_email_and_phone_fields`, `test_profile_echo_is_normalised`, `test_current_company_is_extra_undated_employer`.
+
+#### T42.4, scorer
+**File:** `src/bullhorn_mcp/duplicates.py`
+- `prior(N)`, `to_percentage(points, prior)`, `band(percentage, config)`.
+- `score_pair(profile, existing, context, config)` returns `{points, percentage, band, breakdown: [{signal, points, reason}], flags}`. `context` carries N, identifier holder counts, name commonness totals and employer commonness totals (filled by retrieval in 42B; plain values in tests).
+- Signals per the CR44 design: guaranteed identifiers with the three guards (more than one holder, generic or internal mailbox, forenames clearly disagree), differing identifiers slightly against; swapped first/last checked first; forename and surname levels with commonness; distinct employers (never rows) with commonness weighting, a year-overlap bonus, up to 3, employer found inside `title`, `companyName`/`title` swap compared both ways (critique 5), `Candidate.companyName` as an extra undated employer, a small job-title bonus only within a shared employer, stale records never counted against; education as a capped tiebreaker, never negative, professional qualifications in `degree` kept (D4). **A missing value is exactly zero.**
+- `rank(profile, pool, context, config)`: every strong match, ranked, plus the `multiple_strong_matches` flag.
+- Every `reason` is plain English, because the consultant is shown it (D8b).
+- **Unit tests:** every signal level; `test_missing_value_scores_zero`; `test_pair_signals_symmetric`; `test_agreeing_evidence_never_lowers_score` (monotonicity); `test_employer_cap_three`; `test_education_never_negative`; `test_name_only_capped_below_high` (P7); `test_tripped_guard_downgrades_identifier`; synthetic case fixtures in `tests/fixtures/match_cases.json`: returning candidate with no contact details and shared employers and school (the 90308 pattern, invented people, gives **high**), common name with different people (not high), married name (surname differs, employers and email agree), shared agency mailbox (guard trips), swapped first and last names, internal `@thepanel.com` email.
+
+### Verification
+
+- [ ] `.venv/bin/pytest` green; no existing test changed (nothing is wired in).
+- [ ] `grep -rn "duplicates" src/bullhorn_mcp/server.py` returns nothing (not wired until 42B).
+- [ ] Fixtures reviewed for real personal data: none.
+- [ ] Line endings: new files LF; this file CRLF.
+- [ ] Local commit `feat: CR44 match-check scorer ...`. No push. Then `/review`, then `PROMPT_iterate.md`, push, tag **v0.0.55**. **Do not deploy.**
+
+### Expected test count after Sprint 42
+
+Previous: Sprint 41 actual (about 903). Added about 5 (T42.1) + 25 (T42.2) + 5 (T42.3) + 30 (T42.4), about 65. **To be measured, not predicted.**
+
+---
+
+## Sprint 42B: CR44 part 2, retrieval, wiring, create policy, match log, calibration - PLANNED
+
+**Change request:** CR44.md (APPROVED, owner, 2026-10-02; D12 and D13 added at this replan)
+**PRD requirement:** FR-23 (all bullets), FR-15 Amendment 2 (the one shared duplicate function)
+**User stories:** US-52 (including the logging clause added 2026-10-02), US-50 and US-51 (create paths now use the new check). Carries over the Sprint 40 T40.8 / Sprint 40B T40B.4 live acceptance.
+**Dependency:** Sprint 42 complete (v0.0.55).
+**Risk:** High. It changes what `find_duplicate_candidates` returns and when the three create paths stop, adds parallel Bullhorn searches and writes a log file to disk. **This is the release that gets deployed** (v0.0.56, carrying Sprints 41, 42 and 42B).
+
+### Current state (verified by code search, 2026-10-02)
+
+- Today's candidate search (`server.py:93-111` and `:2299-2316`) interpolates `email`, `firstName` and `lastName` into quoted Lucene phrases with no escaping. There is no Lucene escape helper in `src/` (`client.py:9` `_escape_where_literal` is for `/query` WHERE literals only).
+- `client.search_with_meta` (`client.py:302`) returns `total`, which supplies commonness counts and identifier holder counts. It appends `isDeleted:0` for Candidate. `exclude_deleted=False` gives the soft-deleted lookup (D8a).
+- `client.query` appends `isDeleted=false` for `CandidateWorkHistory` and `CandidateEducation` (both have the field, `/meta` 2026-10-02), which covers D2 for the pool fetch.
+- `_request` opens a new `httpx.Client` per call (`client.py:141`), so parallel searches from a thread pool share no connection state. The session is read through `auth.session`, so a first call made in parallel could trigger more than one refresh: read `client.auth.session` once before fanning out.
+- No match log, no `BULLHORN_MATCH_LOG_DIR`, no `match_check_id` anywhere. `server.py` already uses `logging` (`_logger`, `server.py:42`).
+
+### Decisions and assumptions
+
+- CR44 D5 to D13. D9: high band or a guaranteed identifier stops with `duplicate_found` and points to `attach_cv` / `update_record`; uncertain stops and lists the candidates; low writes; `force=True` overrides both stops. D12: `match_check_id` on the three write tools, outcome logged automatically, `attach_cv` runs no check of its own.
+- **P10 (planning choice, owner may change).** Log directory from a new env var `BULLHORN_MATCH_LOG_DIR`, default `~/.local/state/bullhorn-mcp/match-log`. Files `match-YYYY-MM-DD.jsonl`; files older than 30 days are deleted on the first write of a day. A log failure is a logged warning and never breaks a tool.
+- **P11 (planning choice).** Normalised identifiers in the log are SHA-256 hashed (D6). Hashed phone numbers can be brute-forced; recorded as a concern for the reviewer, not solved here.
+- **P12 (planning choice).** N (live candidate count) comes from `search_with_meta("Candidate", "id:[1 TO *]", count=1).total`, cached per process for 24 hours, falling back to the config N on error.
+- **P13 (planning choice).** Pool cap 100 candidates (config). Over the cap sets the `lookup_hit_cutoff` flag.
+
+### Tasks
+
+#### T42B.1, retrieval
+**File:** new `src/bullhorn_mcp/duplicate_retrieval.py` (LF)
+- `_lucene_phrase(value)` escapes `\` and `"` for quoted terms; `_lucene_term(value)` escapes Lucene special characters for bare words. Every value placed in a query goes through one of them.
+- `retrieve_pool(client, profile, config) -> (pool, context, flags)`: up to five searches in a `ThreadPoolExecutor` (session read first): emails across `email`/`email2`/`email3`; phone variants across the phone fields; LinkedIn key in `companyURL` (exact form to confirm by a read-only live check in the build, since wildcards behave differently per field); fuzzy surname plus first initial (both apostrophe forms); one nested `workHistories.companyName:(w1 AND w2)` plus `workHistories.title:(...)` search per distinct employer, up to 3, rerun combined with the surname when over 200 while keeping the original total. Union, dedupe, then one Candidate fetch, one `CandidateWorkHistory` query and one `CandidateEducation` query with `candidate.id IN (...)`. Totals fill `context`. One failed search is a `lookup_failed` flag, not an error.
+- `deleted_matches(client, profile)`: the identifier and name searches with `exclude_deleted=False` and `isDeleted:1`, returning ids and names only. They are never scored (D8a).
+- **Unit tests** (`tests/test_duplicate_retrieval.py`, new, LF, respx with exact query-string assertions): one per search shape, `test_values_are_escaped`, `test_union_dedupes`, `test_employer_over_200_reruns_with_surname_keeps_total`, `test_pool_cap_sets_cutoff_flag`, `test_one_search_failure_is_flag`, `test_pool_fetch_single_query_per_child_entity`, `test_deleted_lookup_not_scored`, `test_n_cached_and_falls_back`.
+
+#### T42B.2, one match function behind every caller
+**Files:** `src/bullhorn_mcp/duplicates.py`, `src/bullhorn_mcp/server.py`
+- `match_candidates(client, profile) -> {match_check_id, config_version, profile, matches, flags, deleted_matches}`: retrieval, scoring and one log line.
+- `_find_candidate_duplicates` (Sprint 41) now builds a profile and calls `match_candidates`. `_check_candidate_duplicates` is removed; callers use the policy helper (T42B.4). `parse_cv` and `parse_cv_text` return the full match result.
+- **Tests:** `test_match_candidates_logs_once`, `test_match_candidates_echoes_profile`, `test_parse_cv_returns_match_check_id`.
+
+#### T42B.3, `find_duplicate_candidates` takes a profile
+**File:** `src/bullhorn_mcp/server.py`
+- `find_duplicate_candidates(first_name=None, last_name=None, email=None, phones=None, linkedin_url=None, current_company=None, work_history=None, education=None, upload_id=None)`. With `upload_id`, the stored parse is the profile (other arguments override). At least one usable signal is required.
+- New response: `match_check_id`, the echoed profile, ranked matches (id, name, percentage, band, breakdown, flags), `deleted_matches`. The description (before `Args:`) tells Claude to show the consultant who, the percentage and the reasons for every match (D8b).
+- Rewrite the 4 `TestFindDuplicateCandidates` tests in place onto the new shape (listed in the build notes). New: `test_profile_from_upload_id`, `test_requires_a_signal`, `test_deleted_match_flagged`, `test_response_has_reasons`.
+
+#### T42B.4, create-path policy (D9) and `match_check_id` outcomes (D12)
+**File:** `src/bullhorn_mcp/server.py`
+- `_duplicate_policy(result) -> None | stop_response`: high or guaranteed gives `duplicate_found` (with a pointer to `attach_cv` or `update_record`); uncertain gives `possible_duplicates` with the list; low gives `None`. Every stop carries `match_check_id` and the reasons.
+- `create_candidate`, `create_candidate_from_cv` run the check (on the corrected profile, P5) unless `force=True`, apply the policy, and log `created_new` or `created_with_force`. All three write tools accept `match_check_id` (from an earlier `find_duplicate_candidates` or `parse_cv`); `attach_cv` logs `attached_to: <candidate_id>` under it.
+- **Tests:** `test_high_band_stops`, `test_guaranteed_identifier_stops`, `test_uncertain_stops_and_lists`, `test_low_band_writes`, `test_force_overrides_and_logs_created_with_force`, `test_attach_cv_logs_outcome_under_given_id`, `test_create_logs_created_new`, `test_stop_response_has_reasons`, for each of `create_candidate` and `create_candidate_from_cv` where the behaviour differs.
+
+#### T42B.5, match log
+**File:** new `src/bullhorn_mcp/match_log.py` (LF)
+- `log_check(...)` and `log_outcome(match_check_id, outcome, candidate_id)` append JSON Lines under a lock (P10). Each check line holds the request id, timestamp, caller (CorporateUser id when resolved, otherwise the hashed `sub`), config version, the signals used with normalised identifiers hashed (P11), candidate ids, points and bands. **No CV contents, no names in clear** (D6).
+- **Unit tests** (`tests/test_match_log.py`, new, LF, `tmp_path`): `test_check_line_has_no_cv_contents`, `test_identifiers_hashed`, `test_outcome_appended_under_same_id`, `test_daily_file_name`, `test_files_older_than_30_days_deleted`, `test_log_failure_does_not_raise`, `test_dir_from_env`.
+
+#### T42B.6, calibration (D10)
+- `scripts/calibrate_match.py` (read-only): prints only aggregate totals (N; holder counts for the generic mailbox prefixes and `@thepanel.com`; surname and employer totals for a short list of common Irish surnames and generic employer words). It prints no records. Run it in the build and record the totals here; set the u values in `match_config.json` from them (still version `"1"`, since nothing has shipped yet).
+- **No tests** (a script, like `scripts/meta_dump.py`). Reviewed.
+
+#### T42B.7, docs and config
+- README: candidate duplicate check (signals, bands, what stops a create, `match_check_id`, the log and its retention).
+- `.env.example` (CRLF): `BULLHORN_MATCH_LOG_DIR`. The `bullhorn-mcp-config-and-flags` skill env table (gitignored).
+- NFR-8: measure the description delta.
+
+#### T42B.8, deploy and live acceptance (carried over from T40.8 / T40B.4; owner deploys)
+- The owner deploys v0.0.56 (Sprints 41, 42 and 42B together).
+- Re-run T40.8 parts 2 to 4 as written in the Sprint 40 section on test Candidate 173063 and one new test Candidate. Also confirm skills: `skillSet` holds the free-text names, and `primarySkills` holds the linked ids, read back by association.
+- CR44 live acceptance, **dry-run only, no writes**: `find_duplicate_candidates` on real CVs, including the 90308 pattern (expected high, with reasons). Results are summarised here by band and count only, never with names.
+- Record the new test Candidate id in the approved live test records. Then remind the owner to start CR45 (generic upload).
+
+### Verification
+
+- [ ] `.venv/bin/pytest` green. Rewritten tests listed in the build notes.
+- [ ] `grep -n "_check_candidate_duplicates\|score_contact_match" src/bullhorn_mcp/server.py` shows no candidate use (contacts may still use `score_contact_match`).
+- [ ] Every Lucene value in `duplicate_retrieval.py` passes through an escape helper (reviewer check).
+- [ ] The log holds no CV text and no clear-text identifiers (test plus a reviewer read of one real line from the build's dry run).
+- [ ] T42B.6 totals recorded; `match_config.json` u values set from them.
+- [ ] Line endings: new files LF; `.env.example`, `tests/test_server.py`, this file CRLF.
+- [ ] Local commit `feat: CR44 match check wired in ...`. No push. `/review`, `PROMPT_iterate.md`, push, tag **v0.0.56**.
+- [ ] T42B.8 after the owner's deploy; results recorded; CR43 and CR44 Status set to COMPLETE.
+
+### Expected test count after Sprint 42B
+
+Previous: Sprint 42 actual. Added about 12 (T42B.1) + 3 (T42B.2) + 4 (T42B.3, plus 4 rewritten) + 10 (T42B.4) + 7 (T42B.5), about 36. **To be measured, not predicted.**

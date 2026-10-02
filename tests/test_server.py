@@ -4,7 +4,7 @@ import importlib
 import json
 import os
 import pytest
-from unittest.mock import Mock, patch, patch as mock_patch
+from unittest.mock import Mock, call, patch, patch as mock_patch
 from bullhorn_mcp import server
 from bullhorn_mcp.auth import AuthenticationError
 from bullhorn_mcp.client import BullhornAPIError
@@ -5714,6 +5714,128 @@ class TestCreateCandidate:
         finally:
             if original is not None:
                 os.environ["BULLHORN_MCP_SOURCE"] = original
+    # -- CR43 / T41.5: child records and skills on create_candidate -----------
+
+    def _run_with_children(self, mock_client, mock_metadata, fields, **kwargs):
+        mock_client.resolve_owner.return_value = {"id": 99}
+        mock_client.search.return_value = []
+        counter = iter(range(401, 450))
+
+        def _create(entity, data):
+            n = 400 if entity == "Candidate" else next(counter)
+            return {"changedEntityId": n, "changeType": "INSERT", "data": {"id": n}}
+
+        mock_client.create.side_effect = _create
+        mock_client.add_association.return_value = {
+            "changedEntityId": 400, "changeType": "ASSOCIATE", "associationName": "primarySkills",
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}), \
+             patch("bullhorn_mcp.server.get_candidate_defaults", return_value={}), \
+             patch("bullhorn_mcp.server.get_mcp_source", return_value="Claude"):
+            return json.loads(server.create_candidate(fields, **kwargs))
+
+    _CHILD_FIELDS = {
+        "firstName": "Jane", "lastName": "Doe", "owner": {"id": 99},
+        "occupation": "Engineer", "companyName": "Acme",
+    }
+
+    def test_create_candidate_writes_children(self, mock_client, mock_metadata):
+        """work_history and education are created after the Candidate with exact payloads and listed in written."""
+        data = self._run_with_children(
+            mock_client, mock_metadata, dict(self._CHILD_FIELDS),
+            work_history=[{"companyName": "Acme", "title": "Engineer", "startDate": 1}],
+            education=[{"school": "UCD", "major": "Accounting"}],
+        )
+
+        from unittest.mock import call
+        assert mock_client.create.call_args_list == [
+            call("Candidate", {
+                "firstName": "Jane", "lastName": "Doe", "owner": {"id": 99},
+                "occupation": "Engineer", "companyName": "Acme",
+                "source": "Claude", "name": "Jane Doe",
+            }),
+            call("CandidateWorkHistory", {
+                "companyName": "Acme", "title": "Engineer", "startDate": 1, "candidate": {"id": 400},
+            }),
+            call("CandidateEducation", {"school": "UCD", "major": "Accounting", "candidate": {"id": 400}}),
+        ]
+        assert data["changedEntityId"] == 400
+        assert data["changeType"] == "INSERT"
+        assert data["written"] == {
+            "work_history": [{"id": 401, "companyName": "Acme", "title": "Engineer", "startDate": 1}],
+            "education": [{"id": 402, "school": "UCD", "major": "Accounting"}],
+            "skill_set": [],
+            "primary_skills": [],
+        }
+        assert "warnings" not in data
+
+    def test_create_candidate_links_primary_skills(self, mock_client, mock_metadata):
+        """primary_skills are linked by one association PUT, not an entity update."""
+        data = self._run_with_children(
+            mock_client, mock_metadata, dict(self._CHILD_FIELDS), primary_skills=[1000125, 1000200],
+        )
+
+        mock_client.add_association.assert_called_once_with("Candidate", 400, "primarySkills", [1000125, 1000200])
+        mock_client.update.assert_not_called()
+        assert "primarySkills" not in mock_client.create.call_args_list[0].args[1]
+        assert data["written"]["primary_skills"] == [1000125, 1000200]
+
+    def test_create_candidate_merges_skills_into_skillset(self, mock_client, mock_metadata):
+        """skills merge with a skillSet given in fields, go in the create payload, and need no separate update."""
+        fields = {**self._CHILD_FIELDS, "skillSet": "Treasury"}
+
+        data = self._run_with_children(
+            mock_client, mock_metadata, fields, skills=["Python", "treasury", "IFRS"],
+        )
+
+        from unittest.mock import call
+        assert mock_client.create.call_args_list == [call("Candidate", {
+            "firstName": "Jane", "lastName": "Doe", "owner": {"id": 99},
+            "occupation": "Engineer", "companyName": "Acme", "skillSet": "Treasury, Python, IFRS",
+            "source": "Claude", "name": "Jane Doe",
+        })]
+        mock_client.update.assert_not_called()
+        assert data["written"]["skill_set"] == ["Python", "IFRS"]
+
+    def test_create_candidate_without_lists_response_unchanged(self, mock_client, mock_metadata):
+        """With no child lists the response keeps its old keys and has no written block."""
+        data = self._run_with_children(mock_client, mock_metadata, dict(self._CHILD_FIELDS))
+
+        assert set(data.keys()) == {"changedEntityId", "changeType", "data"}
+        assert data["changedEntityId"] == 400
+        assert [c.args[0] for c in mock_client.create.call_args_list] == ["Candidate"]
+        mock_client.add_association.assert_not_called()
+
+    def test_create_candidate_exception_after_create_returns_id(self, mock_client, mock_metadata):
+        """An unexpected failure writing children still returns the new id, with the error text."""
+        with patch.object(server, "_write_candidate_children", side_effect=RuntimeError("kaboom")):
+            data = self._run_with_children(
+                mock_client, mock_metadata, dict(self._CHILD_FIELDS),
+                work_history=[{"companyName": "Acme", "title": "Engineer"}],
+            )
+
+        assert data["changedEntityId"] == 400
+        assert data["error"] == "Candidate 400 was created, but writing its child records failed: kaboom"
+        assert data["written"] == {"work_history": [], "education": [], "skill_set": [], "primary_skills": []}
+
+    def test_create_candidate_required_fields_hint(self, mock_client, mock_metadata):
+        """A missing required field says to retry with the missing fields added to fields."""
+        mock_client.resolve_owner.return_value = {"id": 99}
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}), \
+             patch("bullhorn_mcp.server.get_candidate_required", return_value=["companyName"]):
+            data = json.loads(server.create_candidate({"firstName": "Jane", "lastName": "Doe", "owner": {"id": 99}}))
+
+        assert data["error"] == "required_fields_missing"
+        assert data["fields"] == ["companyName"]
+        assert data["hint"] == (
+            "Call again with the missing fields added to fields. "
+            "For companyName use the candidate's current employer you were given."
+        )
+        mock_client.create.assert_not_called()
 
 
 class TestFindDuplicateCandidates:
@@ -5773,6 +5895,36 @@ class TestFindDuplicateCandidates:
             result = server.find_duplicate_candidates("Jane", "Doe")
 
         assert result.startswith("ERROR:")
+    def test_tool_and_create_path_agree_on_same_fixture(self, mock_client):
+        """The tool's best match equals what the create paths' wrapper returns, from one search."""
+        record = {
+            "id": 50, "firstName": "Jane", "lastName": "Doe", "email": "other@example.com",
+            "phone": "", "occupation": "", "companyName": "", "dateAdded": 0,
+        }
+        mock_client.search.return_value = [record]
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            tool = json.loads(server.find_duplicate_candidates("Jane", "Doe", email="jane@example.com"))
+        wrapped = server._check_candidate_duplicates(mock_client, "Jane", "Doe", "jane@example.com")
+
+        assert tool["matches"][0] == wrapped
+        assert wrapped["record"] == record
+        assert wrapped["confidence"] >= 0.50
+        assert mock_client.search.call_args_list[0] == mock_client.search.call_args_list[1]
+
+    def test_check_wrapper_swallows_search_error(self, mock_client):
+        """The tool reports a search failure as ERROR:; the create-path wrapper returns None."""
+        mock_client.search.side_effect = BullhornAPIError("Search failed")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            tool_result = server.find_duplicate_candidates("Jane", "Doe")
+        wrapped = server._check_candidate_duplicates(mock_client, "Jane", "Doe", None)
+
+        assert tool_result == "ERROR: Search failed"
+        assert wrapped is None
+
+        mock_client.search.side_effect = AuthenticationError("expired")
+        assert server._check_candidate_duplicates(mock_client, "Jane", "Doe", None) is None
 
 
 # --- CR41: CV upload ticket helpers ------------------------------------------
@@ -5946,6 +6098,33 @@ class TestParseCv:
             assert "upload_id" in props, name
             for gone in ("file_b64", "filename", "format"):
                 assert gone not in props, f"{name} still has {gone}"
+    def test_parse_cv_stores_parse_and_omits_description(self, mock_client, mock_metadata, sample_parsed_resume):
+        """parse_cv returns the reviewable view without the HTML, and stores the full parse on the upload."""
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+        upload_id = _seed_upload()
+        cand = sample_parsed_resume["candidate"]
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            data = json.loads(server.parse_cv(upload_id=upload_id))
+            json.loads(server.parse_cv(upload_id=upload_id))  # second review call
+
+        assert data == {
+            "parsed": {
+                "confidenceScore": 0.87,
+                "candidate": {k: v for k, v in cand.items() if k != "description"},
+                "description_length": len(cand["description"]),
+                "candidateWorkHistory": sample_parsed_resume["candidateWorkHistory"],
+                "candidateEducation": sample_parsed_resume["candidateEducation"],
+                "skillList": ["EXCEL", "ANNUAL BUDGET", "IFRS"],
+                "primarySkills": [{"name": "IFRS", "id": 1000125}, {"name": "Python", "id": 1000200}],
+            },
+            "duplicate_check": None,
+        }
+        assert server.upload_store.get(upload_id, "user-a")["parsed"] == sample_parsed_resume
+        mock_client.parse_resume_file.assert_called_once()  # the second call used the stored parse
 
 
 class TestParseCvText:
@@ -5995,6 +6174,324 @@ class TestParseCvText:
             result = server.parse_cv_text(content="some text")
 
         assert result.startswith("ERROR:")
+    def test_parse_cv_text_returns_view(self, mock_client, mock_metadata, sample_parsed_resume):
+        """parse_cv_text returns the same reviewable view as parse_cv, without the HTML description."""
+        mock_client.parse_resume_text.return_value = sample_parsed_resume
+        mock_client.search.return_value = []
+        cand = sample_parsed_resume["candidate"]
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            data = json.loads(server.parse_cv_text(content="Jane Doe\nAccountant"))
+
+        assert data["parsed"]["candidate"] == {k: v for k, v in cand.items() if k != "description"}
+        assert data["parsed"]["description_length"] == len(cand["description"])
+        assert set(data["parsed"]) == {
+            "confidenceScore", "candidate", "description_length", "candidateWorkHistory",
+            "candidateEducation", "skillList", "primarySkills",
+        }
+        assert data["parsed"]["skillList"] == ["EXCEL", "ANNUAL BUDGET", "IFRS"]
+        assert data["duplicate_check"] is None
+
+
+@pytest.mark.usefixtures("clean_upload_store")
+class TestCvHelpers:
+    """Tests for the CR43 shared CV helpers (stored parse, skill split, child writer, hints)."""
+
+    @pytest.fixture
+    def mock_metadata(self):
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        meta.get_fields.return_value = []
+        return meta
+
+    @staticmethod
+    def _create_ids(mock_client, first_id=500):
+        counter = iter(range(first_id, first_id + 50))
+
+        def _create(entity, data):
+            n = next(counter)
+            return {"changedEntityId": n, "changeType": "INSERT", "data": {"id": n}}
+
+        mock_client.create.side_effect = _create
+
+    @staticmethod
+    def _associate(ids, candidate_id=500):
+        return {
+            "changedEntityId": candidate_id, "changeType": "ASSOCIATE",
+            "entityName": "Candidate", "associationName": "primarySkills", "associatedIds": ids,
+        }
+
+    # -- _split_parsed_skills ------------------------------------------------
+
+    def test_split_skills_live_shape(self, sample_parsed_resume):
+        """Strings in skillList become names, primarySkills objects give ids, order kept."""
+        names, ids = server._split_parsed_skills(sample_parsed_resume)
+
+        assert names == ["EXCEL", "ANNUAL BUDGET", "IFRS"]
+        assert ids == [1000125, 1000200]
+
+    def test_split_skills_tolerates_missing_keys_and_dict_entries(self):
+        """Missing keys give empty lists; dict skillList entries, blanks and bad ids cannot crash it."""
+        assert server._split_parsed_skills({}) == ([], [])
+        assert server._split_parsed_skills({"skillList": None, "primarySkills": None}) == ([], [])
+
+        parsed = {
+            "skillList": [{"id": 9, "name": "Excel"}, "excel", "  ", None, 5, {"id": 1}, "IFRS"],
+            "primarySkills": [{"id": 1}, {"name": "no id"}, 7, "8", True, {"id": 1}, "x"],
+        }
+        names, ids = server._split_parsed_skills(parsed)
+
+        assert names == ["Excel", "IFRS"]
+        assert ids == [1, 7, 8]
+
+    # -- _parse_upload -------------------------------------------------------
+
+    def test_parse_upload_parses_once_and_stores(self, mock_client, sample_parsed_resume):
+        """The first call parses the bytes and stores the result; a second load reuses it."""
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        upload_id = _seed_upload()
+
+        with _http_as():
+            upload, error = server._load_received_upload(upload_id)
+            assert error is None
+            first = server._parse_upload(mock_client, upload)
+            again, error = server._load_received_upload(upload_id)
+            assert error is None
+            second = server._parse_upload(mock_client, again)
+
+        assert first == sample_parsed_resume
+        assert second == sample_parsed_resume
+        mock_client.parse_resume_file.assert_called_once_with(_CV_BYTES, "Jane_Doe_CV.pdf", "pdf")
+        assert server.upload_store.get(upload_id, "user-a")["parsed"] == sample_parsed_resume
+
+    def test_parse_upload_uses_stored_parse(self, mock_client, sample_parsed_resume):
+        """An upload that already holds a parse is not sent to the parser at all."""
+        upload_id = _seed_upload()
+        server.upload_store.set_parsed(upload_id, "user-a", sample_parsed_resume)
+
+        with _http_as():
+            upload, error = server._load_received_upload(upload_id)
+            assert error is None
+            result = server._parse_upload(mock_client, upload)
+
+        assert result == sample_parsed_resume
+        mock_client.parse_resume_file.assert_not_called()
+
+    # -- _cv_response_view ---------------------------------------------------
+
+    def test_cv_view_omits_description_shows_length(self, sample_parsed_resume):
+        """The view drops the HTML description, keeps its length, and keeps everything Claude reviews."""
+        html = sample_parsed_resume["candidate"]["description"]
+
+        view = server._cv_response_view(sample_parsed_resume)
+
+        expected_candidate = {k: v for k, v in sample_parsed_resume["candidate"].items() if k != "description"}
+        assert view == {
+            "confidenceScore": 0.87,
+            "candidate": expected_candidate,
+            "description_length": len(html),
+            "candidateWorkHistory": sample_parsed_resume["candidateWorkHistory"],
+            "candidateEducation": sample_parsed_resume["candidateEducation"],
+            "skillList": ["EXCEL", "ANNUAL BUDGET", "IFRS"],
+            "primarySkills": [{"name": "IFRS", "id": 1000125}, {"name": "Python", "id": 1000200}],
+        }
+        assert "description" in sample_parsed_resume["candidate"]  # the stored parse is not mutated
+
+    # -- _write_candidate_children ------------------------------------------
+
+    def test_children_payloads_carry_given_values(self, mock_client, mock_metadata):
+        """Each child is created with exactly the given values, candidate {id} set and no id key."""
+        self._create_ids(mock_client, first_id=501)
+        work_history = [
+            {"id": 99, "companyName": "Acme", "title": "Engineer", "startDate": 1000, "endDate": 2000},
+            {"title": "Analyst", "startDate": 500},
+        ]
+        education = [
+            {"id": 98, "school": "UCD", "degree": "BComm", "major": "Accounting", "graduationDate": 3000},
+            {"certification": "ACCA"},
+        ]
+
+        written, warnings = server._write_candidate_children(
+            mock_client, mock_metadata, 500, work_history, education, [], [], "", [],
+        )
+
+        from unittest.mock import call
+        assert mock_client.create.call_args_list == [
+            call("CandidateWorkHistory", {
+                "companyName": "Acme", "title": "Engineer", "startDate": 1000, "endDate": 2000,
+                "candidate": {"id": 500},
+            }),
+            call("CandidateWorkHistory", {"title": "Analyst", "startDate": 500, "candidate": {"id": 500}}),
+            call("CandidateEducation", {
+                "school": "UCD", "degree": "BComm", "major": "Accounting", "graduationDate": 3000,
+                "candidate": {"id": 500},
+            }),
+            call("CandidateEducation", {"certification": "ACCA", "candidate": {"id": 500}}),
+        ]
+        assert written == {
+            "work_history": [
+                {"id": 501, "companyName": "Acme", "title": "Engineer", "startDate": 1000, "endDate": 2000},
+                {"id": 502, "title": "Analyst", "startDate": 500},
+            ],
+            "education": [
+                {"id": 503, "school": "UCD", "degree": "BComm", "major": "Accounting", "graduationDate": 3000},
+                {"id": 504, "certification": "ACCA"},
+            ],
+            "skill_set": [],
+            "primary_skills": [],
+        }
+        assert warnings == []
+        mock_client.update.assert_not_called()
+        mock_client.add_association.assert_not_called()
+        assert work_history[0]["id"] == 99  # caller's entries are not mutated
+
+    def test_children_payload_truncated_against_meta(self, mock_client, mock_metadata):
+        """Child text over the /meta maxLength is clipped before the write."""
+        self._create_ids(mock_client)
+        mock_metadata.get_fields.return_value = [{"name": "comments", "maxLength": 5}]
+
+        server._write_candidate_children(
+            mock_client, mock_metadata, 500, [{"title": "Engineer", "comments": "abcdefghij"}], [], [], [], "", [],
+        )
+
+        mock_client.create.assert_called_once_with(
+            "CandidateWorkHistory", {"title": "Engineer", "comments": "abcde", "candidate": {"id": 500}}
+        )
+        mock_metadata.get_fields.assert_called_with("CandidateWorkHistory")
+
+    def test_children_primary_skills_use_association_put(self, mock_client, mock_metadata):
+        """primarySkills are linked with one add_association PUT; client.update never carries them."""
+        mock_client.add_association.return_value = self._associate([1000125, 1000200])
+
+        written, warnings = server._write_candidate_children(
+            mock_client, mock_metadata, 500, [], [], [], [1000125, 1000200], "", [],
+        )
+
+        mock_client.add_association.assert_called_once_with("Candidate", 500, "primarySkills", [1000125, 1000200])
+        for c in mock_client.update.call_args_list:
+            assert "primarySkills" not in c.args[2]
+        mock_client.update.assert_not_called()
+        assert written["primary_skills"] == [1000125, 1000200]
+        assert warnings == []
+
+    @pytest.mark.parametrize("response", [
+        {"changedEntityId": 500, "changeType": "ASSOCIATE", "messages": [{"detailMessage": "ATTEMPT_TO_SET_TO_MANY"}]},
+        {"changedEntityId": 500, "changeType": "UPDATE"},
+        {},
+        None,
+    ])
+    def test_children_association_warning_reported_as_failure(self, mock_client, mock_metadata, response):
+        """A response with messages, or without changeType ASSOCIATE, is a warning and nothing counts as linked."""
+        mock_client.add_association.return_value = response
+
+        written, warnings = server._write_candidate_children(
+            mock_client, mock_metadata, 500, [], [], [], [1000125], "", [],
+        )
+
+        assert written["primary_skills"] == []
+        assert len(warnings) == 1
+        assert warnings[0].startswith("primarySkills link not confirmed by Bullhorn, nothing linked")
+
+    def test_children_skillset_appends_not_replaces(self, mock_client, mock_metadata):
+        """New names are appended to the existing skillSet text in one update."""
+        written, warnings = server._write_candidate_children(
+            mock_client, mock_metadata, 500, [], [], ["Excel", "IFRS"], [], "Python, SQL", [],
+        )
+
+        mock_client.update.assert_called_once_with("Candidate", 500, {"skillSet": "Python, SQL, Excel, IFRS"})
+        assert written["skill_set"] == ["Excel", "IFRS"]
+        assert "already_present" not in written
+        assert warnings == []
+
+    def test_children_skip_already_present_skills(self, mock_client, mock_metadata):
+        """Names match the skillSet case-insensitively and linked ids are skipped; both are reported."""
+        mock_client.add_association.return_value = self._associate([1, 3])
+
+        written, warnings = server._write_candidate_children(
+            mock_client, mock_metadata, 500, [], [], ["EXCEL", "IFRS", "Budget"], [1, 2, 3], "Excel,  ifrs", [2],
+        )
+
+        mock_client.update.assert_called_once_with("Candidate", 500, {"skillSet": "Excel,  ifrs, Budget"})
+        mock_client.add_association.assert_called_once_with("Candidate", 500, "primarySkills", [1, 3])
+        assert written["skill_set"] == ["Budget"]
+        assert written["primary_skills"] == [1, 3]
+        assert written["already_present"] == {"skill_set": ["EXCEL", "IFRS"], "primary_skills": [2]}
+        assert warnings == []
+
+    def test_children_everything_present_writes_nothing(self, mock_client, mock_metadata):
+        """When every name and id is already on the record no update and no PUT is made."""
+        written, warnings = server._write_candidate_children(
+            mock_client, mock_metadata, 500, [], [], ["Excel"], [2], "excel", [2],
+        )
+
+        mock_client.update.assert_not_called()
+        mock_client.add_association.assert_not_called()
+        mock_client.create.assert_not_called()
+        assert written["skill_set"] == []
+        assert written["primary_skills"] == []
+        assert written["already_present"] == {"skill_set": ["Excel"], "primary_skills": [2]}
+        assert warnings == []
+
+    def test_children_item_failure_is_best_effort(self, mock_client, mock_metadata):
+        """A failing item becomes a warning; the other items, skills and links are still attempted."""
+        boom_wh = BullhornAPIError("wh boom")
+        boom_skill = BullhornAPIError("skill boom")
+        boom_link = BullhornAPIError("link boom")
+
+        def _create(entity, data):
+            if data.get("title") == "Bad":
+                raise boom_wh
+            return {"changedEntityId": 77, "changeType": "INSERT", "data": {"id": 77}}
+
+        mock_client.create.side_effect = _create
+        mock_client.update.side_effect = boom_skill
+        mock_client.add_association.side_effect = boom_link
+
+        written, warnings = server._write_candidate_children(
+            mock_client, mock_metadata, 500,
+            [{"title": "Bad"}, {"title": "Good"}, "not an object"],
+            [{"school": "UCD"}],
+            ["Excel"], [1], "", [],
+        )
+
+        assert written == {
+            "work_history": [{"id": 77, "title": "Good"}],
+            "education": [{"id": 77, "school": "UCD"}],
+            "skill_set": [],
+            "primary_skills": [],
+        }
+        assert warnings == [
+            "Work history entry failed: wh boom",
+            "Work history entry failed: expected an object, got str",
+            "skillSet update failed: skill boom",
+            "primarySkills link failed: link boom",
+        ]
+        mock_client.add_association.assert_called_once_with("Candidate", 500, "primarySkills", [1])
+
+    # -- _required_fields_missing_response ----------------------------------
+
+    def test_required_fields_hint_mentions_companyname(self):
+        """The hint names the retry argument and, for companyName, says where to get the employer."""
+        cv = json.loads(server._required_fields_missing_response(["companyName", "email"], "fields_override", from_cv=True))
+        assert cv["error"] == "required_fields_missing"
+        assert cv["fields"] == ["companyName", "email"]
+        assert cv["hint"] == (
+            "Call again with the missing fields added to fields_override. "
+            "For companyName use the candidate's current employer from the CV (the most recent work history entry)."
+        )
+
+        direct = json.loads(server._required_fields_missing_response(["companyName"], "fields", from_cv=False))
+        assert direct["hint"] == (
+            "Call again with the missing fields added to fields. "
+            "For companyName use the candidate's current employer you were given."
+        )
+
+        other = json.loads(server._required_fields_missing_response(["email"], "fields", from_cv=False))
+        assert other["hint"] == "Call again with the missing fields added to fields."
+        assert "companyName" not in other["hint"]
 
 
 @pytest.mark.usefixtures("clean_upload_store")
@@ -6010,62 +6507,51 @@ class TestCreateCandidateFromCv:
         meta.get_fields.return_value = []
         return meta
 
-    def test_create_from_cv_binary_success(self, mock_client, mock_metadata, sample_parsed_resume):
-        """create_candidate_from_cv binary path creates candidate and child records."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        mock_client.search.return_value = []
-        mock_client.create.side_effect = [
-            {"changedEntityId": 200, "changeType": "INSERT", "data": {"id": 200}},  # Candidate
-            {"changedEntityId": 201, "changeType": "INSERT", "data": {"id": 201}},  # work history 1
-            {"changedEntityId": 202, "changeType": "INSERT", "data": {"id": 202}},  # work history 2
-            {"changedEntityId": 203, "changeType": "INSERT", "data": {"id": 203}},  # education
-        ]
-        mock_client.update.return_value = {"changedEntityId": 200, "changeType": "UPDATE", "data": {"id": 200}}
-        mock_client.get.return_value = {"id": 200, "skillSet": ""}
-        mock_client.attach_file.return_value = {"fileId": 55, "name": "cv.pdf"}
-        mock_client._guess_content_type.return_value = "application/pdf"
+    @pytest.fixture(autouse=True)
+    def cv_config(self):
+        """No tenant required fields, defaults or source from .env, so payloads are exact."""
+        with patch("bullhorn_mcp.server.get_candidate_required", return_value=[]), \
+             patch("bullhorn_mcp.server.get_candidate_defaults", return_value={}), \
+             patch("bullhorn_mcp.server.get_mcp_source", return_value="Claude"):
+            yield
 
+    @staticmethod
+    def _candidate_payload(parsed, **extra):
+        """The Candidate create payload a default run must send for the live fixture."""
+        return {
+            **parsed["candidate"],
+            "owner": {"id": 1},
+            "source": "Claude",
+            "skillSet": "EXCEL, ANNUAL BUDGET, IFRS",
+            "name": "Jane Doe",
+            **extra,
+        }
+
+    def test_create_from_cv_binary_success(self, mock_client, mock_metadata, sample_parsed_resume):
+        """create_candidate_from_cv binary path creates the candidate, children and skills from the live-shape parse."""
+        self._wire_create(mock_client, sample_parsed_resume, first_id=200)
         upload_id = _seed_upload()
 
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata), \
-             patch.object(server, "resolve_caller", return_value={"id": 1}):
-            result = server.create_candidate_from_cv(
-                upload_id=upload_id,
-            )
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
 
-        data = json.loads(result)
         assert data["created"] is True
         assert data["candidate_id"] == 200
-        assert len(data["work_history_ids"]) == 2
-        assert len(data["education_ids"]) == 1
-        assert data["file_attachment"] is not None
+        assert [w["id"] for w in data["written"]["work_history"]] == [201, 202]
+        assert [e["id"] for e in data["written"]["education"]] == [203, 204]
+        assert data["written"]["file"] == {"file_id": 55, "name": "Jane_Doe_CV.pdf"}
 
-        # Verify the Candidate write payload — the full derivation chain must be tested
-        candidate_call = mock_client.create.call_args_list[0]
-        assert candidate_call[0][0] == "Candidate"
-        payload = candidate_call[0][1]
-        assert payload["firstName"] == "Jane"
-        assert payload["lastName"] == "Doe"
-        assert payload["email"] == "jane.doe@example.com"
-        assert payload["occupation"] == "Senior Software Engineer"
-        assert "title" not in payload        # stripped by _strip_contact_title
-        assert payload["name"] == "Jane Doe"  # computed by MCP from firstName + lastName
-        assert "owner" in payload             # auto-stamped from resolve_caller
+        # The full derivation chain must be tested on the Candidate payload.
+        from unittest.mock import call
+        assert mock_client.create.call_args_list[0] == call(
+            "Candidate", self._candidate_payload(sample_parsed_resume)
+        )
+        payload = mock_client.create.call_args_list[0].args[1]
+        assert "title" not in payload         # stripped by _strip_contact_title
+        assert payload["occupation"] == "Financial Accountant"
 
     def test_create_from_cv_text_success(self, mock_client, mock_metadata, sample_parsed_resume):
-        """create_candidate_from_cv text path creates candidate without file attach."""
-        mock_client.parse_resume_text.return_value = sample_parsed_resume
-        mock_client.search.return_value = []
-        mock_client.create.side_effect = [
-            {"changedEntityId": 210, "changeType": "INSERT", "data": {"id": 210}},
-            {"changedEntityId": 211, "changeType": "INSERT", "data": {"id": 211}},
-            {"changedEntityId": 212, "changeType": "INSERT", "data": {"id": 212}},
-            {"changedEntityId": 213, "changeType": "INSERT", "data": {"id": 213}},
-        ]
-        mock_client.update.return_value = {"changedEntityId": 210, "changeType": "UPDATE", "data": {"id": 210}}
-        mock_client.get.return_value = {"id": 210, "skillSet": ""}
+        """create_candidate_from_cv text path creates the candidate without a file attach or retry block."""
+        self._wire_create(mock_client, sample_parsed_resume, first_id=210, text=True)
 
         with patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata), \
@@ -6074,21 +6560,19 @@ class TestCreateCandidateFromCv:
 
         data = json.loads(result)
         assert data["created"] is True
-        assert data["file_attachment"] is None  # text-only skips attach
+        assert data["candidate_id"] == 210
+        assert data["written"]["file"] is None  # text-only skips attach
+        assert "cv_attach_retry" not in data
         mock_client.attach_file.assert_not_called()
+        mock_client.parse_resume_text.assert_called_once_with("Jane Doe\nEngineer", "text/plain")
 
-        # Verify the Candidate write payload for the text path
-        candidate_call = mock_client.create.call_args_list[0]
-        assert candidate_call[0][0] == "Candidate"
-        payload = candidate_call[0][1]
-        assert payload["firstName"] == "Jane"
-        assert payload["lastName"] == "Doe"
-        assert "title" not in payload        # stripped by _strip_contact_title
-        assert payload["name"] == "Jane Doe"  # computed by MCP from firstName + lastName
-        assert "owner" in payload             # auto-stamped from resolve_caller
+        from unittest.mock import call
+        assert mock_client.create.call_args_list[0] == call(
+            "Candidate", self._candidate_payload(sample_parsed_resume)
+        )
 
     def test_create_from_cv_duplicate_found(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """create_candidate_from_cv returns duplicate_found when match detected."""
+        """create_candidate_from_cv returns duplicate_found with the reviewable parse when a match is detected."""
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         sample_candidate["firstName"] = "Jane"
         sample_candidate["lastName"] = "Doe"
@@ -6111,35 +6595,20 @@ class TestCreateCandidateFromCv:
         data = json.loads(result)
         assert data["duplicate_found"] is True
         assert "hint" in data
+        assert data["match"]["category"] == "exact"
+        assert "description" not in data["parsed"]["candidate"]
+        assert data["parsed"]["description_length"] == len(sample_parsed_resume["candidate"]["description"])
         mock_client.create.assert_not_called()
 
     def test_create_from_cv_force_bypasses_dup(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
         """create_candidate_from_cv force=True skips dup check and creates."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        mock_client.create.side_effect = [
-            {"changedEntityId": 220, "changeType": "INSERT", "data": {"id": 220}},
-            {"changedEntityId": 221, "changeType": "INSERT", "data": {"id": 221}},
-            {"changedEntityId": 222, "changeType": "INSERT", "data": {"id": 222}},
-            {"changedEntityId": 223, "changeType": "INSERT", "data": {"id": 223}},
-        ]
-        mock_client.update.return_value = {"changedEntityId": 220, "changeType": "UPDATE", "data": {"id": 220}}
-        mock_client.get.return_value = {"id": 220, "skillSet": ""}
-        mock_client.attach_file.return_value = {"fileId": 60}
-        mock_client._guess_content_type.return_value = "application/pdf"
-
+        self._wire_create(mock_client, sample_parsed_resume, first_id=220)
         upload_id = _seed_upload()
 
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata), \
-             patch.object(server, "resolve_caller", return_value={"id": 1}):
-            result = server.create_candidate_from_cv(
-                upload_id=upload_id,
-                force=True,
-            )
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id, force=True))
 
-        data = json.loads(result)
         assert data["created"] is True
+        assert data["candidate_id"] == 220
         mock_client.search.assert_not_called()
 
     def test_create_from_cv_required_fields_missing(self, mock_client, mock_metadata, sample_parsed_resume):
@@ -6177,7 +6646,7 @@ class TestCreateCandidateFromCv:
         assert data["error"] == "input_required"
 
     def test_create_from_cv_child_record_failure_best_effort(self, mock_client, mock_metadata, sample_parsed_resume):
-        """create_candidate_from_cv includes warnings when child records fail."""
+        """create_candidate_from_cv includes warnings when child records and the skill link fail."""
         mock_client.parse_resume_file.return_value = sample_parsed_resume
         mock_client.search.return_value = []
 
@@ -6187,8 +6656,7 @@ class TestCreateCandidateFromCv:
             raise BullhornAPIError("Child record failed")
 
         mock_client.create.side_effect = create_side_effect
-        mock_client.update.side_effect = BullhornAPIError("update failed")
-        mock_client.get.return_value = {"id": 230, "skillSet": ""}
+        mock_client.add_association.side_effect = BullhornAPIError("link failed")
         mock_client._guess_content_type.return_value = "application/pdf"
         mock_client.attach_file.return_value = {"fileId": 70}
 
@@ -6206,22 +6674,23 @@ class TestCreateCandidateFromCv:
         # Candidate was created despite child failures
         assert data["created"] is True
         assert data["candidate_id"] == 230
-        # Warnings surfaced for child failures
-        assert "warnings" in data
-        assert len(data["warnings"]) > 0
+        # One warning per failed child (2 work history, 2 education) plus the skill link
+        assert data["warnings"] == [
+            "Work history entry failed: Child record failed",
+            "Work history entry failed: Child record failed",
+            "Education entry failed: Child record failed",
+            "Education entry failed: Child record failed",
+            "primarySkills link failed: link failed",
+        ]
+        assert data["written"]["work_history"] == []
+        assert data["written"]["education"] == []
+        assert data["written"]["primary_skills"] == []
+        # The file is still attached after the child failures
+        assert data["written"]["file"] == {"file_id": 70, "name": "Jane_Doe_CV.pdf"}
 
     def test_source_auto_stamped_when_not_provided(self, mock_client, mock_metadata, sample_parsed_resume):
         """create_candidate_from_cv stamps source=get_mcp_source() when caller omits source."""
-        mock_client.parse_resume_text.return_value = sample_parsed_resume
-        mock_client.search.return_value = []
-        mock_client.create.side_effect = [
-            {"changedEntityId": 250, "changeType": "INSERT", "data": {"id": 250}},
-            {"changedEntityId": 251, "changeType": "INSERT", "data": {"id": 251}},
-            {"changedEntityId": 252, "changeType": "INSERT", "data": {"id": 252}},
-            {"changedEntityId": 253, "changeType": "INSERT", "data": {"id": 253}},
-        ]
-        mock_client.update.return_value = {"changedEntityId": 250, "changeType": "UPDATE", "data": {"id": 250}}
-        mock_client.get.return_value = {"id": 250, "skillSet": ""}
+        self._wire_create(mock_client, sample_parsed_resume, first_id=250, text=True)
 
         with patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata), \
@@ -6236,16 +6705,7 @@ class TestCreateCandidateFromCv:
 
     def test_user_supplied_source_wins_in_cv_flow(self, mock_client, mock_metadata, sample_parsed_resume):
         """create_candidate_from_cv does not overwrite source when caller supplies it via fields_override."""
-        mock_client.parse_resume_text.return_value = sample_parsed_resume
-        mock_client.search.return_value = []
-        mock_client.create.side_effect = [
-            {"changedEntityId": 255, "changeType": "INSERT", "data": {"id": 255}},
-            {"changedEntityId": 256, "changeType": "INSERT", "data": {"id": 256}},
-            {"changedEntityId": 257, "changeType": "INSERT", "data": {"id": 257}},
-            {"changedEntityId": 258, "changeType": "INSERT", "data": {"id": 258}},
-        ]
-        mock_client.update.return_value = {"changedEntityId": 255, "changeType": "UPDATE", "data": {"id": 255}}
-        mock_client.get.return_value = {"id": 255, "skillSet": ""}
+        self._wire_create(mock_client, sample_parsed_resume, first_id=255, text=True)
 
         with patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata), \
@@ -6262,19 +6722,25 @@ class TestCreateCandidateFromCv:
         assert payload.get("source") == "LinkedIn"
 
     @staticmethod
-    def _wire_create(mock_client, parsed, first_id=300):
-        """Mock a full successful create (candidate, children, attach)."""
+    def _wire_create(mock_client, parsed, first_id=300, text=False):
+        """Mock a full successful create (candidate, children, skill link, attach)."""
         counter = iter(range(first_id, first_id + 50))
 
         def _create(entity, data):
             n = next(counter)
             return {"changedEntityId": n, "changeType": "INSERT", "data": {"id": n}}
 
-        mock_client.parse_resume_file.return_value = parsed
+        if text:
+            mock_client.parse_resume_text.return_value = parsed
+        else:
+            mock_client.parse_resume_file.return_value = parsed
         mock_client.search.return_value = []
         mock_client.create.side_effect = _create
         mock_client.update.return_value = {"changedEntityId": first_id, "changeType": "UPDATE", "data": {"id": first_id}}
         mock_client.get.return_value = {"id": first_id, "skillSet": ""}
+        mock_client.add_association.return_value = {
+            "changedEntityId": first_id, "changeType": "ASSOCIATE", "associationName": "primarySkills",
+        }
         mock_client.attach_file.return_value = {"fileId": 55, "name": "Jane_Doe_CV.pdf"}
         mock_client._guess_content_type.return_value = "application/pdf"
 
@@ -6284,6 +6750,12 @@ class TestCreateCandidateFromCv:
              patch.object(server, "get_metadata", return_value=mock_metadata), \
              patch.object(server, "resolve_caller", return_value={"id": 1}):
             return server.create_candidate_from_cv(upload_id=upload_id, **kwargs)
+
+    def _run_text(self, mock_client, mock_metadata, **kwargs):
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            return server.create_candidate_from_cv(content="Jane Doe\nAccountant", **kwargs)
 
     def test_create_attaches_under_original_filename(self, mock_client, mock_metadata, sample_parsed_resume):
         """attach_file gets the ticket's original filename, not the prefixed multipart name."""
@@ -6338,14 +6810,14 @@ class TestCreateCandidateFromCv:
         data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
 
         assert data["created"] is True
-        assert data["file_attachment"] is None
+        assert data["written"]["file"] is None
         assert any("CV file attachment failed" in w for w in data["warnings"])
         rec = server.upload_store.get(upload_id, "user-a")
         assert rec["status"] == "received"
         assert rec["data"] == _CV_BYTES
 
     def test_create_attach_failure_points_retry_at_attach_cv(self, mock_client, mock_metadata, sample_parsed_resume):
-        """A failed attach says to retry with attach_cv on the new record, and that retry makes no second Candidate."""
+        """A failed attach says to retry with attach_cv on the new record, and that retry adds nothing twice."""
         self._wire_create(mock_client, sample_parsed_resume)
         mock_client.attach_file.side_effect = BullhornAPIError("attach boom")
         upload_id = _seed_upload()
@@ -6354,29 +6826,38 @@ class TestCreateCandidateFromCv:
 
         candidate_id = data["candidate_id"]
         retry = data["cv_attach_retry"]
-        assert retry["next_call"] == (
-            f"attach_cv(candidate_id={candidate_id}, upload_id='{upload_id}', fields_to_update=[])"
-        )
+        assert retry["next_call"] == f"attach_cv(candidate_id={candidate_id}, upload_id='{upload_id}')"
         assert "Do not call create_candidate_from_cv again" in retry["message"]
 
-        # Follow the retry exactly as given.
-        creates_before = mock_client.create.call_count
+        # Follow the retry exactly as given, against a record that now holds what was written.
+        written_calls = mock_client.create.call_args_list
+        candidate_payload = written_calls[0].args[1]
+        children = {"CandidateWorkHistory": [], "CandidateEducation": []}
+        for c in written_calls[1:]:
+            children[c.args[0]].append(c.args[1])
+        mock_client.get.return_value = {**candidate_payload, "id": candidate_id}
+        mock_client.query.side_effect = lambda entity, **kw: children[entity]
+        mock_client.get_association.return_value = [{"id": 1000125}, {"id": 1000200}]
+        mock_client.attach_file.reset_mock()
         mock_client.attach_file.side_effect = None
         mock_client.attach_file.return_value = {"fileId": 56}
+        creates_before = mock_client.create.call_count
         mock_client.update.reset_mock()
+        mock_client.add_association.reset_mock()
         with _http_as(), \
              patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
-            retried = json.loads(server.attach_cv(
-                candidate_id=candidate_id, upload_id=upload_id, fields_to_update=[],
-            ))
+            retried = json.loads(server.attach_cv(candidate_id=candidate_id, upload_id=upload_id))
 
         assert retried["committed"] is True
-        assert retried["fields_updated"] == []
+        assert retried["written"]["file"] == {"file_id": 56, "name": "Jane_Doe_CV.pdf"}
         assert mock_client.create.call_count == creates_before
         mock_client.update.assert_not_called()
+        mock_client.add_association.assert_not_called()
+        mock_client.attach_file.assert_called_once()
         assert mock_client.attach_file.call_args.args[:2] == ("Candidate", candidate_id)
         assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
+        mock_client.parse_resume_file.assert_called_once()  # the retry used the stored parse
 
     def test_create_success_has_no_retry_block(self, mock_client, mock_metadata, sample_parsed_resume):
         """A successful attach returns no cv_attach_retry."""
@@ -6385,7 +6866,7 @@ class TestCreateCandidateFromCv:
 
         data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
 
-        assert data["file_attachment"] is not None
+        assert data["written"]["file"] is not None
         assert "cv_attach_retry" not in data
 
     def test_create_refused_while_upload_in_use(self, mock_client, mock_metadata, sample_parsed_resume):
@@ -6456,10 +6937,289 @@ class TestCreateCandidateFromCv:
         assert data["error"] == "upload_not_found"
         mock_client.parse_resume_file.assert_not_called()
 
+    # -- CR43: Claude's corrections, stored parse, never hide the id ----------
+
+    def test_create_uses_stored_parse_without_reparsing(self, mock_client, mock_metadata, sample_parsed_resume):
+        """parse_cv then create: the parser is called exactly once in total."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            parsed_view = json.loads(server.parse_cv(upload_id=upload_id))
+            data = json.loads(server.create_candidate_from_cv(upload_id=upload_id))
+
+        assert parsed_view["parsed"]["candidate"]["firstName"] == "Jane"
+        assert data["created"] is True
+        mock_client.parse_resume_file.assert_called_once_with(_CV_BYTES, "Jane_Doe_CV.pdf", "pdf")
+
+    def test_create_without_prior_parse_parses_and_stores(self, mock_client, mock_metadata, sample_parsed_resume):
+        """Without parse_cv the create parses the file once and stores the parse on the upload."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["created"] is True
+        mock_client.parse_resume_file.assert_called_once()
+        assert server.upload_store.get(upload_id, "user-a")["parsed"] == sample_parsed_resume
+
+    def test_create_writes_corrected_work_history(self, mock_client, mock_metadata, sample_parsed_resume):
+        """work_history replaces the parsed list; the corrected entry is what is written."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        corrected = [{"companyName": "Sample Gadgets Ireland", "title": "Financial Accountant", "startDate": 1514764800000}]
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id, work_history=corrected))
+
+        from unittest.mock import call
+        wh_calls = [c for c in mock_client.create.call_args_list if c.args[0] == "CandidateWorkHistory"]
+        assert wh_calls == [call("CandidateWorkHistory", {
+            "companyName": "Sample Gadgets Ireland", "title": "Financial Accountant",
+            "startDate": 1514764800000, "candidate": {"id": 300},
+        })]
+        assert data["written"]["work_history"] == [{
+            "id": 301, "companyName": "Sample Gadgets Ireland", "title": "Financial Accountant",
+            "startDate": 1514764800000,
+        }]
+        assert len([c for c in mock_client.create.call_args_list if c.args[0] == "CandidateEducation"]) == 2  # parsed list kept
+
+    def test_create_writes_corrected_education(self, mock_client, mock_metadata, sample_parsed_resume):
+        """education replaces the parsed list; the corrected entries are what is written."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        corrected = [{"school": "UCD", "degree": "BComm", "major": "Accounting", "graduationDate": 1214870400000}]
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id, education=corrected))
+
+        from unittest.mock import call
+        edu_calls = [c for c in mock_client.create.call_args_list if c.args[0] == "CandidateEducation"]
+        assert edu_calls == [call("CandidateEducation", {
+            "school": "UCD", "degree": "BComm", "major": "Accounting", "graduationDate": 1214870400000,
+            "candidate": {"id": 300},
+        })]
+        assert data["written"]["education"] == [{
+            "id": 303, "school": "UCD", "degree": "BComm", "major": "Accounting", "graduationDate": 1214870400000,
+        }]
+        assert len([c for c in mock_client.create.call_args_list if c.args[0] == "CandidateWorkHistory"]) == 2  # parsed list kept
+
+    def test_create_empty_list_writes_none(self, mock_client, mock_metadata, sample_parsed_resume):
+        """An empty work_history or education list writes no child of that kind."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id, work_history=[], education=[]))
+
+        assert [c.args[0] for c in mock_client.create.call_args_list] == ["Candidate"]
+        assert data["written"]["work_history"] == []
+        assert data["written"]["education"] == []
+        assert data["written"]["skill_set"] == ["EXCEL", "ANNUAL BUDGET", "IFRS"]  # omitted skills still use the parse
+
+    def test_create_skillset_in_create_payload(self, mock_client, mock_metadata, sample_parsed_resume):
+        """Skill names are merged with a given skillSet and sent in the create payload, with no skillSet update."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(
+            mock_client, mock_metadata, upload_id,
+            skills=["Python", "treasury", "IFRS"], fields_override={"skillSet": "Treasury"},
+        ))
+
+        payload = mock_client.create.call_args_list[0].args[1]
+        assert payload["skillSet"] == "Treasury, Python, IFRS"
+        assert data["written"]["skill_set"] == ["Python", "IFRS"]
+        assert data["written"]["fields"]["skillSet"] == "Treasury, Python, IFRS"
+        mock_client.update.assert_not_called()
+
+    def test_create_links_primary_skills_by_association(self, mock_client, mock_metadata, sample_parsed_resume):
+        """primarySkills from the parse are linked with one association PUT, never with an entity update."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        mock_client.add_association.assert_called_once_with("Candidate", 300, "primarySkills", [1000125, 1000200])
+        mock_client.update.assert_not_called()
+        assert "primarySkills" not in mock_client.create.call_args_list[0].args[1]
+        assert data["written"]["primary_skills"] == [1000125, 1000200]
+
+    def test_create_primary_skills_argument_replaces_parse(self, mock_client, mock_metadata, sample_parsed_resume):
+        """primary_skills given by Claude replace the parsed ids."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id, primary_skills=[1000300]))
+
+        mock_client.add_association.assert_called_once_with("Candidate", 300, "primarySkills", [1000300])
+        assert data["written"]["primary_skills"] == [1000300]
+
+    def test_create_description_override_ignored_with_warning(self, mock_client, mock_metadata, sample_parsed_resume):
+        """A description in fields_override is dropped with a warning; the parsed HTML is written."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        html = sample_parsed_resume["candidate"]["description"]
+
+        data = json.loads(self._run_create(
+            mock_client, mock_metadata, upload_id, fields_override={"description": "my own text"},
+        ))
+
+        assert mock_client.create.call_args_list[0].args[1]["description"] == html
+        assert data["warnings"] == [
+            "fields_override 'description' was ignored: the description always comes from the parsed CV."
+        ]
+        assert data["written"]["description_length"] == len(html)
+        assert "description" not in data["written"]["fields"]
+
+    def test_create_dup_check_uses_corrected_names(self, mock_client, mock_metadata, sample_parsed_resume):
+        """The duplicate search runs on the corrected names and email, not the raw parse."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(
+            mock_client, mock_metadata, upload_id,
+            fields_override={"firstName": "Janet", "lastName": "Doe-Smith", "email": "janet@example.com"},
+        ))
+
+        from unittest.mock import call
+        assert mock_client.search.call_args_list == [call(
+            "Candidate",
+            query='email:"janet@example.com" OR firstName:"Janet" OR lastName:"Doe-Smith"',
+            fields=server._CANDIDATE_DUP_FIELDS,
+            count=50,
+        )]
+        assert mock_client.create.call_args_list[0].args[1]["name"] == "Janet Doe-Smith"
+        assert data["created"] is True
+
+    def test_create_unexpected_exception_after_create_returns_id(self, mock_client, mock_metadata, sample_parsed_resume):
+        """Any exception after the Candidate exists still returns the id, the error and the attach retry."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        with patch.object(server, "_write_candidate_children", side_effect=RuntimeError("kaboom")):
+            data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["created"] is True
+        assert data["candidate_id"] == 300
+        assert data["error"] == "Candidate 300 was created, but a later step failed: kaboom"
+        assert data["cv_attach_retry"]["next_call"] == f"attach_cv(candidate_id=300, upload_id='{upload_id}')"
+        mock_client.attach_file.assert_not_called()
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "received"
+        assert rec["data"] == _CV_BYTES
+        server.upload_store.claim(upload_id, "user-a")  # the claim was released
+
+    def test_create_reports_everything_written(self, mock_client, mock_metadata, sample_parsed_resume):
+        """The response lists every field, child, skill and the file that was written."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        cand = sample_parsed_resume["candidate"]
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data == {
+            "created": True,
+            "candidate_id": 300,
+            "written": {
+                "fields": {
+                    **{k: v for k, v in cand.items() if k != "description"},
+                    "owner": {"id": 1},
+                    "source": "Claude",
+                    "skillSet": "EXCEL, ANNUAL BUDGET, IFRS",
+                    "name": "Jane Doe",
+                },
+                "description_length": len(cand["description"]),
+                "work_history": [
+                    {"id": 301, "title": "Financial Accountant Sample Gadgets Ireland",
+                     "startDate": 1514764800000, "endDate": 1717200000000},
+                    {"id": 302, "companyName": "Beta Systems", "title": "Assistant Accountant",
+                     "startDate": 1388534400000, "endDate": 1514764800000},
+                ],
+                "education": [
+                    {"id": 303, "school": "University College Dublin", "major": "Accounting",
+                     "graduationDate": 1214870400000},
+                    {"id": 304, "certification": "ACCA"},
+                ],
+                "skill_set": ["EXCEL", "ANNUAL BUDGET", "IFRS"],
+                "primary_skills": [1000125, 1000200],
+                "file": {"file_id": 55, "name": "Jane_Doe_CV.pdf"},
+            },
+            "duplicate_check": None,
+        }
+
+    def test_create_marks_attached_with_candidate_id(self, mock_client, mock_metadata, sample_parsed_resume):
+        """mark_attached records the new Candidate id and the stored parse is kept on the tombstone."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "attached"
+        assert rec["attached_candidate_id"] == data["candidate_id"] == 300
+        assert rec["file_id"] == 55
+        assert rec["data"] is None
+        assert rec["parsed"] == sample_parsed_resume
+
+    def test_create_required_fields_hint(self, mock_client, mock_metadata, sample_parsed_resume):
+        """A missing companyName gives the retry hint and writes nothing; supplying it then succeeds."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        with patch("bullhorn_mcp.server.get_candidate_required", return_value=["companyName"]):
+            data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+
+        assert data["error"] == "required_fields_missing"
+        assert data["fields"] == ["companyName"]
+        assert data["hint"] == (
+            "Call again with the missing fields added to fields_override. "
+            "For companyName use the candidate's current employer from the CV (the most recent work history entry)."
+        )
+        mock_client.create.assert_not_called()
+        assert server.upload_store.get(upload_id, "user-a")["status"] == "received"  # nothing consumed
+
+        with patch("bullhorn_mcp.server.get_candidate_required", return_value=["companyName"]):
+            retried = json.loads(self._run_create(
+                mock_client, mock_metadata, upload_id, fields_override={"companyName": "Sample Gadgets Ireland"},
+            ))
+
+        assert retried["created"] is True
+        assert mock_client.create.call_args_list[0].args[1]["companyName"] == "Sample Gadgets Ireland"
+        mock_client.parse_resume_file.assert_called_once()  # the retry reused the stored parse
+
+    def test_create_text_mode_accepts_corrections(self, mock_client, mock_metadata, sample_parsed_resume):
+        """Text mode takes the same corrections; nothing is stored or attached."""
+        self._wire_create(mock_client, sample_parsed_resume, first_id=400, text=True)
+        corrected_wh = [{"companyName": "Sample Gadgets Ireland", "title": "Financial Accountant", "startDate": 1514764800000}]
+
+        data = json.loads(self._run_text(
+            mock_client, mock_metadata,
+            fields_override={"companyName": "Sample Gadgets Ireland"},
+            work_history=corrected_wh, skills=["Python"], primary_skills=[1000200],
+        ))
+
+        from unittest.mock import call
+        assert mock_client.create.call_args_list[0] == call("Candidate", self._candidate_payload(
+            sample_parsed_resume, companyName="Sample Gadgets Ireland", skillSet="Python",
+        ))
+        wh_calls = [c for c in mock_client.create.call_args_list if c.args[0] == "CandidateWorkHistory"]
+        assert wh_calls == [call("CandidateWorkHistory", {**corrected_wh[0], "candidate": {"id": 400}})]
+        assert len([c for c in mock_client.create.call_args_list if c.args[0] == "CandidateEducation"]) == 2
+        mock_client.add_association.assert_called_once_with("Candidate", 400, "primarySkills", [1000200])
+        mock_client.parse_resume_text.assert_called_once()
+        mock_client.attach_file.assert_not_called()
+        assert data["written"]["file"] is None
+        assert "cv_attach_retry" not in data
+        assert data["written"]["skill_set"] == ["Python"]
+
 
 @pytest.mark.usefixtures("clean_upload_store")
 class TestAttachCv:
-    """Tests for attach_cv tool (two-call confirmation flow)."""
+    """Tests for attach_cv (CR43: additions written on every call, overwrites need confirm=True)."""
+
+    CID = 67890
+    DESC = "<html><body><p>Jane Doe</p><p>Financial Accountant with 8 years in group reporting.</p></body></html>"
 
     @pytest.fixture
     def mock_metadata(self):
@@ -6470,323 +7230,440 @@ class TestAttachCv:
         meta.get_fields.return_value = []
         return meta
 
-    def test_attach_cv_preview_returns_diff(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """attach_cv without fields_to_update returns preview diff without writing."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        mock_client.get.return_value = {
-            **sample_candidate,
-            "occupation": "Junior Developer",
-            "mobile": None,
+    def _existing(self, **over):
+        """A Candidate that already matches the parse except phone/description (empty) and occupation (different)."""
+        base = {
+            "id": self.CID, "firstName": "Jane", "lastName": "Doe", "email": "jane.doe@example.com",
+            "phone": None, "occupation": "Junior Developer", "description": None, "skillSet": "EXCEL",
         }
-        mock_client.query.return_value = []
+        base.update(over)
+        return base
 
-        upload_id = _seed_upload()
-
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(
-                candidate_id=sample_candidate["id"],
-                upload_id=upload_id,
-            )
-
-        data = json.loads(result)
-        assert data["preview"] is True
-        assert data["candidate_id"] == sample_candidate["id"]
-        assert "proposed_field_changes" in data
-        assert "message" in data
-        # Nothing written
-        mock_client.update.assert_not_called()
-        mock_client.attach_file.assert_not_called()
-
-    def test_attach_cv_preview_shows_current_description(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """The preview diff reports the Candidate's real description, not null (CR42 review M1)."""
-        parsed = {**sample_parsed_resume, "candidate": {**sample_parsed_resume["candidate"], "description": "<p>New CV</p>"}}
+    def _prep(self, mock_client, parsed, existing=None, wh=None, edu=None, linked=None):
         mock_client.parse_resume_file.return_value = parsed
-        mock_client.get.return_value = {**sample_candidate, "description": "<p>Old CV</p>"}
-        mock_client.query.return_value = []
-
-        upload_id = _seed_upload()
-
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(
-                candidate_id=sample_candidate["id"],
-                upload_id=upload_id,
-            )
-
-        data = json.loads(result)
-        assert "description" in mock_client.get.call_args.kwargs["fields"].split(",")
-        change = next(c for c in data["proposed_field_changes"] if c["field"] == "description")
-        assert change == {"field": "description", "current": "<p>Old CV</p>", "proposed": "<p>New CV</p>"}
-
-    def test_attach_cv_commit_applies_selected_fields(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """attach_cv commit applies only fields_to_update and attaches CV."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
-        mock_client.query.return_value = []
-        mock_client.update.return_value = {
-            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE",
-            "data": {**sample_candidate, "occupation": "Senior Software Engineer"},
-        }
-        mock_client.attach_file.return_value = {"fileId": 80, "name": "cv.pdf"}
+        mock_client.get.return_value = existing if existing is not None else self._existing()
+        wh = wh or []
+        edu = edu or []
+        mock_client.query.side_effect = lambda entity, **kw: wh if entity == "CandidateWorkHistory" else edu
+        mock_client.get_association.return_value = linked or []
+        counter = iter(range(5000, 6000))
+        mock_client.create.side_effect = lambda entity, payload: {"changedEntityId": next(counter)}
+        mock_client.update.return_value = {"changedEntityId": self.CID, "changeType": "UPDATE"}
+        mock_client.add_association.return_value = {"changeType": "ASSOCIATE"}
+        mock_client.attach_file.return_value = {"fileId": 80, "name": "Jane_Doe_CV.pdf"}
         mock_client._guess_content_type.return_value = "application/pdf"
 
-        upload_id = _seed_upload()
-
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(
-                candidate_id=sample_candidate["id"],
-                upload_id=upload_id,
-                fields_to_update=["occupation"],
-            )
-
-        data = json.loads(result)
-        assert data["committed"] is True
-        assert "occupation" in data["fields_updated"]
-        assert data["file_attachment"] is not None
-        mock_client.attach_file.assert_called_once()
-
-    def test_attach_cv_force_all_applies_everything(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """attach_cv with force_all=True applies all proposed changes."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
-        mock_client.query.return_value = []
-        mock_client.update.return_value = {
-            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE",
-            "data": {**sample_candidate, "occupation": "Senior Software Engineer"},
-        }
-        mock_client.attach_file.return_value = {"fileId": 81}
-        mock_client._guess_content_type.return_value = "application/pdf"
-
-        upload_id = _seed_upload()
-
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(
-                candidate_id=sample_candidate["id"],
-                upload_id=upload_id,
-                force_all=True,
-            )
-
-        data = json.loads(result)
-        assert data["committed"] is True
-        mock_client.attach_file.assert_called_once()
-
-    def _attach(self, mock_client, mock_metadata, **kwargs):
-        with _http_as(), \
+    def _attach(self, mock_client, mock_metadata, sub="user-a", **kwargs):
+        kwargs.setdefault("candidate_id", self.CID)
+        with _http_as(sub), \
              patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
             return json.loads(server.attach_cv(**kwargs))
+
+    # --- _plan_cv_update (pure) -------------------------------------------------
+
+    def _plan(self, existing, proposed, fields_to_update=None):
+        return server._plan_cv_update(existing, proposed, fields_to_update, [], [], [], [], [], [], "", [])
+
+    def test_plan_empty_field_is_addition(self):
+        for empty in (None, "", "   "):
+            plan = self._plan({"phone": empty}, {"phone": "555-0001"})
+            assert plan["additions"]["fields"] == {"phone": "555-0001"}
+            assert plan["overwrites"] == []
+
+    def test_plan_filled_field_is_overwrite(self):
+        plan = self._plan({"occupation": "Junior Developer"}, {"occupation": "Financial Accountant"})
+        assert plan["additions"]["fields"] == {}
+        assert plan["overwrites"] == [
+            {"field": "occupation", "current": "Junior Developer", "proposed": "Financial Accountant"}
+        ]
+
+    def test_plan_equal_after_trim_skipped(self):
+        plan = self._plan({"occupation": " Financial Accountant "}, {"occupation": "Financial Accountant  "})
+        assert plan["additions"]["fields"] == {}
+        assert plan["overwrites"] == []
+
+    def test_plan_blank_proposed_value_skipped(self):
+        """A blank parse never clears a field, filled or empty."""
+        plan = self._plan({"companyName": "Acme", "phone": None}, {"companyName": "", "phone": "  "})
+        assert plan["additions"]["fields"] == {}
+        assert plan["overwrites"] == []
+
+    def test_plan_fields_to_update_limits_fields(self):
+        existing = {"phone": None, "occupation": "Junior Developer", "email": None}
+        proposed = {"phone": "555-0001", "occupation": "Financial Accountant", "email": "a@b.com"}
+        plan = self._plan(existing, proposed, fields_to_update=["occupation"])
+        assert plan["additions"]["fields"] == {}
+        assert [c["field"] for c in plan["overwrites"]] == ["occupation"]
+
+    def test_plan_description_overwrite_shows_lengths_only(self):
+        plan = self._plan({"description": "<p>Old CV</p>"}, {"description": "<p>New CV here</p>"})
+        assert plan["overwrites"] == [{"field": "description", "current_length": 13, "proposed_length": 18}]
+
+    # --- Contract ---------------------------------------------------------------
+
+    def test_attach_without_confirm_writes_additions_only(self, mock_client, mock_metadata, sample_parsed_resume):
+        """No confirm: the update payload has only the empty-field additions, never the overwrite field."""
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id)
+
+        assert data["committed"] is True
+        assert mock_client.update.call_args_list == [
+            call("Candidate", self.CID, {"phone": "555-0001", "description": self.DESC}),
+            call("Candidate", self.CID, {"skillSet": "EXCEL, ANNUAL BUDGET, IFRS"}),
+        ]
+        assert data["written"]["fields"] == ["phone", "description"]
+        assert data["written"]["skill_set"] == ["ANNUAL BUDGET", "IFRS"]
+        assert data["written"]["primary_skills"] == [1000125, 1000200]
+        assert [w["title"] for w in data["written"]["work_history"]] == [
+            "Financial Accountant Sample Gadgets Ireland", "Assistant Accountant",
+        ]
+        assert len(data["written"]["education"]) == 2
+        assert data["written"]["file"] == {"file_id": 80, "name": "Jane_Doe_CV.pdf"}
+        mock_client.add_association.assert_called_once_with("Candidate", self.CID, "primarySkills", [1000125, 1000200])
+        mock_client.attach_file.assert_called_once_with(
+            "Candidate", self.CID, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", file_type="CV"
+        )
+        assert "overwritten" not in data
+
+    def test_attach_without_confirm_returns_pending_overwrites(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id)
+
+        assert data["pending_overwrites"] == [
+            {"field": "occupation", "current": "Junior Developer", "proposed": "Financial Accountant"}
+        ]
+        assert "confirm=True" in data["hint"]
+
+    def test_attach_pending_description_overwrite_shows_lengths(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume, existing=self._existing(phone="555-0001", description="<p>Old</p>"))
+        upload_id = _seed_upload()
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id)
+
+        change = next(c for c in data["pending_overwrites"] if c["field"] == "description")
+        assert change == {"field": "description", "current_length": 10, "proposed_length": len(self.DESC)}
+        assert call("Candidate", self.CID, {"description": self.DESC}) not in mock_client.update.call_args_list
+
+    def _written_state(self, parsed):
+        """Records the first attach call wrote, as the second call would read them back."""
+        wh = [{"id": 1 + i, **e} for i, e in enumerate(parsed["candidateWorkHistory"])]
+        edu = [{"id": 10 + i, **e} for i, e in enumerate(parsed["candidateEducation"])]
+        existing = self._existing(phone="555-0001", description=self.DESC, skillSet="EXCEL, ANNUAL BUDGET, IFRS")
+        linked = [{"id": 1000125}, {"id": 1000200}]
+        return existing, wh, edu, linked
+
+    def test_attach_confirm_writes_exactly_previewed_overwrites(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        first = self._attach(mock_client, mock_metadata, upload_id=upload_id)
+        previewed = [c["field"] for c in first["pending_overwrites"]]
+
+        existing, wh, edu, linked = self._written_state(sample_parsed_resume)
+        self._prep(mock_client, sample_parsed_resume, existing, wh, edu, linked)
+        mock_client.update.reset_mock()
+        second = self._attach(mock_client, mock_metadata, upload_id=upload_id, confirm=True)
+
+        assert previewed == ["occupation"]
+        mock_client.update.assert_called_once_with("Candidate", self.CID, {"occupation": "Financial Accountant"})
+        assert second["overwritten"] == ["occupation"]
+        assert "pending_overwrites" not in second
+
+    def test_attach_confirm_after_additions_adds_nothing_twice(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        self._attach(mock_client, mock_metadata, upload_id=upload_id)
+
+        existing, wh, edu, linked = self._written_state(sample_parsed_resume)
+        self._prep(mock_client, sample_parsed_resume, existing, wh, edu, linked)
+        mock_client.attach_file.reset_mock()
+        mock_client.create.reset_mock()
+        mock_client.add_association.reset_mock()
+        mock_client.update.reset_mock()
+        second = self._attach(mock_client, mock_metadata, upload_id=upload_id, confirm=True)
+
+        mock_client.create.assert_not_called()
+        mock_client.add_association.assert_not_called()
+        mock_client.attach_file.assert_not_called()
+        assert second["written"]["work_history"] == []
+        assert second["written"]["education"] == []
+        assert second["written"]["skill_set"] == []
+        assert second["written"]["primary_skills"] == []
+        assert second["written"]["file"]["already_attached"] is True
+        assert second["already_present"]["work_history"] == 2
+        assert second["already_present"]["education"] == 2
+        assert second["already_present"]["primary_skills"] == [1000125, 1000200]
+        # only the overwrite was written; skillSet is not re-sent
+        mock_client.update.assert_called_once_with("Candidate", self.CID, {"occupation": "Financial Accountant"})
+
+    def test_attach_confirm_on_attached_upload_same_candidate_allowed(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        self._attach(mock_client, mock_metadata, upload_id=upload_id)
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "attached"
+        assert rec["data"] is None
+        assert rec["attached_candidate_id"] == self.CID
+
+        second = self._attach(mock_client, mock_metadata, upload_id=upload_id, confirm=True)
+
+        assert second["committed"] is True
+        assert "error" not in second
+        assert mock_client.parse_resume_file.call_count == 1  # tombstone parse reused
+        server.upload_store.claim(upload_id, "user-a")  # claim released afterwards
+
+    def test_attach_attached_upload_other_candidate_refused(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        self._attach(mock_client, mock_metadata, upload_id=upload_id)
+        mock_client.update.reset_mock()
+        mock_client.create.reset_mock()
+        mock_client.attach_file.reset_mock()
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id, candidate_id=999, confirm=True)
+
+        assert data["error"] == "upload_already_attached"
+        mock_client.update.assert_not_called()
+        mock_client.create.assert_not_called()
+        mock_client.attach_file.assert_not_called()
+
+    def test_attach_uses_stored_parse(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            mock_client.search.return_value = []
+            server.parse_cv(upload_id=upload_id)
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id)
+
+        assert data["committed"] is True
+        mock_client.parse_resume_file.assert_called_once_with(_CV_BYTES, "Jane_Doe_CV.pdf", "pdf")
+
+    def test_attach_corrected_lists_replace_parse(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        wh = [{"companyName": "Sample Gadgets Ireland", "title": "Financial Accountant", "startDate": 1514764800000}]
+        edu = [{"school": "UCD", "degree": "BComm"}]
+
+        data = self._attach(
+            mock_client, mock_metadata, upload_id=upload_id,
+            work_history=wh, education=edu, skills=["SAP"], primary_skills=[1000999],
+        )
+
+        assert data["committed"] is True
+        assert mock_client.create.call_args_list == [
+            call("CandidateWorkHistory", {**wh[0], "candidate": {"id": self.CID}}),
+            call("CandidateEducation", {**edu[0], "candidate": {"id": self.CID}}),
+        ]
+        assert call("Candidate", self.CID, {"skillSet": "EXCEL, SAP"}) in mock_client.update.call_args_list
+        mock_client.add_association.assert_called_once_with("Candidate", self.CID, "primarySkills", [1000999])
+
+    def test_attach_empty_list_adds_none(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = self._attach(
+            mock_client, mock_metadata, upload_id=upload_id,
+            work_history=[], education=[], skills=[], primary_skills=[],
+        )
+
+        assert data["committed"] is True
+        mock_client.create.assert_not_called()
+        mock_client.add_association.assert_not_called()
+        assert mock_client.update.call_args_list == [
+            call("Candidate", self.CID, {"phone": "555-0001", "description": self.DESC}),
+        ]
+
+    def test_attach_file_failure_is_warning_with_retry(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        mock_client.attach_file.side_effect = BullhornAPIError("file endpoint down")
+        upload_id = _seed_upload()
+
+        result = self._attach(mock_client, mock_metadata, upload_id=upload_id)
+
+        assert result["committed"] is True
+        assert result["written"]["file"] is None
+        assert any("attach_cv" in w and "Retry" in w and "file endpoint down" in w for w in result["warnings"])
+        rec = server.upload_store.get(upload_id, "user-a")
+        assert rec["status"] == "received"
+        assert rec["data"] == _CV_BYTES
+
+    def test_attach_unexpected_exception_returns_partial(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        with patch.object(server, "_write_candidate_children", side_effect=RuntimeError("boom")):
+            data = self._attach(mock_client, mock_metadata, upload_id=upload_id)
+
+        assert data["committed"] is True
+        assert data["partial"] is True
+        assert "boom" in data["error"]
+        assert data["written"]["fields"] == ["phone", "description"]
+        mock_client.update.assert_called_once_with("Candidate", self.CID, {"phone": "555-0001", "description": self.DESC})
+        server.upload_store.claim(upload_id, "user-a")  # released
+
+    def test_attach_removed_params_absent_from_schema(self):
+        import asyncio
+        tool = {t.name: t for t in asyncio.run(server.mcp.list_tools())}["attach_cv"]
+        props = tool.parameters["properties"]
+        for removed in ("include_work_history", "include_education", "include_skills", "force_all"):
+            assert removed not in props
+        for present in ("fields_to_update", "fields_override", "work_history", "education",
+                        "skills", "primary_skills", "confirm"):
+            assert present in props
+
+    # --- Kept from the earlier flow, adapted -------------------------------------
+
+    def test_attach_cv_commit_applies_selected_fields(self, mock_client, mock_metadata, sample_parsed_resume):
+        """fields_to_update limits the fields considered, with confirm=True writing the overwrite."""
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id,
+                            fields_to_update=["occupation"], confirm=True)
+
+        assert data["committed"] is True
+        assert data["overwritten"] == ["occupation"]
+        assert data["written"]["fields"] == ["occupation"]
+        assert mock_client.update.call_args_list[0] == call("Candidate", self.CID, {"occupation": "Financial Accountant"})
+
+    def test_attach_cv_fields_to_update_unknown_warns(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id, fields_to_update=["nope"])
+
+        assert any("fields_to_update not in the parse" in w and "nope" in w for w in data["warnings"])
+        assert "pending_overwrites" not in data
+
+    def test_attach_cv_get_fetches_description(self, mock_client, mock_metadata, sample_parsed_resume):
+        """The existing record is fetched with description so a filled one is never seen as empty (CR42 M1)."""
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+
+        self._attach(mock_client, mock_metadata, upload_id=upload_id)
+
+        assert "description" in mock_client.get.call_args.kwargs["fields"].split(",")
 
     def test_attach_cv_refuses_other_candidate_than_ticket(self, mock_client, mock_metadata):
         """An upload started for Candidate 111 cannot be attached to Candidate 222."""
         upload_id = _seed_upload(candidate_id=111)
 
-        preview = self._attach(mock_client, mock_metadata, candidate_id=222, upload_id=upload_id)
-        commit = self._attach(mock_client, mock_metadata, candidate_id=222, upload_id=upload_id, force_all=True)
+        data = self._attach(mock_client, mock_metadata, candidate_id=222, upload_id=upload_id, confirm=True)
 
-        for data in (preview, commit):
-            assert data["error"] == "upload_candidate_mismatch"
-            assert "attach_cv(candidate_id=111" in data["hint"]
+        assert data["error"] == "upload_candidate_mismatch"
+        assert "attach_cv(candidate_id=111" in data["hint"]
         mock_client.parse_resume_file.assert_not_called()
         mock_client.attach_file.assert_not_called()
-        server.upload_store.claim(upload_id, "user-a")  # the commit released it
+        server.upload_store.claim(upload_id, "user-a")  # released
 
-    def test_attach_cv_matching_ticket_candidate_proceeds(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """The ticket's candidate_id hint matching the call lets the preview run."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        mock_client.get.return_value = dict(sample_candidate)
-        mock_client.query.return_value = []
-        upload_id = _seed_upload(candidate_id=sample_candidate["id"])
+    def test_attach_cv_matching_ticket_candidate_proceeds(self, mock_client, mock_metadata, sample_parsed_resume):
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload(candidate_id=self.CID)
 
-        data = self._attach(mock_client, mock_metadata, candidate_id=sample_candidate["id"], upload_id=upload_id)
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id)
 
-        assert data["preview"] is True
+        assert data["committed"] is True
 
-    def test_attach_cv_commit_refused_while_upload_in_use(self, mock_client, mock_metadata, sample_candidate):
-        """A commit overlapping another commit on the same upload gets upload_in_use."""
+    def test_attach_cv_refused_while_upload_in_use(self, mock_client, mock_metadata):
+        """Every call claims now, so a call overlapping another on the same upload gets upload_in_use."""
         upload_id = _seed_upload()
         server.upload_store.claim(upload_id, "user-a")
 
-        data = self._attach(mock_client, mock_metadata, candidate_id=sample_candidate["id"],
-                            upload_id=upload_id, force_all=True)
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id)
 
         assert data["error"] == "upload_in_use"
         mock_client.parse_resume_file.assert_not_called()
 
-    def test_attach_cv_preview_does_not_claim(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """A preview writes nothing, so it runs even while a commit holds the upload."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        mock_client.get.return_value = dict(sample_candidate)
-        mock_client.query.return_value = []
-        upload_id = _seed_upload()
-        server.upload_store.claim(upload_id, "user-a")
-
-        data = self._attach(mock_client, mock_metadata, candidate_id=sample_candidate["id"], upload_id=upload_id)
-
-        assert data["preview"] is True
-
-    def test_attach_cv_other_users_commit_leaves_owners_claim(self, mock_client, mock_metadata, sample_candidate):
-        """A commit by another user on the owner's upload_id is not_found and does not free the owner's claim."""
+    def test_attach_cv_other_users_call_leaves_owners_claim(self, mock_client, mock_metadata):
         from bullhorn_mcp.uploads import UploadInUse
         upload_id = _seed_upload(sub="user-a")
         server.upload_store.claim(upload_id, "user-a")
 
-        with _http_as("user-b"), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            data = json.loads(server.attach_cv(
-                candidate_id=sample_candidate["id"], upload_id=upload_id, force_all=True,
-            ))
+        data = self._attach(mock_client, mock_metadata, sub="user-b", upload_id=upload_id, confirm=True)
 
         assert data["error"] == "upload_not_found"
         with pytest.raises(UploadInUse):
-            server.upload_store.claim(upload_id, "user-a")  # still held by the owner's call
+            server.upload_store.claim(upload_id, "user-a")
 
-    def test_attach_cv_commit_releases_claim_on_error(self, mock_client, mock_metadata, sample_candidate):
-        """A commit that fails at Bullhorn releases the upload so the user can retry."""
+    def test_attach_cv_releases_claim_on_error(self, mock_client, mock_metadata):
         mock_client.parse_resume_file.side_effect = BullhornAPIError("Parse failed")
         upload_id = _seed_upload()
 
         with _http_as(), \
              patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(candidate_id=sample_candidate["id"], upload_id=upload_id, force_all=True)
+            result = server.attach_cv(candidate_id=self.CID, upload_id=upload_id)
 
         assert result.startswith("ERROR:")
         server.upload_store.claim(upload_id, "user-a")  # does not raise
 
     def test_attach_cv_api_error(self, mock_client, mock_metadata):
-        """attach_cv returns ERROR: prefix on BullhornAPIError from parse."""
         mock_client.parse_resume_file.side_effect = BullhornAPIError("Parse failed")
-
         upload_id = _seed_upload()
 
         with _http_as(), \
              patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(
-                candidate_id=123,
-                upload_id=upload_id,
-            )
+            result = server.attach_cv(candidate_id=123, upload_id=upload_id)
 
         assert result.startswith("ERROR:")
+        mock_client.update.assert_not_called()
 
-    def test_attach_cv_commit_recomputes_name_both_components(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """attach_cv commit injects recomputed name when both firstName and lastName are updated."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        # parsed has firstName="Jane", lastName="Doe"; candidate has firstName="John", lastName="Smith"
-        mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
-        mock_client.query.return_value = []
-        mock_client.update.return_value = {
-            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE", "data": {},
-        }
-        mock_client.attach_file.return_value = {"fileId": 90, "name": "cv.pdf"}
-        mock_client._guess_content_type.return_value = "application/pdf"
-
+    def test_attach_cv_recomputes_name_both_components(self, mock_client, mock_metadata, sample_parsed_resume):
+        """Both name parts written: name is injected as 'Jane Doe', no extra client.get."""
+        self._prep(mock_client, sample_parsed_resume, existing=self._existing(firstName="John", lastName="Smith"))
         upload_id = _seed_upload()
 
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(
-                candidate_id=sample_candidate["id"],
-                upload_id=upload_id,
-                fields_to_update=["firstName", "lastName"],
-            )
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id,
+                            fields_to_update=["firstName", "lastName"], confirm=True)
 
-        data = json.loads(result)
         assert data["committed"] is True
-        call_kwargs = mock_client.update.call_args[0][2]
-        assert call_kwargs.get("name") == "Jane Doe"
-        # No extra client.get call needed when both components present
+        assert mock_client.update.call_args_list[0] == call(
+            "Candidate", self.CID, {"firstName": "Jane", "lastName": "Doe", "name": "Jane Doe"}
+        )
         assert mock_client.get.call_count == 1
 
-    def test_attach_cv_commit_recomputes_name_single_component(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """attach_cv commit fetches the other half from Bullhorn when only one name component is updated."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        # First get: broad candidate fetch. Second get: firstName,lastName for name recomputation.
-        mock_client.get.side_effect = [
-            {**sample_candidate, "occupation": "Junior Developer"},
-            {"firstName": "John", "lastName": "Smith"},
-        ]
-        mock_client.query.return_value = []
-        mock_client.update.return_value = {
-            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE", "data": {},
-        }
-        mock_client.attach_file.return_value = {"fileId": 91, "name": "cv.pdf"}
-        mock_client._guess_content_type.return_value = "application/pdf"
-
+    def test_attach_cv_recomputes_name_single_component(self, mock_client, mock_metadata, sample_parsed_resume):
+        """Only firstName changes: the lastName already fetched is combined, so name is 'Jane Smith'."""
+        self._prep(mock_client, sample_parsed_resume, existing=self._existing(firstName="John", lastName="Smith"))
         upload_id = _seed_upload()
 
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(
-                candidate_id=sample_candidate["id"],
-                upload_id=upload_id,
-                fields_to_update=["firstName"],
-            )
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id,
+                            fields_to_update=["firstName"], confirm=True)
 
-        data = json.loads(result)
         assert data["committed"] is True
-        call_kwargs = mock_client.update.call_args[0][2]
-        # firstName changed to "Jane", lastName stays "Smith"
-        assert call_kwargs.get("name") == "Jane Smith"
-        assert mock_client.get.call_count == 2
+        assert mock_client.update.call_args_list[0] == call(
+            "Candidate", self.CID, {"firstName": "Jane", "name": "Jane Smith"}
+        )
+        assert mock_client.get.call_count == 1
 
     def test_attach_cv_upload_not_found(self, mock_client, mock_metadata):
-        """attach_cv with an unknown upload_id returns upload_not_found and never calls Bullhorn."""
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            result = server.attach_cv(candidate_id=123, upload_id="upl_doesnotexist")
+        data = self._attach(mock_client, mock_metadata, candidate_id=123, upload_id="upl_doesnotexist")
 
-        data = json.loads(result)
         assert data["error"] == "upload_not_found"
         mock_client.parse_resume_file.assert_not_called()
         mock_client.attach_file.assert_not_called()
 
-    def test_attach_cv_preview_keeps_then_commit_drops(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """The same upload_id serves the preview call and the commit call; the commit drops the bytes."""
-        mock_client.parse_resume_file.return_value = sample_parsed_resume
-        mock_client.get.return_value = {**sample_candidate, "occupation": "Junior Developer"}
-        mock_client.query.return_value = []
-        mock_client.update.return_value = {
-            "changedEntityId": sample_candidate["id"], "changeType": "UPDATE", "data": {},
-        }
+    def test_attach_cv_drops_bytes_and_keeps_parse(self, mock_client, mock_metadata, sample_parsed_resume):
+        """The attach drops the bytes (NFR-9) and keeps the parse on the tombstone for a confirm call."""
+        self._prep(mock_client, sample_parsed_resume)
         mock_client.attach_file.return_value = {"fileId": 82, "name": "Jane_Doe_CV.pdf"}
-        mock_client._guess_content_type.return_value = "application/pdf"
         upload_id = _seed_upload()
 
-        with _http_as(), \
-             patch.object(server, "get_client", return_value=mock_client), \
-             patch.object(server, "get_metadata", return_value=mock_metadata):
-            preview = json.loads(server.attach_cv(candidate_id=sample_candidate["id"], upload_id=upload_id))
-            mid = server.upload_store.get(upload_id, "user-a")
-            commit = json.loads(server.attach_cv(
-                candidate_id=sample_candidate["id"], upload_id=upload_id, fields_to_update=["occupation"],
-            ))
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id)
 
-        assert preview["preview"] is True
-        assert mid["status"] == "received"
-        assert mid["data"] == _CV_BYTES
-        assert commit["committed"] is True
-        assert mock_client.parse_resume_file.call_count == 2
-        for call in mock_client.parse_resume_file.call_args_list:
-            assert call.args == (_CV_BYTES, "Jane_Doe_CV.pdf", "pdf")
-        mock_client.attach_file.assert_called_once_with(
-            "Candidate", sample_candidate["id"], _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", file_type="CV"
-        )
+        assert data["written"]["file"] == {"file_id": 82, "name": "Jane_Doe_CV.pdf"}
         rec = server.upload_store.get(upload_id, "user-a")
         assert rec["status"] == "attached"
         assert rec["data"] is None
         assert rec["file_id"] == 82
+        assert rec["parsed"] == sample_parsed_resume
 
 
 class TestGetNotesForEntity:
@@ -7668,6 +8545,19 @@ class TestRequestCvUpload:
 
         assert data["error"] == "identity_resolution_failed"
         assert server.upload_store._uploads == {}
+    def test_request_cv_upload_next_steps_mention_review(self):
+        """next_steps tell the agent to parse_cv, review and correct the parse, then create or attach."""
+        data = self._request()
+        upload_id = data["upload_id"]
+
+        text = " ".join(data["next_steps"])
+        parse_at = text.index(f"parse_cv(upload_id='{upload_id}')")
+        review_at = text.index("review the parse against the CV itself")
+        create_at = text.index(f"create_candidate_from_cv(upload_id='{upload_id}', <your corrections>)")
+        attach_at = text.index(f"attach_cv(candidate_id=..., upload_id='{upload_id}', <your corrections>)")
+        assert parse_at < review_at < create_at
+        assert review_at < attach_at
+        assert "companyName" in text
 
 
 @pytest.mark.usefixtures("clean_upload_store")

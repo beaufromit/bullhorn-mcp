@@ -277,6 +277,71 @@ class TestGetAndAttach:
         assert store.mark_attached("upl_missing", file_id=1) is None
 
 
+class TestStoredParse:
+    PARSED = {"candidate": {"firstName": "Jane"}, "skillList": ["EXCEL"]}
+
+    def test_set_parsed_round_trip(self, store):
+        upload_id = _received(store)
+        assert store.get(upload_id, OWNER)["parsed"] is None
+        store.set_parsed(upload_id, OWNER, self.PARSED)
+        rec = store.get(upload_id, OWNER)
+        assert rec["parsed"] == self.PARSED
+        assert rec["status"] == "received"
+
+    def test_parsed_kept_after_mark_attached(self, store):
+        upload_id = _received(store)
+        store.set_parsed(upload_id, OWNER, self.PARSED)
+        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        rec = store.get(upload_id, OWNER)
+        assert rec["status"] == "attached"
+        assert rec["parsed"] == self.PARSED
+
+    def test_mark_attached_records_candidate_id(self, store):
+        upload_id = _received(store)
+        assert store.get(upload_id, OWNER)["attached_candidate_id"] is None
+        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        assert store.get(upload_id, OWNER)["attached_candidate_id"] == 42
+
+    def test_bytes_still_dropped_on_attach_with_parse_kept(self, store):
+        upload_id = _received(store)
+        store.set_parsed(upload_id, OWNER, self.PARSED)
+        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        rec = store.get(upload_id, OWNER)
+        assert rec["data"] is None
+        assert store._uploads[upload_id].data is None
+        assert rec["parsed"] == self.PARSED
+
+    def test_parsed_dropped_at_purge(self, store, clock):
+        upload_id = _received(store)
+        store.set_parsed(upload_id, OWNER, self.PARSED)
+        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        clock.advance(FILE_TTL_SECONDS)
+        with pytest.raises(UploadNotFound):
+            store.get(upload_id, OWNER)
+
+    def test_parsed_dropped_on_expiry(self, store, clock):
+        upload_id = _received(store)
+        store.set_parsed(upload_id, OWNER, self.PARSED)
+        clock.advance(FILE_TTL_SECONDS)
+        rec = store.get(upload_id, OWNER)
+        assert rec["status"] == "expired"
+        assert rec["parsed"] is None
+        with pytest.raises(UploadExpired):
+            store.set_parsed(upload_id, OWNER, self.PARSED)
+
+    def test_set_parsed_other_user_not_found(self, store):
+        upload_id = _received(store)
+        with pytest.raises(UploadNotFound):
+            store.set_parsed(upload_id, OTHER, self.PARSED)
+        assert store.get(upload_id, OWNER)["parsed"] is None
+
+    def test_set_parsed_pending_rejected(self, store):
+        upload_id, _token, _ = store.create(OWNER, "cv.pdf")
+        with pytest.raises(uploads.UploadError) as exc:
+            store.set_parsed(upload_id, OWNER, self.PARSED)
+        assert str(exc.value) == "No file has been received for this upload yet."
+
+
 class TestOpenUploadCap:
     def test_cap_blocks_extra_ticket_for_same_user_only(self, store):
         for _ in range(MAX_OPEN_UPLOADS_PER_USER):

@@ -109,46 +109,42 @@ def sample_cc_telemetry_comment():
 
 @pytest.fixture
 def sample_parsed_resume():
-    """Realistic Bullhorn /resume/parseToCandidate response fixture."""
+    """Mirrors the live /resume/parseToCandidate shape, verified 2026-09-29.
+
+    skillList is a list of strings, primarySkills is [{name, id}], and
+    rawParsedOutput is omitted. All data is synthetic.
+    """
     return {
+        "confidenceScore": 0.87,
         "candidate": {
             "firstName": "Jane",
             "lastName": "Doe",
             "email": "jane.doe@example.com",
             "phone": "555-0001",
-            "occupation": "Senior Software Engineer",
-            "companyName": "Acme Corp",
-            "skillSet": "",
-            "address": {"city": "New York", "state": "NY", "zip": "10001"},
+            "occupation": "Financial Accountant",
+            "companyName": "",
+            "description": "<html><body><p>Jane Doe</p><p>Financial Accountant with 8 years in group reporting.</p></body></html>",
+            "address": {"city": "Dublin", "state": "", "zip": ""},
         },
         "candidateEducation": [
-            {
-                "school": "MIT",
-                "degree": "Bachelor of Science",
-                "major": "Computer Science",
-                "startDate": 1072915200000,
-                "endDate": 1199145600000,
-            }
+            {"school": "University College Dublin", "major": "Accounting", "graduationDate": 1214870400000},
+            {"certification": "ACCA"},
         ],
         "candidateWorkHistory": [
-            {
-                "companyName": "Acme Corp",
-                "title": "Senior Software Engineer",
+            {   # parser merged the employer into the title and left companyName out
+                "title": "Financial Accountant Sample Gadgets Ireland",
                 "startDate": 1514764800000,
-                "endDate": None,
-                "comments": "Led platform team.",
+                "endDate": 1717200000000,
+                "comments": "Month-end close and group reporting.",
             },
             {
                 "companyName": "Beta Systems",
-                "title": "Software Engineer",
+                "title": "Assistant Accountant",
                 "startDate": 1388534400000,
                 "endDate": 1514764800000,
-                "comments": "Built internal tooling.",
+                "comments": "Accounts payable and reconciliations.",
             },
         ],
-        "skillList": [
-            {"id": 100, "name": "Python"},
-            {"id": 101, "name": "PostgreSQL"},
-            {"id": None, "name": "Obscure Framework"},
-        ],
+        "skillList": ["EXCEL", "ANNUAL BUDGET", "IFRS"],
+        "primarySkills": [{"name": "IFRS", "id": 1000125}, {"name": "Python", "id": 1000200}],
     }

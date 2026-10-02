@@ -78,17 +78,23 @@ def _compute_person_name(fields: dict) -> str | None:
     return combined or None
 
 
-def _check_candidate_duplicates(
+_CANDIDATE_DUP_FIELDS = "id,firstName,lastName,email,phone,occupation,companyName,dateAdded"
+
+
+def _find_candidate_duplicates(
     client: BullhornClient,
     first_name: str,
     last_name: str,
     email: str | None,
-) -> dict | None:
-    """Search for duplicate Candidates by name and optional email.
+) -> dict:
+    """The one Candidate duplicate check (CR43 D6), behind the tool and every create path.
 
-    Returns a match dict (confidence, category, record) if best score >= 0.50,
-    or None if no duplicate found. Returns None on search failure (non-fatal).
+    Returns ``{"query", "matches", "exact_match"}``, matches sorted best first, each
+    ``{confidence, category, record}`` with confidence >= 0.50. Search errors are
+    raised; the tool reports them and ``_check_candidate_duplicates`` swallows them.
+    CR44 replaces the matching inside this function, not its callers.
     """
+    query = {"firstName": first_name, "lastName": last_name, "email": email}
     query_parts = []
     if email:
         query_parts.append(f'email:"{email}"')
@@ -97,38 +103,54 @@ def _check_candidate_duplicates(
     if last_name:
         query_parts.append(f'lastName:"{last_name}"')
     if not query_parts:
-        return None
+        return {"query": query, "matches": [], "exact_match": False}
 
-    query = " OR ".join(query_parts)
-    try:
-        results = client.search(
-            "Candidate",
-            query=query,
-            fields="id,firstName,lastName,email,phone,occupation,companyName,dateAdded",
-            count=50,
-        )
-    except (AuthenticationError, BullhornAPIError):
-        return None
+    results = client.search(
+        "Candidate",
+        query=" OR ".join(query_parts),
+        fields=_CANDIDATE_DUP_FIELDS,
+        count=50,
+    )
 
-    best_score = 0.0
-    best_match = None
+    matches = []
     for record in results:
         # Email exact match short-circuits to the highest possible score
         if email and (record.get("email") or "").lower().strip() == email.lower().strip():
             score = 1.0
         else:
             score = score_contact_match(first_name, last_name, record)
-        if score > best_score:
-            best_score = score
-            best_match = record
+        if score >= 0.50:
+            matches.append({
+                "confidence": round(score, 4),
+                "category": categorize_score(score),
+                "record": record,
+            })
 
-    if best_score >= 0.50 and best_match is not None:
-        return {
-            "confidence": round(best_score, 4),
-            "category": categorize_score(best_score),
-            "record": best_match,
-        }
-    return None
+    # sort is stable, so equal scores keep search order (the old best-match pick)
+    matches.sort(key=lambda m: m["confidence"], reverse=True)
+    return {
+        "query": query,
+        "matches": matches,
+        "exact_match": bool(matches and matches[0]["category"] == "exact"),
+    }
+
+
+def _check_candidate_duplicates(
+    client: BullhornClient,
+    first_name: str,
+    last_name: str,
+    email: str | None,
+) -> dict | None:
+    """Best match from ``_find_candidate_duplicates``, or None.
+
+    Used by the create and parse paths, where a failed search must not block the
+    call, so search errors give None (non-fatal).
+    """
+    try:
+        matches = _find_candidate_duplicates(client, first_name, last_name, email)["matches"]
+    except (AuthenticationError, BullhornAPIError):
+        return None
+    return matches[0] if matches else None
 
 
 def _truncate_against_meta(metadata: BullhornMetadata, entity: str, fields: dict) -> dict:
@@ -2142,8 +2164,19 @@ def find_duplicate_contacts(
 
 
 @mcp.tool()
-def create_candidate(fields: dict, force: bool = False) -> str:
+def create_candidate(
+    fields: dict,
+    force: bool = False,
+    work_history: list | None = None,
+    education: list | None = None,
+    skills: list | None = None,
+    primary_skills: list | None = None,
+) -> str:
     """Create a new Candidate record in Bullhorn CRM.
+
+    For a candidate found on LinkedIn or through people_search_perplexity, also pass
+    their work_history, education and skills; they are written after the Candidate and
+    the response lists what was written. For a CV file use create_candidate_from_cv.
 
     Args:
         fields: Dictionary of field names (or display labels) and values.
@@ -2161,9 +2194,16 @@ def create_candidate(fields: dict, force: bool = False) -> str:
                     "source": "LinkedIn"
                 }
         force: If True, skip duplicate detection and create regardless. Default False.
+        work_history: Optional CandidateWorkHistory entries, e.g.
+                [{"companyName": "Acme", "title": "Engineer", "startDate": <epoch ms>, "endDate": null}]
+        education: Optional CandidateEducation entries, e.g.
+                [{"school": "UCD", "major": "Accounting", "graduationDate": <epoch ms>}]
+        skills: Optional free-text skill names, added to skillSet.
+        primary_skills: Optional Bullhorn Skill ids to link as primarySkills.
 
     Returns:
-        JSON object with changedEntityId, changeType, and full data of the created record.
+        JSON object with changedEntityId, changeType, and full data of the created record,
+        plus "written" (child records with their new ids, skills) when any list was passed.
         If a duplicate is found, returns duplicate_found JSON instead (unless force=True).
         If owner resolves to multiple users, returns disambiguation JSON instead of creating.
 
@@ -2222,11 +2262,7 @@ def create_candidate(fields: dict, force: bool = False) -> str:
             required_resolved = metadata.resolve_fields("Candidate", {k: None for k in env_required})
             missing = [k for k in required_resolved if k not in merged or merged[k] is None or merged[k] == ""]
             if missing:
-                return format_response({
-                    "error": "required_fields_missing",
-                    "message": "Missing required Candidate fields configured for this instance.",
-                    "fields": missing,
-                })
+                return _required_fields_missing_response(missing, "fields", from_cv=False)
 
         resolved = metadata.resolve_fields("Candidate", merged)
 
@@ -2258,12 +2294,38 @@ def create_candidate(fields: dict, force: bool = False) -> str:
                     ),
                 })
 
+        has_children = any(x is not None for x in (work_history, education, skills, primary_skills))
+        skill_names, primary_ids = _normalize_skills(skills, primary_skills)
+        skill_set_written: list[str] = []
+        if skill_names:
+            # Names go in the create payload (CR43 P4), merged with any skillSet given.
+            resolved["skillSet"], skill_set_written = _merge_skill_set(resolved.get("skillSet"), skill_names)
+
         result = client.create("Candidate", resolved)
+        if not has_children:
+            if warnings:
+                data = json.loads(format_response(result))
+                data["warnings"] = warnings
+                return json.dumps(data, indent=2)
+            return format_response(result)
+
+        # The Candidate exists from here on: nothing below may hide its id (CR43 goal 5).
+        data = json.loads(format_response(result))
+        candidate_id = result["changedEntityId"]
+        written: dict = {"work_history": [], "education": [], "skill_set": skill_set_written, "primary_skills": []}
+        try:
+            children, child_warnings = _write_candidate_children(
+                client, metadata, candidate_id, work_history or [], education or [], [], primary_ids, "", [],
+            )
+            written.update({k: v for k, v in children.items() if k != "skill_set"})
+            warnings.extend(child_warnings)
+        except Exception as exc:
+            _logger.exception("create_candidate: failure after Candidate %s was created", candidate_id)
+            data["error"] = f"Candidate {candidate_id} was created, but writing its child records failed: {exc}"
+        data["written"] = written
         if warnings:
-            data = json.loads(format_response(result))
             data["warnings"] = warnings
-            return json.dumps(data, indent=2)
-        return format_response(result)
+        return json.dumps(data, indent=2, default=str)
 
     except ValueError as e:
         return format_response({"error": "owner_not_found", "message": str(e)})
@@ -2293,47 +2355,10 @@ def find_duplicate_candidates(
         - find_duplicate_candidates("Jane", "Doe", email="jane@example.com")
     """
     try:
-        client = get_client()
-
-        query_parts = []
-        if email:
-            query_parts.append(f'email:"{email}"')
-        if first_name:
-            query_parts.append(f'firstName:"{first_name}"')
-        if last_name:
-            query_parts.append(f'lastName:"{last_name}"')
-
-        if not query_parts:
+        if not (first_name or last_name or email):
             return format_response({"error": "query_required", "message": "Provide at least one of: first_name, last_name, email."})
 
-        results = client.search(
-            "Candidate",
-            query=" OR ".join(query_parts),
-            fields="id,firstName,lastName,email,phone,occupation,companyName,dateAdded",
-            count=50,
-        )
-
-        matches = []
-        for record in results:
-            if email and (record.get("email") or "").lower().strip() == email.lower().strip():
-                score = 1.0
-            else:
-                score = score_contact_match(first_name, last_name, record)
-            if score >= 0.50:
-                matches.append({
-                    "confidence": round(score, 4),
-                    "category": categorize_score(score),
-                    "record": record,
-                })
-
-        matches.sort(key=lambda m: m["confidence"], reverse=True)
-        exact_match = bool(matches and matches[0]["category"] == "exact")
-
-        return format_response({
-            "query": {"firstName": first_name, "lastName": last_name, "email": email},
-            "matches": matches,
-            "exact_match": exact_match,
-        })
+        return format_response(_find_candidate_duplicates(get_client(), first_name, last_name, email))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -2389,17 +2414,25 @@ def _upload_error(e: UploadError) -> str:
     return format_response(body)
 
 
-def _load_received_upload(upload_id: str, claim: bool = False) -> tuple[dict | None, str | None]:
+def _load_received_upload(
+    upload_id: str, claim: bool = False, attached_ok_for: int | None = None
+) -> tuple[dict | None, str | None]:
     """Fetch a received upload for the caller. Returns ``(record, None)`` or ``(None, error_json)``.
 
     The record keeps its bytes; the caller must call ``upload_store.mark_attached``
-    after a successful Bullhorn attach so the bytes are dropped (NFR-9).
+    after a successful Bullhorn attach so the bytes are dropped (NFR-9). The record
+    also carries ``owner_sub`` so ``_parse_upload`` can store the parse on it.
 
-    With ``claim=True`` (commit calls) the upload is reserved before its status is
-    read, so an overlapping commit on the same upload gets ``upload_in_use`` and a
+    With ``claim=True`` (calls that write) the upload is reserved before its status is
+    read, so an overlapping call on the same upload gets ``upload_in_use`` and a
     call that waited for another's attach sees ``attached``. On success the caller
     must ``upload_store.release(upload_id)`` in a ``finally``; on error it is
     already released.
+
+    ``attached_ok_for=<candidate_id>`` (attach_cv, CR43 P2): an upload already
+    attached to that same Candidate is returned (without bytes) while its stored
+    parse lives, so an attach_cv confirm call can follow the call that attached the
+    file. Attached to any other Candidate it is still ``upload_already_attached``.
     """
     unavailable = _uploads_unavailable()
     if unavailable:
@@ -2421,8 +2454,16 @@ def _load_received_upload(upload_id: str, claim: bool = False) -> tuple[dict | N
         if claim:
             upload_store.release(upload_id)
         return None, _upload_error(e)
+    rec["owner_sub"] = sub
     status = rec["status"]
     if status == "received":
+        return rec, None
+    if (
+        status == "attached"
+        and attached_ok_for is not None
+        and rec.get("attached_candidate_id") == attached_ok_for
+        and rec.get("parsed") is not None
+    ):
         return rec, None
     if claim:
         upload_store.release(upload_id)
@@ -2446,6 +2487,277 @@ def _load_received_upload(upload_id: str, claim: bool = False) -> tuple[dict | N
         "message": f"Upload '{upload_id}' has expired and its file was deleted.",
         "hint": "Call request_cv_upload again and resend the file.",
     })
+
+
+# --- CR43: reviewed CV flow helpers --------------------------------------------
+# The parser drafts, Claude checks the draft against the CV and corrects it, and
+# the server writes Claude's version (FR-15 Amendment 2). These helpers are shared
+# by create_candidate_from_cv, attach_cv and create_candidate so all three write
+# child records and skills the same way.
+
+# Keys shown back to Claude for each written child record.
+_WORK_HISTORY_KEYS = ("companyName", "title", "startDate", "endDate")
+_EDUCATION_KEYS = ("school", "degree", "major", "certification", "graduationDate", "startDate", "endDate")
+
+
+def _parse_upload(client: BullhornClient, upload: dict) -> dict:
+    """Return the upload's stored parse, or parse its bytes once and store the result.
+
+    One parser call per upload whatever runs after it (parse_cv, create, attach), so
+    the write uses exactly the parse Claude reviewed (CR43 goal 1, A1).
+    """
+    if upload.get("parsed") is not None:
+        return upload["parsed"]
+    parsed = client.parse_resume_file(upload["data"], upload["filename"], upload["format"])
+    try:
+        upload_store.set_parsed(upload["upload_id"], upload["owner_sub"], parsed)
+    except UploadError:
+        # The record went (expired or purged) mid-call; this call can still use the parse.
+        _logger.warning("Could not store the parse on upload %s", upload["upload_id"])
+    upload["parsed"] = parsed
+    return parsed
+
+
+def _split_parsed_skills(parsed: dict) -> tuple[list[str], list[int]]:
+    """Split a parse into ``(free-text skill names, primary skill ids)``.
+
+    Live shape (CR43): ``skillList`` is a list of strings and ``primarySkills`` is
+    ``[{name, id}]``. A dict in ``skillList`` gives its ``name`` and a bare id in
+    ``primarySkills`` is accepted, so an unexpected shape cannot crash the write
+    (CR19 assumed ``skillList`` was ``[{id, name}]`` and crashed on strings).
+    Names are de-duplicated case-insensitively, ids exactly; order is kept.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for skill in parsed.get("skillList") or []:
+        name = skill.get("name") if isinstance(skill, dict) else skill
+        if not isinstance(name, str) or not name.strip():
+            continue
+        name = name.strip()
+        if name.lower() not in seen:
+            seen.add(name.lower())
+            names.append(name)
+    ids: list[int] = []
+    for entry in parsed.get("primarySkills") or []:
+        sid = entry.get("id") if isinstance(entry, dict) else entry
+        if isinstance(sid, str) and sid.strip().isdigit():
+            sid = int(sid.strip())
+        if isinstance(sid, int) and not isinstance(sid, bool) and sid not in ids:
+            ids.append(sid)
+    return names, ids
+
+
+def _normalize_skills(skills: list | None, primary_skills: list | None) -> tuple[list[str], list[int]]:
+    """Normalize Claude's ``skills`` / ``primary_skills`` arguments like a parse."""
+    return _split_parsed_skills({"skillList": skills or [], "primarySkills": primary_skills or []})
+
+
+def _skill_set_names(skill_set: object) -> set[str]:
+    """Lower-cased names already in a comma-separated ``skillSet``."""
+    if not isinstance(skill_set, str):
+        return set()
+    return {part.strip().lower() for part in skill_set.split(",") if part.strip()}
+
+
+def _merge_skill_set(existing: object, names: list[str]) -> tuple[str, list[str]]:
+    """Append the names not already in ``existing``. Returns ``(new skillSet, names added)``."""
+    present = _skill_set_names(existing)
+    added = [n for n in names if n.lower() not in present]
+    base = existing.strip() if isinstance(existing, str) else ""
+    return ", ".join(filter(None, [base] + added)), added
+
+
+def _cv_response_view(parsed: dict) -> dict:
+    """The parse as Claude sees it: everything it reviews, without the HTML description.
+
+    The description can be ~48k characters (CR42) and is always written from the
+    stored parse, so only its length is shown.
+    """
+    candidate = dict(parsed.get("candidate") or {})
+    description = candidate.pop("description", None)
+    return {
+        "confidenceScore": parsed.get("confidenceScore"),
+        "candidate": candidate,
+        "description_length": len(description) if isinstance(description, str) else 0,
+        "candidateWorkHistory": parsed.get("candidateWorkHistory") or [],
+        "candidateEducation": parsed.get("candidateEducation") or [],
+        "skillList": parsed.get("skillList") or [],
+        "primarySkills": parsed.get("primarySkills") or [],
+    }
+
+
+def _write_candidate_children(
+    client: BullhornClient,
+    metadata: BullhornMetadata,
+    candidate_id: int,
+    work_history: list,
+    education: list,
+    skill_names: list[str],
+    primary_skill_ids: list[int],
+    existing_skillset: object,
+    existing_primary_ids: list[int],
+) -> tuple[dict, list[str]]:
+    """Write work history, education and skills to an existing Candidate.
+
+    Every item is best-effort: a failure becomes a warning and the rest carry on.
+    Skill names not already in ``existing_skillset`` are appended in one skillSet
+    update. Ids not in ``existing_primary_ids`` are linked with one association PUT:
+    a ``primarySkills`` value in an entity update returns 200 with an
+    ATTEMPT_TO_SET_TO_MANY warning and writes nothing (CR43 A2, live 2026-10-02),
+    so an association response with ``messages`` or without ``changeType:
+    ASSOCIATE`` is reported as a failure, never as linked.
+
+    Returns ``(written, warnings)``; ``written`` lists each child with its new id,
+    the names appended and the ids linked, plus what was skipped as already present.
+    """
+    warnings: list[str] = []
+    written: dict = {"work_history": [], "education": [], "skill_set": [], "primary_skills": []}
+
+    for entity, entries, key, keys in (
+        ("CandidateWorkHistory", work_history, "work_history", _WORK_HISTORY_KEYS),
+        ("CandidateEducation", education, "education", _EDUCATION_KEYS),
+    ):
+        label = "Work history" if key == "work_history" else "Education"
+        for entry in entries:
+            try:
+                if not isinstance(entry, dict):
+                    raise ValueError(f"expected an object, got {type(entry).__name__}")
+                payload = {k: v for k, v in entry.items() if k != "id"}
+                payload["candidate"] = {"id": candidate_id}
+                payload = _truncate_against_meta(metadata, entity, payload)
+                r = client.create(entity, payload)
+                written[key].append(
+                    {"id": r["changedEntityId"], **{k: payload[k] for k in keys if payload.get(k) is not None}}
+                )
+            except Exception as exc:
+                warnings.append(f"{label} entry failed: {exc}")
+
+    present = _skill_set_names(existing_skillset)
+    new_names = [n for n in skill_names if n.lower() not in present]
+    skipped_names = [n for n in skill_names if n.lower() in present]
+    if new_names:
+        try:
+            combined, _ = _merge_skill_set(existing_skillset, new_names)
+            client.update("Candidate", candidate_id, {"skillSet": combined})
+            written["skill_set"] = new_names
+        except Exception as exc:
+            warnings.append(f"skillSet update failed: {exc}")
+
+    to_link = [i for i in primary_skill_ids if i not in existing_primary_ids]
+    skipped_ids = [i for i in primary_skill_ids if i in existing_primary_ids]
+    if to_link:
+        try:
+            r = client.add_association("Candidate", candidate_id, "primarySkills", to_link)
+            if (r or {}).get("messages") or (r or {}).get("changeType") != "ASSOCIATE":
+                warnings.append(f"primarySkills link not confirmed by Bullhorn, nothing linked: {r}")
+            else:
+                written["primary_skills"] = to_link
+        except Exception as exc:
+            warnings.append(f"primarySkills link failed: {exc}")
+
+    if skipped_names or skipped_ids:
+        written["already_present"] = {"skill_set": skipped_names, "primary_skills": skipped_ids}
+    return written, warnings
+
+
+def _required_fields_missing_response(missing: list, retry_arg: str, from_cv: bool) -> str:
+    """``required_fields_missing`` with a hint on how to retry (CR43 goal 8)."""
+    hint = f"Call again with the missing fields added to {retry_arg}."
+    if "companyName" in missing:
+        source = "from the CV (the most recent work history entry)" if from_cv else "you were given"
+        hint += f" For companyName use the candidate's current employer {source}."
+    return format_response({
+        "error": "required_fields_missing",
+        "message": "Missing required Candidate fields configured for this instance.",
+        "fields": missing,
+        "hint": hint,
+    })
+
+
+def _text_key(*parts: object) -> tuple:
+    """De-dup key: text trimmed and lower-cased, None and blank equal, other values as is."""
+    return tuple(
+        (p.strip().lower() if isinstance(p, str) else ("" if p is None else p)) for p in parts
+    )
+
+
+def _is_blank(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _plan_cv_update(
+    existing: dict,
+    proposed_fields: dict,
+    fields_to_update: list | None,
+    existing_wh: list,
+    existing_edu: list,
+    work_history: list,
+    education: list,
+    skill_names: list[str],
+    primary_ids: list[int],
+    existing_skillset: object,
+    existing_primary_ids: list[int],
+) -> dict:
+    """Split a CV update into additions (written now) and overwrites (need confirm=True).
+
+    Pure. A field is an addition when the record holds None or blank, an overwrite
+    when it holds a different value, and skipped when equal after trimming or when
+    the proposed value is blank (a blank parse never clears a field).
+    ``fields_to_update`` limits which fields are considered. A description
+    overwrite shows only both lengths (CR43 A6). Work history and education are
+    de-duplicated against the record by their key fields, so a confirm call after
+    the additions call adds nothing twice; skills already listed or linked are skipped.
+    """
+    if fields_to_update is not None:
+        proposed_fields = {k: v for k, v in proposed_fields.items() if k in fields_to_update}
+
+    add_fields: dict = {}
+    overwrites: list[dict] = []
+    for field, proposed in proposed_fields.items():
+        if _is_blank(proposed):
+            continue
+        current = existing.get(field)
+        if _is_blank(current):
+            add_fields[field] = proposed
+            continue
+        same = (
+            current.strip() == proposed.strip()
+            if isinstance(current, str) and isinstance(proposed, str)
+            else current == proposed
+        )
+        if same:
+            continue
+        if field == "description":
+            overwrites.append({
+                "field": field,
+                "current_length": len(str(current)),
+                "proposed_length": len(str(proposed)),
+            })
+        else:
+            overwrites.append({"field": field, "current": current, "proposed": proposed})
+
+    wh_keys = {_text_key(*(r.get(k) for k in _WORK_HISTORY_KEYS)) for r in existing_wh}
+    edu_keys = {_text_key(*(r.get(k) for k in _EDUCATION_KEYS)) for r in existing_edu}
+    new_wh = [e for e in work_history if not isinstance(e, dict) or _text_key(*(e.get(k) for k in _WORK_HISTORY_KEYS)) not in wh_keys]
+    new_edu = [e for e in education if not isinstance(e, dict) or _text_key(*(e.get(k) for k in _EDUCATION_KEYS)) not in edu_keys]
+
+    present = _skill_set_names(existing_skillset)
+    return {
+        "additions": {
+            "fields": add_fields,
+            "work_history": new_wh,
+            "education": new_edu,
+            "skill_names": [n for n in skill_names if n.lower() not in present],
+            "primary_skill_ids": [i for i in primary_ids if i not in existing_primary_ids],
+        },
+        "overwrites": overwrites,
+        "already_present": {
+            "work_history": len(work_history) - len(new_wh),
+            "education": len(education) - len(new_edu),
+            "skill_set": [n for n in skill_names if n.lower() in present],
+            "primary_skills": [i for i in primary_ids if i in existing_primary_ids],
+        },
+    }
 
 
 @mcp.tool()
@@ -2474,8 +2786,12 @@ def request_cv_upload(filename: str, candidate_id: int | None = None) -> str:
     upload_url = _upload_url(token)
     use_step = (
         f"Then call get_cv_upload(upload_id='{upload_id}') and check status is 'received'. "
-        f"Then call create_candidate_from_cv(upload_id='{upload_id}') for a new candidate, or "
-        f"attach_cv(candidate_id=..., upload_id='{upload_id}') for an existing one."
+        f"Then call parse_cv(upload_id='{upload_id}') and review the parse against the CV itself: "
+        "fix names, the current employer (companyName), job titles with the employer merged in, "
+        "dates (an ongoing role has no endDate) and skills that are not in the CV. "
+        f"Then call create_candidate_from_cv(upload_id='{upload_id}', <your corrections>) for a new "
+        f"candidate, or attach_cv(candidate_id=..., upload_id='{upload_id}', <your corrections>) for an "
+        "existing one, and tell the user exactly what was written."
     )
     if _client_supports_ui():
         fallback = (
@@ -2612,47 +2928,40 @@ def show_cv_upload_box(upload_id: str) -> str:
 
 @mcp.tool()
 def parse_cv(upload_id: str) -> str:
-    """Parse an uploaded CV file and return the extracted fields without saving anything.
+    """Parse an uploaded CV for you to review before anything is written. Step 1 of the CV flow.
 
-    Call request_cv_upload first and send the file; pass the upload_id here.
-    The CV is sent to Bullhorn's resume parser (POST /resume/parseToCandidate).
-    Nothing is written to Bullhorn — this is a preview-only operation.
+    Bullhorn's parser makes mistakes. Check what it returns against the CV itself and
+    note your corrections: names, the current employer (companyName, often left empty),
+    job titles with the employer merged in, dates (an ongoing role has no endDate),
+    education, and skills that are not in the CV. Then call create_candidate_from_cv
+    (new candidate) or attach_cv (existing candidate) with the same upload_id and your
+    corrections. The parse is kept with the upload, so the write uses exactly this
+    parse and the file is not parsed again. Nothing is written to Bullhorn here.
     Also runs a duplicate candidate check on the parsed name and email.
 
     Args:
         upload_id: The id from request_cv_upload, once get_cv_upload shows 'received'.
 
     Returns:
-        JSON object:
-        {
-            "parsed": {
-                "candidate": {...},
-                "candidateEducation": [...],
-                "candidateWorkHistory": [...],
-                "skillList": [...]
-            },
-            "duplicate_check": null | {"confidence": ..., "category": ..., "record": {...}}
-        }
-
-    Examples:
-        - parse_cv(upload_id="upl_...")
+        JSON {"parsed": {confidenceScore, candidate, description_length,
+        candidateWorkHistory, candidateEducation, skillList, primarySkills},
+        "duplicate_check": null | {confidence, category, record}}. The HTML
+        description is left out (only its length is shown); it is always written
+        from the stored parse.
     """
     upload, error = _load_received_upload(upload_id)
     if error:
         return error
     try:
         client = get_client()
-        # The upload is kept: the next call (create or attach) needs the same file.
-        parsed = client.parse_resume_file(upload["data"], upload["filename"], upload["format"])
+        # The upload keeps its file and now its parse: create or attach needs both.
+        parsed = _parse_upload(client, upload)
 
-        candidate_data = parsed.get("candidate", {})
-        first_name = candidate_data.get("firstName", "")
-        last_name = candidate_data.get("lastName", "")
-        email = candidate_data.get("email")
-
-        dup = _check_candidate_duplicates(client, first_name, last_name, email)
-
-        return format_response({"parsed": parsed, "duplicate_check": dup})
+        candidate_data = parsed.get("candidate") or {}
+        dup = _check_candidate_duplicates(
+            client, candidate_data.get("firstName", ""), candidate_data.get("lastName", ""), candidate_data.get("email"),
+        )
+        return format_response({"parsed": _cv_response_view(parsed), "duplicate_check": dup})
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -2663,44 +2972,28 @@ def parse_cv_text(
     content: str,
     content_type: str = "text/plain",
 ) -> str:
-    """Parse pasted CV text and return the extracted fields without saving anything.
+    """Parse pasted CV text for you to review. Nothing is written to Bullhorn.
 
-    The text is sent to Bullhorn's JSON resume parser (POST /resume/parseToCandidateViaJson).
-    Nothing is written to Bullhorn — this is a preview-only operation.
-    Also runs a duplicate candidate check on the parsed name and email.
+    Check the result against the CV text and pass your corrections to
+    create_candidate_from_cv(content=..., ...). Pasted text is not stored, so that
+    call parses it again. Also runs a duplicate candidate check on the parsed name and email.
 
     Args:
         content: Plain text or HTML CV content
         content_type: MIME type: "text/plain" (default) or "text/html"
 
     Returns:
-        JSON object:
-        {
-            "parsed": {
-                "candidate": {...},
-                "candidateEducation": [...],
-                "candidateWorkHistory": [...],
-                "skillList": [...]
-            },
-            "duplicate_check": null | {"confidence": ..., "category": ..., "record": {...}}
-        }
-
-    Examples:
-        - parse_cv_text(content="Jane Doe\\nSenior Engineer\\njane@example.com\\n...")
-        - parse_cv_text(content="<html>...</html>", content_type="text/html")
+        JSON {"parsed": {...same view as parse_cv...}, "duplicate_check": null | {...}}.
     """
     try:
         client = get_client()
         parsed = client.parse_resume_text(content, content_type)
 
-        candidate_data = parsed.get("candidate", {})
-        first_name = candidate_data.get("firstName", "")
-        last_name = candidate_data.get("lastName", "")
-        email = candidate_data.get("email")
-
-        dup = _check_candidate_duplicates(client, first_name, last_name, email)
-
-        return format_response({"parsed": parsed, "duplicate_check": dup})
+        candidate_data = parsed.get("candidate") or {}
+        dup = _check_candidate_duplicates(
+            client, candidate_data.get("firstName", ""), candidate_data.get("lastName", ""), candidate_data.get("email"),
+        )
+        return format_response({"parsed": _cv_response_view(parsed), "duplicate_check": dup})
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -2713,36 +3006,39 @@ def create_candidate_from_cv(
     content_type: str = "text/plain",
     force: bool = False,
     fields_override: dict | None = None,
+    work_history: list | None = None,
+    education: list | None = None,
+    skills: list | None = None,
+    primary_skills: list | None = None,
 ) -> str:
-    """Parse a CV and create a Candidate record in one operation.
+    """Create a new Candidate from a CV, written with your corrections to the parse.
 
-    Supports two input modes:
-    - File: call request_cv_upload first, send the file, then pass upload_id
-    - Text: provide content (plain text or HTML)
-    Exactly one of upload_id or content must be given.
-
-    Flow: parse → duplicate check → create Candidate → write child records
-    (education, work history, skills) → attach CV file (file mode only, under its
-    original name). Child record failures are best-effort — warnings are included
-    in the response.
+    Call parse_cv first and check the parse against the CV. Pass what you corrected:
+    fields_override for Candidate fields, and work_history, education, skills or
+    primary_skills to replace that whole parsed list (an omitted list uses the parse,
+    an empty list writes none). In one call this writes the Candidate, its work
+    history, education, skillSet and primarySkills, and attaches the CV file (file
+    mode). Nothing is shown for confirmation first: tell the user exactly what the
+    response says was written. Stops on a likely duplicate unless force=True.
+    Exactly one of upload_id (file, from request_cv_upload) or content (text) is needed.
 
     Args:
         upload_id: The id from request_cv_upload, once get_cv_upload shows 'received' (file mode)
         content: Plain text or HTML CV content (text mode)
         content_type: MIME type for text mode. Default: text/plain
         force: Skip duplicate check and create regardless. Default False.
-        fields_override: Optional additional Candidate fields that override parsed values.
+        fields_override: Corrected or extra Candidate fields; they win over the parse.
+                         The description always comes from the parse.
+        work_history: Corrected CandidateWorkHistory entries (replaces the parsed list).
+        education: Corrected CandidateEducation entries (replaces the parsed list).
+        skills: Corrected free-text skill names for skillSet (replaces parsed skillList).
+        primary_skills: Corrected Bullhorn Skill ids to link (replaces parsed primarySkills).
 
     Returns:
-        If no duplicate: JSON with candidate_id, work_history_ids, education_ids,
-        skills_added, file_attachment (null for text-only), and optional warnings.
-        If duplicate found: JSON with duplicate_found, match, and parsed fields.
-
-    Examples:
-        - create_candidate_from_cv(upload_id="upl_...")
-        - create_candidate_from_cv(content="Jane Doe\\nEngineer...", content_type="text/plain")
-        - create_candidate_from_cv(upload_id="upl_...", force=True,
-                                   fields_override={"source": "Referral"})
+        {"created": true, "candidate_id", "written": {fields, description_length,
+        work_history, education, skill_set, primary_skills, file}, "warnings",
+        "duplicate_check", and "cv_attach_retry" when the file was not attached}.
+        If a duplicate is found: {"duplicate_found": true, "match", "parsed", "hint"}.
     """
     is_binary = upload_id is not None
     is_text = content is not None
@@ -2758,13 +3054,14 @@ def create_candidate_from_cv(
             "message": "Provide either upload_id or content, not both.",
         })
 
+    corrections = (fields_override, work_history, education, skills, primary_skills)
     if not is_binary:
-        return _create_candidate_from_cv(None, None, content, content_type, force, fields_override)
+        return _create_candidate_from_cv(None, None, content, content_type, force, *corrections)
     upload, error = _load_received_upload(upload_id, claim=True)
     if error:
         return error
     try:
-        return _create_candidate_from_cv(upload, upload_id, None, content_type, force, fields_override)
+        return _create_candidate_from_cv(upload, upload_id, None, content_type, force, *corrections)
     finally:
         upload_store.release(upload_id)
 
@@ -2776,6 +3073,10 @@ def _create_candidate_from_cv(
     content_type: str,
     force: bool,
     fields_override: dict | None,
+    work_history: list | None,
+    education: list | None,
+    skills: list | None,
+    primary_skills: list | None,
 ) -> str:
     """Body of create_candidate_from_cv once the input is checked and any upload claimed."""
     try:
@@ -2783,32 +3084,50 @@ def _create_candidate_from_cv(
         metadata = get_metadata()
 
         if upload is not None:
-            parsed = client.parse_resume_file(upload["data"], upload["filename"], upload["format"])
+            parsed = _parse_upload(client, upload)
         else:
             parsed = client.parse_resume_text(content, content_type)
 
-        candidate_data = dict(parsed.get("candidate", {}))
-        first_name = candidate_data.get("firstName", "")
-        last_name = candidate_data.get("lastName", "")
-        email = candidate_data.get("email")
+        warnings: list[str] = []
+        candidate_data = dict(parsed.get("candidate") or {})
+        if fields_override:
+            override = dict(fields_override)
+            if "description" in override:
+                # CR43 goal 2: the description is the parser's rendering of the CV itself.
+                override.pop("description")
+                warnings.append("fields_override 'description' was ignored: the description always comes from the parsed CV.")
+            candidate_data.update(override)
 
+        # Claude's lists replace the parsed ones; an omitted list uses the parse.
+        if work_history is None:
+            work_history = parsed.get("candidateWorkHistory") or []
+        if education is None:
+            education = parsed.get("candidateEducation") or []
+        parsed_names, parsed_ids = _split_parsed_skills(parsed)
+        given_names, given_ids = _normalize_skills(skills, primary_skills)
+        skill_names = given_names if skills is not None else parsed_names
+        primary_ids = given_ids if primary_skills is not None else parsed_ids
+
+        # The check runs on the corrected names and email (CR43 P5).
+        dup = None
         if not force:
-            dup = _check_candidate_duplicates(client, first_name, last_name, email)
+            dup = _check_candidate_duplicates(
+                client,
+                str(candidate_data.get("firstName") or ""),
+                str(candidate_data.get("lastName") or ""),
+                candidate_data.get("email"),
+            )
             if dup is not None:
                 return format_response({
                     "duplicate_found": True,
                     "match": dup,
-                    "parsed": parsed,
+                    "parsed": _cv_response_view(parsed),
                     "hint": (
                         "A matching Candidate already exists. "
                         "Use attach_cv to update the existing record and attach this CV, "
                         "or pass force=True to create a new record anyway."
                     ),
                 })
-
-        # Build candidate payload from parsed data + overrides
-        if fields_override:
-            candidate_data.update(fields_override)
 
         # Owner stamping
         if "owner" not in candidate_data:
@@ -2832,6 +3151,11 @@ def _create_candidate_from_cv(
 
         resolved = metadata.resolve_fields("Candidate", candidate_data)
         resolved, strip_warnings = _strip_contact_title(resolved, "Candidate")
+        warnings.extend(strip_warnings)
+        skill_set_written: list[str] = []
+        if skill_names:
+            # Names go in the create payload, one write fewer (CR43 P4).
+            resolved["skillSet"], skill_set_written = _merge_skill_set(resolved.get("skillSet"), skill_names)
         resolved = _truncate_against_meta(metadata, "Candidate", resolved)
 
         env_required = get_candidate_required()
@@ -2839,11 +3163,7 @@ def _create_candidate_from_cv(
             required_resolved = metadata.resolve_fields("Candidate", {k: None for k in env_required})
             missing = [k for k in required_resolved if k not in resolved or resolved[k] is None or resolved[k] == ""]
             if missing:
-                return format_response({
-                    "error": "required_fields_missing",
-                    "message": "Missing required Candidate fields configured for this instance.",
-                    "fields": missing,
-                })
+                return _required_fields_missing_response(missing, "fields_override", from_cv=True)
 
         computed = _compute_person_name(resolved)
         if computed:
@@ -2852,105 +3172,61 @@ def _create_candidate_from_cv(
         create_result = client.create("Candidate", resolved)
         candidate_id = create_result["changedEntityId"]
 
-        warnings: list[str] = list(strip_warnings)
-        work_history_ids: list[int] = []
-        education_ids: list[int] = []
-        skills_added: dict = {"matched_ids": [], "appended_to_skillset": []}
+    except (AuthenticationError, BullhornAPIError) as e:
+        return f"ERROR: {e}"
 
-        # Write work history (best-effort)
-        for entry in parsed.get("candidateWorkHistory", []):
-            try:
-                wh = dict(entry)
-                wh["candidate"] = {"id": candidate_id}
-                wh.pop("id", None)
-                wh = _truncate_against_meta(metadata, "CandidateWorkHistory", wh)
-                r = client.create("CandidateWorkHistory", wh)
-                work_history_ids.append(r["changedEntityId"])
-            except Exception as exc:
-                warnings.append(f"Work history entry failed: {exc}")
-
-        # Write education (best-effort)
-        for entry in parsed.get("candidateEducation", []):
-            try:
-                edu = dict(entry)
-                edu["candidate"] = {"id": candidate_id}
-                edu.pop("id", None)
-                edu = _truncate_against_meta(metadata, "CandidateEducation", edu)
-                r = client.create("CandidateEducation", edu)
-                education_ids.append(r["changedEntityId"])
-            except Exception as exc:
-                warnings.append(f"Education entry failed: {exc}")
-
-        # Process skills (best-effort)
-        matched_skill_ids: list[int] = []
-        unmatched_skill_names: list[str] = []
-        for skill in parsed.get("skillList", []):
-            if skill.get("id"):
-                matched_skill_ids.append(skill["id"])
-            elif skill.get("name"):
-                unmatched_skill_names.append(skill["name"])
-
-        if matched_skill_ids:
-            try:
-                client.update(
-                    "Candidate",
-                    candidate_id,
-                    {"primarySkills": {"data": [{"id": sid} for sid in matched_skill_ids]}},
-                )
-                skills_added["matched_ids"] = matched_skill_ids
-            except Exception as exc:
-                warnings.append(f"primarySkills update failed: {exc}")
-
-        if unmatched_skill_names:
-            try:
-                existing = client.get("Candidate", candidate_id, fields="skillSet")
-                existing_skillset = existing.get("skillSet") or ""
-                combined = ", ".join(filter(None, [existing_skillset] + unmatched_skill_names))
-                client.update("Candidate", candidate_id, {"skillSet": combined})
-                skills_added["appended_to_skillset"] = unmatched_skill_names
-            except Exception as exc:
-                warnings.append(f"skillSet update failed: {exc}")
+    # The Candidate exists from here on. No failure below, of any type, may hide its
+    # id (CR43 goal 5): T40.8 lost Candidate 173063's id to an AttributeError here.
+    description = resolved.get("description")
+    written: dict = {
+        "fields": {k: v for k, v in resolved.items() if k != "description"},
+        "description_length": len(description) if isinstance(description, str) else 0,
+        "work_history": [],
+        "education": [],
+        "skill_set": skill_set_written,
+        "primary_skills": [],
+        "file": None,
+    }
+    result: dict = {"created": True, "candidate_id": candidate_id, "written": written}
+    try:
+        children, child_warnings = _write_candidate_children(
+            client, metadata, candidate_id, work_history, education, [], primary_ids, "", [],
+        )
+        written.update({k: v for k, v in children.items() if k != "skill_set"})
+        warnings.extend(child_warnings)
 
         # Attach CV file (file mode only). On success the upload's bytes are dropped
         # at once (NFR-9); on failure they are kept so the user can retry.
-        file_attachment = None
         if upload is not None:
             try:
                 content_mime = client._guess_content_type(upload["format"])
                 file_attachment = client.attach_file(
                     "Candidate", candidate_id, upload["data"], upload["filename"], content_mime, file_type="CV"
                 )
-                upload_store.mark_attached(upload_id, (file_attachment or {}).get("fileId"))
+                written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
+                upload_store.mark_attached(upload_id, written["file"]["file_id"], candidate_id)
             except Exception as exc:
                 warnings.append(f"CV file attachment failed: {exc}")
+    except Exception as exc:
+        _logger.exception("create_candidate_from_cv: failure after Candidate %s was created", candidate_id)
+        result["error"] = f"Candidate {candidate_id} was created, but a later step failed: {exc}"
 
-        result: dict = {
-            "created": True,
-            "candidate_id": candidate_id,
-            "work_history_ids": work_history_ids,
-            "education_ids": education_ids,
-            "skills_added": skills_added,
-            "file_attachment": file_attachment,
+    if warnings:
+        result["warnings"] = warnings
+    result["duplicate_check"] = dup
+    if upload is not None and written["file"] is None:
+        # The Candidate exists now. Calling this tool again would flag it as a
+        # duplicate, and force=True would create a second one, so point the
+        # retry at attach_cv on the new record instead.
+        result["cv_attach_retry"] = {
+            "message": (
+                f"Candidate {candidate_id} was created but the CV file was not attached. "
+                "Do not call create_candidate_from_cv again for this CV. To retry the "
+                "attachment, make the call below (the upload is kept until it expires)."
+            ),
+            "next_call": f"attach_cv(candidate_id={candidate_id}, upload_id='{upload_id}')",
         }
-        if warnings:
-            result["warnings"] = warnings
-        if upload is not None and file_attachment is None:
-            # The Candidate exists now. Calling this tool again would flag it as a
-            # duplicate, and force=True would create a second one, so point the
-            # retry at attach_cv on the new record instead.
-            result["cv_attach_retry"] = {
-                "message": (
-                    f"Candidate {candidate_id} was created but the CV file was not attached. "
-                    "Do not call create_candidate_from_cv again for this CV. To retry only the "
-                    "attachment, make the call below (the upload is kept until it expires)."
-                ),
-                "next_call": f"attach_cv(candidate_id={candidate_id}, upload_id='{upload_id}', fields_to_update=[])",
-            }
-
-        return format_response(result)
-
-    except (AuthenticationError, BullhornAPIError) as e:
-        return f"ERROR: {e}"
+    return format_response(result)
 
 
 @mcp.tool()
@@ -2958,54 +3234,47 @@ def attach_cv(
     candidate_id: int,
     upload_id: str,
     fields_to_update: list | None = None,
-    include_work_history: bool = False,
-    include_education: bool = False,
-    include_skills: bool = False,
-    force_all: bool = False,
+    fields_override: dict | None = None,
+    work_history: list | None = None,
+    education: list | None = None,
+    skills: list | None = None,
+    primary_skills: list | None = None,
+    confirm: bool = False,
 ) -> str:
-    """Attach a CV to an existing Candidate, with per-field diff and confirmation.
+    """Attach a CV to an existing Candidate and add what the CV has that the record lacks.
 
-    Call request_cv_upload first and send the file; pass the upload_id here.
-    Both calls below use the same upload_id. This tool uses a two-call confirmation flow:
-
-    **Call 1 — preview** (omit fields_to_update, force_all=False):
-    Parses the CV, fetches the existing Candidate, diffs the fields, and returns
-    a preview of what would change. Nothing is written. The CV is not yet attached.
-    The upload is kept for the commit call.
-
-    **Call 2 — commit** (provide fields_to_update or force_all=True):
-    Re-parses the CV, applies only the listed field updates, optionally writes
-    new work history / education / skills entries, and attaches the CV file
-    under its original name.
+    Call parse_cv first and check the parse against the CV. Corrections work as in
+    create_candidate_from_cv (an omitted list uses the parse, an empty list adds none).
+    Additions are written straight away: the CV file, new work history and education,
+    skill names not yet in skillSet, skill ids not yet linked, and fields that are
+    empty on the record. A field that already holds a different value is NOT changed:
+    it comes back in pending_overwrites. If a consultant is present, show those to
+    them and only after they say yes call again with the same arguments and
+    confirm=True; that writes exactly the overwrites and repeats nothing. With no
+    consultant present (automation), pass confirm=True on the first call.
+    Tell the user exactly what the response says was written.
 
     Args:
         candidate_id: Bullhorn Candidate ID of the existing record.
         upload_id: The id from request_cv_upload, once get_cv_upload shows 'received'.
-        fields_to_update: List of Candidate field API names to apply from parsed data.
-                          If None and force_all=False, returns preview only.
-        include_work_history: If True (commit only), write new work history entries.
-        include_education: If True (commit only), write new education entries.
-        include_skills: If True (commit only), update skills from the CV.
-        force_all: If True, apply every proposed field change and all sections
-                   without an explicit list (commit shorthand).
+        fields_to_update: Optional list of Candidate field names to consider. Omitted:
+                          every parsed field (plus fields_override).
+        fields_override: Corrected or extra Candidate field values; they win over the parse.
+                         The description always comes from the parse.
+        work_history: Corrected CandidateWorkHistory entries (replaces the parsed list).
+        education: Corrected CandidateEducation entries (replaces the parsed list).
+        skills: Corrected free-text skill names (replaces parsed skillList).
+        primary_skills: Corrected Bullhorn Skill ids (replaces parsed primarySkills).
+        confirm: True writes the overwrites too. Default False.
 
     Returns:
-        Preview: {"preview": true, "candidate_id": ..., "proposed_field_changes": [...],
-                  "proposed_work_history": [...], "proposed_education": [...],
-                  "proposed_skills": {...}, "message": "..."}
-        Commit: {"committed": true, "candidate_id": ..., "fields_updated": [...],
-                 "work_history_added": [...], "education_added": [...],
-                 "skills_added": {...}, "file_attachment": {...}}
-
-    Examples:
-        - attach_cv(candidate_id=123, upload_id="upl_...")
-        - attach_cv(candidate_id=123, upload_id="upl_...",
-                    fields_to_update=["occupation", "email"], include_work_history=True)
-        - attach_cv(candidate_id=123, upload_id="upl_...", force_all=True)
+        {"committed": true, "candidate_id", "written": {fields, work_history, education,
+        skill_set, primary_skills, file}, "already_present", "pending_overwrites"
+        (without confirm), "overwritten" (with confirm), "warnings"}. On a failure
+        after the first write: also "partial": true and "error".
     """
-    # Only the commit writes and attaches, so only the commit claims the upload.
-    commit = fields_to_update is not None or force_all
-    upload, error = _load_received_upload(upload_id, claim=commit)
+    # Every call can write (additions apply at once), so every call claims (CR43 P1).
+    upload, error = _load_received_upload(upload_id, claim=True, attached_ok_for=candidate_id)
     if error:
         return error
     try:
@@ -3024,12 +3293,17 @@ def attach_cv(
                 ),
             })
         return _attach_cv(
-            candidate_id, upload, upload_id, fields_to_update,
-            include_work_history, include_education, include_skills, force_all,
+            candidate_id, upload, upload_id, fields_to_update, fields_override,
+            work_history, education, skills, primary_skills, confirm,
         )
     finally:
-        if commit:
-            upload_store.release(upload_id)
+        upload_store.release(upload_id)
+
+
+# Fields attach_cv never plans from the parse: identity, the computed name, the
+# salutation, and skillSet (appended through the skills logic, never replaced).
+_ATTACH_SKIP_FIELDS = frozenset({"id", "name", "title", "skillSet"})
+_ATTACH_BASE_FIELDS = "id,firstName,lastName,email,phone,mobile,occupation,companyName,skillSet,status,dateAdded,description"
 
 
 def _attach_cv(
@@ -3037,205 +3311,153 @@ def _attach_cv(
     upload: dict,
     upload_id: str,
     fields_to_update: list | None,
-    include_work_history: bool,
-    include_education: bool,
-    include_skills: bool,
-    force_all: bool,
+    fields_override: dict | None,
+    work_history: list | None,
+    education: list | None,
+    skills: list | None,
+    primary_skills: list | None,
+    confirm: bool,
 ) -> str:
-    """Body of attach_cv once the upload is loaded (and claimed for a commit)."""
+    """Body of attach_cv once the upload is loaded and claimed."""
+    warnings: list[str] = []
     try:
         client = get_client()
         metadata = get_metadata()
 
-        parsed = client.parse_resume_file(upload["data"], upload["filename"], upload["format"])
-        parsed_candidate = parsed.get("candidate", {})
+        parsed = _parse_upload(client, upload)
+        candidate_fields = dict(parsed.get("candidate") or {})
+        if fields_override:
+            override = metadata.resolve_fields("Candidate", dict(fields_override))
+            if "description" in override:
+                override.pop("description")
+                warnings.append("fields_override 'description' was ignored: the description always comes from the parsed CV.")
+            candidate_fields.update(override)
+        proposed_fields = {
+            k: v for k, v in candidate_fields.items()
+            if k not in _ATTACH_SKIP_FIELDS and isinstance(v, (str, int, float, bool))
+        }
+        if fields_to_update is not None:
+            unknown = [f for f in fields_to_update if f not in proposed_fields]
+            if unknown:
+                warnings.append(f"fields_to_update not in the parse or fields_override, ignored: {unknown}")
 
-        # Fetch current record (broad field set for diffing)
-        existing = client.get(
-            "Candidate",
-            candidate_id,
-            fields="id,firstName,lastName,email,phone,mobile,occupation,companyName,skillSet,status,dateAdded,description",
-        )
+        if work_history is None:
+            work_history = parsed.get("candidateWorkHistory") or []
+        if education is None:
+            education = parsed.get("candidateEducation") or []
+        parsed_names, parsed_ids = _split_parsed_skills(parsed)
+        given_names, given_ids = _normalize_skills(skills, primary_skills)
+        skill_names = given_names if skills is not None else parsed_names
+        primary_ids = given_ids if primary_skills is not None else parsed_ids
 
-        # --- DIFF scalar fields ---
-        proposed_changes = []
-        for field, proposed_val in parsed_candidate.items():
-            if field in ("id", "name", "title") or not isinstance(proposed_val, (str, int, float, bool)):
-                continue
-            current_val = existing.get(field)
-            if proposed_val != current_val:
-                proposed_changes.append({
-                    "field": field,
-                    "current": current_val,
-                    "proposed": proposed_val,
-                })
+        # Fetch every field the plan compares, or an unfetched filled field would
+        # look empty and be written as an "addition" over the real value.
+        fetch = list(dict.fromkeys(_ATTACH_BASE_FIELDS.split(",") + list(proposed_fields)))
+        existing = client.get("Candidate", candidate_id, fields=",".join(fetch))
 
-        # --- Diff work history (match on companyName + title + dateBegin + dateEnd) ---
-        existing_wh_keys: set = set()
         try:
             existing_wh = client.query(
                 "CandidateWorkHistory",
                 where=f"candidate.id={candidate_id}",
-                fields="id,companyName,title,startDate,endDate",
+                fields="id," + ",".join(_WORK_HISTORY_KEYS),
+                count=500,
             )
-            existing_wh_keys = {
-                (r.get("companyName", ""), r.get("title", ""), r.get("startDate"), r.get("endDate"))
-                for r in existing_wh
-            }
         except Exception:
             existing_wh = []
-
-        proposed_wh = []
-        for entry in parsed.get("candidateWorkHistory", []):
-            key = (entry.get("companyName", ""), entry.get("title", ""), entry.get("startDate"), entry.get("endDate"))
-            if key not in existing_wh_keys:
-                proposed_wh.append(entry)
-
-        # --- Diff education (match on school + degree + startDate + endDate) ---
-        existing_edu_keys: set = set()
         try:
             existing_edu = client.query(
                 "CandidateEducation",
                 where=f"candidate.id={candidate_id}",
-                fields="id,school,degree,startDate,endDate",
+                fields="id," + ",".join(_EDUCATION_KEYS),
+                count=500,
             )
-            existing_edu_keys = {
-                (r.get("school", ""), r.get("degree", ""), r.get("startDate"), r.get("endDate"))
-                for r in existing_edu
-            }
         except Exception:
             existing_edu = []
+        existing_primary_ids: list[int] = []
+        if primary_ids:
+            try:
+                linked = client.get_association("Candidate", candidate_id, "primarySkills", fields="id", count=500)
+                existing_primary_ids = [r["id"] for r in linked if isinstance(r, dict) and "id" in r]
+            except Exception:
+                existing_primary_ids = []
 
-        proposed_edu = []
-        for entry in parsed.get("candidateEducation", []):
-            key = (entry.get("school", ""), entry.get("degree", ""), entry.get("startDate"), entry.get("endDate"))
-            if key not in existing_edu_keys:
-                proposed_edu.append(entry)
-
-        # --- Skills ---
-        matched_skills = [s for s in parsed.get("skillList", []) if s.get("id")]
-        unmatched_skills = [s["name"] for s in parsed.get("skillList", []) if not s.get("id") and s.get("name")]
-        proposed_skills = {"matched": matched_skills, "unmatched_to_skillset": unmatched_skills}
-
-        is_preview = fields_to_update is None and not force_all
-
-        if is_preview:
-            return format_response({
-                "preview": True,
-                "candidate_id": candidate_id,
-                "proposed_field_changes": proposed_changes,
-                "proposed_work_history": proposed_wh,
-                "proposed_education": proposed_edu,
-                "proposed_skills": proposed_skills,
-                "message": (
-                    "Review the proposed changes. To commit, call attach_cv again with "
-                    "fields_to_update=[...] listing only the field names you want applied. "
-                    "Pass include_work_history=True / include_education=True / include_skills=True "
-                    "to commit those sections. The CV file will be attached only on the commit call. "
-                    "Or pass force_all=True to apply everything at once."
-                ),
-            })
-
-        # --- COMMIT ---
-        apply_fields = {c["field"] for c in proposed_changes} if force_all else set(fields_to_update or [])
-        apply_wh = force_all or include_work_history
-        apply_edu = force_all or include_education
-        apply_skills = force_all or include_skills
-
-        fields_updated: list[str] = []
-        work_history_added: list[int] = []
-        education_added: list[int] = []
-        skills_committed: dict = {"matched_ids": [], "appended_to_skillset": []}
-        warnings: list[str] = []
-
-        if apply_fields:
-            update_payload = {}
-            for change in proposed_changes:
-                if change["field"] in apply_fields:
-                    update_payload[change["field"]] = change["proposed"]
-            if update_payload:
-                update_payload = _truncate_against_meta(metadata, "Candidate", update_payload)
-                update_payload, strip_warns = _strip_contact_title(update_payload, "Candidate")
-                warnings.extend(strip_warns)
-                if "firstName" in update_payload or "lastName" in update_payload:
-                    if "firstName" in update_payload and "lastName" in update_payload:
-                        computed = _compute_person_name(update_payload)
-                    else:
-                        current = client.get("Candidate", candidate_id, fields="firstName,lastName")
-                        computed = _compute_person_name({**current, **update_payload})
-                    if computed:
-                        update_payload["name"] = computed
-                client.update("Candidate", candidate_id, update_payload)
-                fields_updated = list(update_payload.keys())
-
-        if apply_wh:
-            for entry in proposed_wh:
-                try:
-                    wh = dict(entry)
-                    wh["candidate"] = {"id": candidate_id}
-                    wh.pop("id", None)
-                    wh = _truncate_against_meta(metadata, "CandidateWorkHistory", wh)
-                    r = client.create("CandidateWorkHistory", wh)
-                    work_history_added.append(r["changedEntityId"])
-                except Exception as exc:
-                    warnings.append(f"Work history entry failed: {exc}")
-
-        if apply_edu:
-            for entry in proposed_edu:
-                try:
-                    edu = dict(entry)
-                    edu["candidate"] = {"id": candidate_id}
-                    edu.pop("id", None)
-                    edu = _truncate_against_meta(metadata, "CandidateEducation", edu)
-                    r = client.create("CandidateEducation", edu)
-                    education_added.append(r["changedEntityId"])
-                except Exception as exc:
-                    warnings.append(f"Education entry failed: {exc}")
-
-        if apply_skills:
-            if matched_skills:
-                try:
-                    client.update(
-                        "Candidate",
-                        candidate_id,
-                        {"primarySkills": {"data": [{"id": s["id"]} for s in matched_skills]}},
-                    )
-                    skills_committed["matched_ids"] = [s["id"] for s in matched_skills]
-                except Exception as exc:
-                    warnings.append(f"primarySkills update failed: {exc}")
-            if unmatched_skills:
-                try:
-                    existing_rec = client.get("Candidate", candidate_id, fields="skillSet")
-                    existing_ss = existing_rec.get("skillSet") or ""
-                    combined = ", ".join(filter(None, [existing_ss] + unmatched_skills))
-                    client.update("Candidate", candidate_id, {"skillSet": combined})
-                    skills_committed["appended_to_skillset"] = unmatched_skills
-                except Exception as exc:
-                    warnings.append(f"skillSet update failed: {exc}")
-
-        # Always attach the CV file on commit, then drop the upload's bytes (NFR-9).
-        # If attach_file raises, the upload is kept so the commit can be retried.
-        content_mime = client._guess_content_type(upload["format"])
-        file_attachment = client.attach_file(
-            "Candidate", candidate_id, upload["data"], upload["filename"], content_mime, file_type="CV"
+        plan = _plan_cv_update(
+            existing, proposed_fields, fields_to_update, existing_wh, existing_edu,
+            work_history, education, skill_names, primary_ids,
+            existing.get("skillSet"), existing_primary_ids,
         )
-        upload_store.mark_attached(upload_id, (file_attachment or {}).get("fileId"))
-
-        result: dict = {
-            "committed": True,
-            "candidate_id": candidate_id,
-            "fields_updated": fields_updated,
-            "work_history_added": work_history_added,
-            "education_added": education_added,
-            "skills_added": skills_committed,
-            "file_attachment": file_attachment,
-        }
-        if warnings:
-            result["warnings"] = warnings
-        return format_response(result)
-
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
+
+    additions = plan["additions"]
+    overwrites = plan["overwrites"]
+    written: dict = {"fields": [], "work_history": [], "education": [], "skill_set": [], "primary_skills": [], "file": None}
+    result: dict = {"committed": True, "candidate_id": candidate_id, "written": written}
+
+    # From the first write on, no failure may lose what was already written.
+    try:
+        field_payload = dict(additions["fields"])
+        if confirm:
+            for change in overwrites:
+                field_payload[change["field"]] = proposed_fields[change["field"]]
+        if field_payload:
+            field_payload = _truncate_against_meta(metadata, "Candidate", field_payload)
+            field_payload, strip_warns = _strip_contact_title(field_payload, "Candidate")
+            warnings.extend(strip_warns)
+            if "firstName" in field_payload or "lastName" in field_payload:
+                computed = _compute_person_name({**existing, **field_payload})
+                if computed:
+                    field_payload["name"] = computed
+            client.update("Candidate", candidate_id, field_payload)
+            written["fields"] = list(field_payload.keys())
+
+        children, child_warnings = _write_candidate_children(
+            client, metadata, candidate_id,
+            additions["work_history"], additions["education"],
+            additions["skill_names"], additions["primary_skill_ids"],
+            existing.get("skillSet"), existing_primary_ids,
+        )
+        written.update({k: v for k, v in children.items() if k != "already_present"})
+        warnings.extend(child_warnings)
+
+        if upload["status"] == "received":
+            # Drop the bytes once Bullhorn has the file (NFR-9); the parse stays on
+            # the tombstone so a confirm call can follow. On failure the bytes are
+            # kept and the same call can be repeated: nothing above is written twice.
+            try:
+                content_mime = client._guess_content_type(upload["format"])
+                file_attachment = client.attach_file(
+                    "Candidate", candidate_id, upload["data"], upload["filename"], content_mime, file_type="CV"
+                )
+                written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
+                upload_store.mark_attached(upload_id, written["file"]["file_id"], candidate_id)
+            except Exception as exc:
+                warnings.append(
+                    f"CV file attachment failed: {exc}. Retry with attach_cv(candidate_id={candidate_id}, "
+                    f"upload_id='{upload_id}'); the upload is kept until it expires."
+                )
+        else:
+            written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "already_attached": True}
+    except Exception as exc:
+        _logger.exception("attach_cv: failure part way through writing Candidate %s", candidate_id)
+        result["partial"] = True
+        result["error"] = f"Writing to Candidate {candidate_id} stopped part way: {exc}"
+
+    already = plan["already_present"]
+    if any(already.values()):
+        result["already_present"] = already
+    if confirm:
+        result["overwritten"] = [c["field"] for c in overwrites if c["field"] in written["fields"]]
+    elif overwrites:
+        result["pending_overwrites"] = overwrites
+        result["hint"] = (
+            "These fields already hold a different value and were NOT changed. Show them to the "
+            "consultant; only after they say yes, call attach_cv again with the same arguments "
+            "and confirm=True. Nothing above will be added twice."
+        )
+    if warnings:
+        result["warnings"] = warnings
+    return format_response(result)
 
 
 @mcp.tool()

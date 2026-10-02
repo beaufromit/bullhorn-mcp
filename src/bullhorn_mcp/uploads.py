@@ -21,6 +21,8 @@ Security and retention rules (NFR-9):
   or ``expired`` instead of "not found". An ``attached`` tombstone is removed at
   the original 30-minute purge time (30 minutes after upload, however soon the
   attach happened); an ``expired`` one is removed 30 minutes after it expired.
+- The stored resume parse (structured fields, no file bytes) stays on an
+  ``attached`` tombstone until that purge; an ``expired`` tombstone drops it.
 - Each user may hold at most ``MAX_OPEN_UPLOADS_PER_USER`` pending or received
   uploads at once, so one caller cannot fill process memory with parked files.
 - A commit call ``claim``s the upload for the length of its Bullhorn writes, so
@@ -139,6 +141,8 @@ class _Upload:
     received_at: float | None = None
     file_id: object = None
     remove_at: float | None = None  # set once the record is a tombstone
+    parsed: dict | None = None  # stored resume parse (no file bytes)
+    attached_candidate_id: int | None = None
 
 
 class UploadStore:
@@ -175,6 +179,8 @@ class UploadStore:
     def _tombstone(self, rec: _Upload, status: str, remove_at: float) -> None:
         rec.status = status
         rec.data = None
+        if status != "attached":
+            rec.parsed = None
         rec.remove_at = remove_at
 
     def _issue_token(self, rec: _Upload, now: float) -> str:
@@ -307,7 +313,8 @@ class UploadStore:
         """Return the record as a dict for its owner; anyone else gets ``UploadNotFound``.
 
         Keys: upload_id, status, filename, extension, format, candidate_id, size,
-        sha256, file_id, and ``data`` (bytes, only while ``received``).
+        sha256, file_id, ``parsed`` (stored resume parse or None),
+        ``attached_candidate_id``, and ``data`` (bytes, only while ``received``).
         """
         with self._lock:
             now = self._clock()
@@ -323,8 +330,22 @@ class UploadStore:
                 "size": rec.size,
                 "sha256": rec.sha256,
                 "file_id": rec.file_id,
+                "parsed": rec.parsed,
+                "attached_candidate_id": rec.attached_candidate_id,
                 "data": rec.data if rec.status == "received" else None,
             }
+
+    def set_parsed(self, upload_id: str, owner_sub: str, parsed: dict) -> None:
+        """Store the resume parse against a received or attached upload."""
+        with self._lock:
+            now = self._clock()
+            self._purge(now)
+            rec = self._owned(upload_id, owner_sub)
+            if rec.status == "expired":
+                raise UploadExpired("This upload has expired. Call request_cv_upload again.")
+            if rec.status == "pending":
+                raise UploadError("No file has been received for this upload yet.")
+            rec.parsed = parsed
 
     def claim(self, upload_id: str, owner_sub: str) -> None:
         """Reserve a received upload for one commit call. Pair with ``release``.
@@ -345,7 +366,9 @@ class UploadStore:
         with self._lock:
             self._claimed.discard(upload_id)
 
-    def mark_attached(self, upload_id: str, file_id: object = None) -> None:
+    def mark_attached(
+        self, upload_id: str, file_id: object = None, candidate_id: int | None = None
+    ) -> None:
         """Drop the bytes once Bullhorn holds the file; keep a tombstone until the purge."""
         with self._lock:
             now = self._clock()
@@ -354,6 +377,11 @@ class UploadStore:
             if rec is None:
                 return
             rec.file_id = file_id
+            rec.attached_candidate_id = candidate_id
+            # The bytes go at once (NFR-9) but ``parsed`` stays on the tombstone
+            # until the purge: an attach_cv confirm call that follows a first
+            # (additions) call which already attached the file still needs the
+            # parse Claude reviewed.
             self._tombstone(rec, "attached", (rec.received_at or now) + FILE_TTL_SECONDS)
 
 
