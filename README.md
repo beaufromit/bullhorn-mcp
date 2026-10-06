@@ -365,6 +365,7 @@ If the authenticated user cannot be mapped to a Bullhorn `CorporateUser`, create
 | `ENTRA_CLIENT_ID`        | HTTP only | Entra app registration client ID                                          |
 | `ENTRA_CLIENT_SECRET`    | HTTP only | Entra app registration client secret                                      |
 | `PERPLEXITY_API_KEY`     | No        | Perplexity API key, needed only by `people_search_perplexity`             |
+| `BULLHORN_MATCH_LOG_DIR` | No        | Directory for the candidate match log, default `~/.local/state/bullhorn-mcp/match-log` |
 
 ## Client Configuration
 
@@ -567,6 +568,35 @@ The server provides duplicate detection before record creation:
 
 `create_contact` also performs duplicate detection unless explicitly forced.
 
+### Candidate duplicate check
+
+`find_duplicate_candidates` scores how likely it is that a person is already in Bullhorn. `create_candidate`, `create_candidate_from_cv`, `parse_cv` and `parse_cv_text` use the same check, so there is one answer everywhere.
+
+Arguments: `first_name`, `last_name`, `email`, `phones`, `linkedin_url`, `current_company`, `work_history`, `education` and `upload_id`. With `upload_id`, the stored CV parse is the profile and any other argument overrides it. At least one usable signal is needed.
+
+**Signals.** Email, phone and LinkedIn are identifiers. Each is guarded: a generic mailbox such as `info@`, an internal address, or an identifier shared by many records counts for less. Names (forename and surname, with common Irish equivalents and typos) and employers add evidence. Education is a tiebreaker only. A missing value is never evidence against a match. A value that is present and different is.
+
+**Percentage and bands.** Each match gets a percentage and a list of reasons. High is 98 or more, low is under 20, and uncertain is anything between. Claude shows the consultant who matched, the percentage and the reasons.
+
+**What stops a create.**
+
+| Result | What happens |
+| ------ | ------------ |
+| High, or a guaranteed identifier match | The create stops with `duplicate_found`. Use `attach_cv` or `update_record` on the existing record instead. |
+| Uncertain | The create stops with `possible_duplicates`, listing the candidates for the consultant to judge. |
+| Low | The create goes ahead. |
+| `force=True` | The check is skipped. |
+
+Soft-deleted records that match are flagged in `deleted_matches` but never scored.
+
+**`match_check_id` and outcomes.** Every check returns a `match_check_id`. Pass it to `create_candidate`, `create_candidate_from_cv` or `attach_cv` and the outcome is logged under it: `created_new`, `created_with_force` (only when `force=True` is passed together with a `match_check_id`) or `attached_to` the candidate id. `attach_cv` runs no check of its own.
+
+**Tuning.** All weights and band limits live in the versioned `src/bullhorn_mcp/match_config.json`. A change to it is a reviewed change and bumps the version.
+
+**Match log.** Each check and outcome is appended to a daily file, `match-YYYY-MM-DD.jsonl`, in `BULLHORN_MATCH_LOG_DIR` (default `~/.local/state/bullhorn-mcp/match-log`). Files older than 30 days are deleted. Identifiers and names are SHA-256 hashed, and no CV contents are written. A logging failure never breaks a tool call.
+
+**Calibration.** `scripts/calibrate_match.py` is read-only. It prints aggregate counts only (population size, how many records hold a generic mailbox, common surname and employer totals) and no records. The totals feed the `u` values in `match_config.json`.
+
 This is intended to reduce accidental duplicate CRM records during AI-assisted and bulk-import workflows.
 
 ## Testing
@@ -597,8 +627,11 @@ src/bullhorn_mcp/
   bulk.py       Bulk import orchestration
   client.py     Bullhorn REST API wrapper
   config.py     Environment-based configuration
+  duplicate_retrieval.py  Candidate pool lookup for the duplicate check
+  duplicates.py Candidate match scoring (weights in match_config.json)
   fuzzy.py      Duplicate matching helpers
   identity.py   Authenticated-user to CorporateUser resolution
+  match_log.py  Daily match log for the duplicate check
   metadata.py   Field metadata and label resolution
   perplexity.py Perplexity people-search client (external, isolated from Bullhorn)
   server.py     MCP server entry point and tool definitions

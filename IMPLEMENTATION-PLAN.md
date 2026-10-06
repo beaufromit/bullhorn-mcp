@@ -139,7 +139,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 40B | **COMPLETE** | CR42 (patch): fix Bullhorn resume parser parameters. `parse_resume_file` sends `populateDescription=html`; `parse_resume_text` sends `format` and `populateDescription` as query params (`text` or `html`, from `content_type`). FR-15, US-31. Target v0.0.53. Built 2026-09-29 at 841 tests (3 rewritten in place, 3 added). T40B.3 live smoke check passed 2026-09-29. Reviewed (2 cycles; owner asked for minors fixed too), tagged v0.0.53, **843 tests passing**. Deployed. The T40B.4 re-run created test Candidate 173063, then crashed on skills (CR43); carried over to T42B.8. Ends with the carried-over Sprint 40 T40.8 live acceptance. |
 | Sprint 41 | **COMPLETE** (reviewed, 3 cycles) | CR43: reviewed CV flow. The parse is stored on the upload; Claude's corrected fields, work history, education and skills are written; `skillSet` plus `primarySkills` by association PUT; `attach_cv` writes additions at once and overwrites only on `confirm=True` (`include_*` and `force_all` removed); `create_candidate` takes child lists; one shared duplicate function; a created id is never hidden. FR-15 Amendment 2, US-50, US-51. Tagged v0.0.54, **not deployed alone**. Built 2026-10-02: 918 tests (843 + 75), 42 tools. **931 tests passing** after review (918 + 13 from review fixes). T41.7 live association check passed. |
 | Sprint 42 | **COMPLETE** (reviewed, 2 cycles) | CR44 part 1: pure match-check scorer (log2(m/u) points, guards, names, employers, education), normalisers, versioned `match_config.json`, synthetic fixtures. Not wired in. FR-23, US-52. Tagged v0.0.55, **not deployed**. Built 2026-10-02: 1,175 tests (931 + 244). **1,198 tests passing** after review (1,175 + 23 from review fixes). |
-| Sprint 42B | PLANNED | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
+| Sprint 42B | **BUILT** (1,280 tests, local commit, awaiting /review) | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
 
 ### Sprint 15 post-tag regression note
 
@@ -3926,7 +3926,7 @@ Why these choices were made, for the reviewer and for 42B:
 
 ---
 
-## Sprint 42B: CR44 part 2, retrieval, wiring, create policy, match log, calibration - PLANNED
+## Sprint 42B: CR44 part 2, retrieval, wiring, create policy, match log, calibration - BUILT (awaiting review)
 
 **Change request:** CR44.md (APPROVED, owner, 2026-10-02; D12 and D13 added at this replan)
 **PRD requirement:** FR-23 (all bullets), FR-15 Amendment 2 (the one shared duplicate function)
@@ -3949,6 +3949,18 @@ Why these choices were made, for the reviewer and for 42B:
 - **P11 (planning choice).** Normalised identifiers in the log are SHA-256 hashed (D6). Hashed phone numbers can be brute-forced; recorded as a concern for the reviewer, not solved here.
 - **P12 (planning choice).** N (live candidate count) comes from `search_with_meta("Candidate", "id:[1 TO *]", count=1).total`, cached per process for 24 hours, falling back to the config N on error.
 - **P13 (planning choice).** Pool cap 100 candidates (config). Over the cap sets the `lookup_hit_cutoff` flag.
+
+**Build decisions (owner, 2026-10-06, before the build):**
+- **A1.** `force=True` skips the check entirely. With a `match_check_id` it logs `created_with_force` under that id; without one nothing is logged. With `force=False` the check runs: a stop returns the reasons, a create that goes ahead logs `created_new` under the new id.
+- **A2.** `parse_cv`, `parse_cv_text` and `create_candidate_from_cv` keep the `duplicate_check` key, now holding the full match result (`match_check_id`, `config_version`, `profile`, `matches`, `flags`, `deleted_matches`).
+- **A3.** Existing `test_server.py` tests on the old shape are rewritten in place; create and parse tests stub `match_candidates`, and retrieval is tested once with exact query strings in `tests/test_duplicate_retrieval.py`.
+- **A4.** P10 stands: default log dir `~/.local/state/bullhorn-mcp/match-log`, overridden by `BULLHORN_MATCH_LOG_DIR`.
+
+**Live findings (read-only, 2026-10-02):**
+- `/query/Candidate` is refused (`errors.queryIndexedEntity`, "please use /search"), so the pool's Candidate rows come from one `/search` on `id:(a OR b ...)` (checked: returns the live ids only). `CandidateWorkHistory` `/query` with `candidate.id IN (...)` works.
+- LinkedIn: `companyURL:"<slug>"` finds the record for `/in/` keys (5 of 5); a `/pub/` key is found by its parts as a phrase (`companyURL:"niamh-kinsella a 216 98"`). Wildcards give 400.
+- `/search` takes `fields` as a comma-separated string; a Python list returns only `id` and `_score`.
+- Live N (`id:[1 TO *]` with `isDeleted:0`): 73,835.
 
 ### Tasks
 
@@ -3999,15 +4011,38 @@ Why these choices were made, for the reviewer and for 42B:
 
 ### Verification
 
-- [ ] `.venv/bin/pytest` green. Rewritten tests listed in the build notes.
-- [ ] `grep -n "_check_candidate_duplicates\|score_contact_match" src/bullhorn_mcp/server.py` shows no candidate use (contacts may still use `score_contact_match`).
+- [x] `.venv/bin/pytest` green (1,280 passed). Rewritten tests listed in the build notes.
+- [x] `grep -n "_check_candidate_duplicates\|score_contact_match" src/bullhorn_mcp/server.py` shows no candidate use (only the import and the two contact paths).
 - [ ] Every Lucene value in `duplicate_retrieval.py` passes through an escape helper (reviewer check).
-- [ ] The log holds no CV text and no clear-text identifiers (test plus a reviewer read of one real line from the build's dry run).
-- [ ] T42B.6 totals recorded; `match_config.json` u values set from them.
-- [ ] Line endings: new files LF; `.env.example`, `tests/test_server.py`, this file CRLF.
-- [ ] Local commit `feat: CR44 match check wired in ...`. No push. `/review`, `PROMPT_iterate.md`, push, tag **v0.0.56**.
+- [x] The log holds no CV text and no clear-text identifiers or names (`tests/test_match_log.py`, plus one real line read from the build's dry run). Employer and school keys are in clear by design (calibration needs them); reviewer to confirm that is acceptable under D6.
+- [x] T42B.6 totals recorded; `match_config.json` u values set from them.
+- [x] Line endings: new files LF; `.env.example`, `tests/test_server.py`, this file CRLF (CR count equals line count).
+- [x] Local commit `feat: CR44 match check wired in ...`. No push. Then `/review`, `PROMPT_iterate.md`, push, tag **v0.0.56**.
 - [ ] T42B.8 after the owner's deploy; results recorded; CR43 and CR44 Status set to COMPLETE.
 
 ### Expected test count after Sprint 42B
 
 Previous: Sprint 42 actual. Added about 12 (T42B.1) + 3 (T42B.2) + 4 (T42B.3, plus 4 rewritten) + 10 (T42B.4) + 7 (T42B.5), about 36. **To be measured, not predicted.**
+
+**Actual: 1,280 passing, 0 failing** (previous 1,198; added 82: 37 in `tests/test_duplicate_retrieval.py`, 13 in `tests/test_match_log.py`, net +32 in `tests/test_server.py` (29 new methods for T42B.2 to T42B.4 plus the description test; the old `TestFindDuplicateCandidates` class rewritten)).
+
+### Build notes (2026-10-06)
+
+Why these choices were made, for the reviewer and for T42B.8:
+
+- **`match_candidates` lives in `duplicate_retrieval.py`, not `duplicates.py`** (the plan said duplicates.py). It does I/O and logging; keeping it out keeps the scorer pure, as CR44 asks, and avoids a circular import.
+- **Retrieval shapes** (every value through `_lucene_phrase` or `_lucene_term`): email `(email:"v" OR email2:"v" OR email3:"v")`, one search per value, up to 3; phone: every `phone_search_variants` value across the 5 phone fields, one search per number, up to 3; LinkedIn `companyURL:"<slug>"` or `companyURL:"name x y z"` for `/pub/`; surname `(lastName:f~1 [OR other apostrophe form]) AND firstName:i*` plus a count-only plain surname search; forename count-only `firstName:<forms>`; employer `(workHistories.companyName:(w1 AND w2) OR workHistories.title:(w1 AND w2))` per employer up to 3, rerun `AND (<surname>)` over 200 keeping the first total. Pool: one `/search` `id:(a OR b ...)`, one `/query` each for work history and education, paged at 500. Deleted lookup: identifier OR clause and exact-name pairs with `isDeleted:1`, `exclude_deleted=False`.
+- **Forename count search added after the first build.** Without it the scorer fell back to the config forename u, and with the calibrated u (0.005) every same-name pair with no other evidence came out uncertain, which stops a create. With live-like counts: Aoife Murphy 8% low, John Murphy 2% low, Kevin Cassidy (rare full name, no other evidence) 34% uncertain (P7 intends that).
+- **A holder search that returns the profile's own id counts one fewer holder**, so an existing record checked against itself does not trip the "held by more than one" guard.
+- **`lookup_hit_cutoff`** is set when the union passes the pool cap and also when any single search's total passed it (its ids were truncated); the narrowed employer rerun is the exception.
+- **Owner decision A1 as built:** `force=True` skips the check; with `match_check_id` logs `created_with_force`; a create after a check logs `created_new` under the new id. `attach_cv` logs `attached_to` only when the call wrote something (a field, a child row, a skill or the file), on both the normal and the file-only paths.
+- **A failed check never blocks a create** (as before CR44): the create goes ahead with the warning "Duplicate check could not run: ..." and `duplicate_check` null. `_run_match_check` catches every exception, so a retrieval bug shows only as that warning plus a log line; reviewer may want this narrowed.
+- **`_match_caller`** resolves the CorporateUser id (cached per Entra sub after the first call), else the hashed sub, else null. `create_candidate`'s owner auto-stamp test now asserts `resolve_caller` was called rather than called once.
+- **`create_candidate` has no `duplicate_check` key on success** (only the CV create path has one, per A2).
+- **Calibration (T42B.6, live, read-only, 77 calls, 2026-10-06), aggregates only:** N 73,862 live (105,253 including deleted). Role mailbox holders (`email:<prefix>@*`): info 34, mail 14, hello 9, contact 8, cv 4, office 2, jobs 1, the rest 0. No working search counts `@thepanel.com` holders (leading wildcards 400; the domain phrase gives 0), so the internal guard relies on `internal_domains` plus `generic_min_holders`. Surnames (exact share of N): murphy 0.93%, kelly 0.81%, byrne 0.74%, ryan 0.66%, o'brien 0.63% (unquoted `obrien` 1), walsh 0.58%, o'sullivan 0.44%, doyle 0.46%, mccarthy 0.32%, smith 0.31%, cassidy 0.09%; sum of squares over these 3.9e-4. Forenames: john 1.64%, michael 1.19%, sean 0.66%, patrick 0.66%, sarah 0.60%, mary 0.40%, ciara 0.38%, aoife 0.37%; sum of squares 5.8e-4. Employers (nested companyName): ireland 16,961, bank 12,790, group 9,955, services 9,823, bank of ireland 4,632, aib 2,878, capital 2,533, kpmg 2,362, deloitte 1,738.
+- **Config set from those totals (version stays "1", nothing has shipped):** `forename.exact.u` 0.015 to 0.005; `employer.default_u` 0.001 to 0.005; `identifier_guard.generic_min_holders` 25 to 30; `population.fallback_n` 73,815 to 74,000; `surname.exact.u` kept at 0.001. Scale check (critique 11) still holds: shared name, employer and school gives 99.89% high; name only stays below high. A common name with a very common employer (John Murphy plus KPMG plus school) is 89.98% uncertain, which is intended.
+- **Live dry run (read-only, 2026-10-06):** the profile of the 2026-09 Cassidy duplicate, with no email or phone and its id removed, returned 2 high matches (99.99%, including 90308) with name, three employers and school as reasons, `multiple_strong_matches`, and the soft-deleted 172742 in `deleted_matches`. 2.8 seconds end to end. Multi-word surnames as escaped fuzzy terms work live (`lastName:van\ der\ berg~1` 3 hits).
+- **NFR-8:** static descriptions (text before `Args:`) grew by 1,001 characters in total (14,049 to 15,050, about 250 tokens): `find_duplicate_candidates` 83 to 610, `create_candidate` 292 to 520, `parse_cv` and `parse_cv_text` +78 each, `create_candidate_from_cv` +90. Parameter schemas grew by the new arguments.
+- **Rewritten `test_server.py` tests (A3):** `TestCreateCandidate::test_create_candidate_dup_found_no_force`, `test_create_candidate_owner_auto_stamp`; the whole `TestFindDuplicateCandidates` class (`test_find_dup_candidates_email_exact_match`, `_name_fuzzy_match`, `_no_match`, `_api_error`, `test_tool_and_create_path_agree_on_same_fixture`, `test_check_wrapper_swallows_search_error` now `test_run_match_check_swallows_errors`); `TestParseCv::test_parse_cv_dup_found_in_preview`, `test_parse_cv_stores_parse_and_omits_description`; `TestParseCvText::test_parse_cv_text_returns_view`; `TestCreateCandidateFromCv::test_create_from_cv_duplicate_found`, `test_create_releases_claim_on_duplicate`, `test_create_duplicate_found_keeps_upload`, `test_create_dup_check_uses_corrected_names`, `test_create_reports_everything_written`. A module-level autouse `match_stub` fixture stubs `server.match_candidates` and `match_log.log_outcome` for the file.
+- **Searches run in parallel**, so request order is not fixed; retrieval tests compare sorted query lists.
+- **Open concerns for review:** (1) P11, hashed phones can be brute-forced; (2) employer and school keys in clear in the log next to candidate ids; (3) the employer search ORs `title`, so a title hit adds to employer commonness, slightly weakening employer weight for words common in titles.

@@ -29,6 +29,9 @@ from .fuzzy import score_company_match, categorize_score, score_contact_match
 from .bulk import BulkImporter
 from .identity import resolve_caller, resolve_caller_sub, IdentityResolutionError
 from .descriptions import enrich_tool_descriptions
+from . import match_log
+from .duplicate_retrieval import match_candidates
+from .duplicates import CandidateProfile, profile_from_fields, profile_from_parse
 from .perplexity import search_people, PerplexityError
 from .uploads import (
     ALLOWED_EXTENSIONS,
@@ -78,79 +81,83 @@ def _compute_person_name(fields: dict) -> str | None:
     return combined or None
 
 
-_CANDIDATE_DUP_FIELDS = "id,firstName,lastName,email,phone,occupation,companyName,dateAdded"
+def _match_caller(client: BullhornClient):
+    """Who the match log records: the CorporateUser id, else the Entra sub, else None. Never raises."""
+    try:
+        return resolve_caller(client)["id"]
+    except Exception:  # noqa: BLE001 - the log must never block a tool
+        pass
+    try:
+        return resolve_caller_sub()
+    except Exception:  # noqa: BLE001
+        return None
 
 
-def _find_candidate_duplicates(
-    client: BullhornClient,
-    first_name: str,
-    last_name: str,
-    email: str | None,
-) -> dict:
-    """The one Candidate duplicate check (CR43 D6), behind the tool and every create path.
+def _run_match_check(client: BullhornClient, profile: CandidateProfile, errors: list[str] | None = None) -> dict | None:
+    """The one Candidate match check (CR44), or None when it could not run (non-fatal).
 
-    Returns ``{"query", "matches", "exact_match"}``, matches sorted best first, each
-    ``{confidence, category, record}`` with confidence >= 0.50. Search errors are
-    raised; the tool reports them and ``_check_candidate_duplicates`` swallows them.
-    CR44 replaces the matching inside this function, not its callers.
-    """
-    query = {"firstName": first_name, "lastName": last_name, "email": email}
-    query_parts = []
-    if email:
-        query_parts.append(f'email:"{email}"')
-    if first_name:
-        query_parts.append(f'firstName:"{first_name}"')
-    if last_name:
-        query_parts.append(f'lastName:"{last_name}"')
-    if not query_parts:
-        return {"query": query, "matches": [], "exact_match": False}
-
-    results = client.search(
-        "Candidate",
-        query=" OR ".join(query_parts),
-        fields=_CANDIDATE_DUP_FIELDS,
-        count=50,
-    )
-
-    matches = []
-    for record in results:
-        # Email exact match short-circuits to the highest possible score
-        if email and (record.get("email") or "").lower().strip() == email.lower().strip():
-            score = 1.0
-        else:
-            score = score_contact_match(first_name, last_name, record)
-        if score >= 0.50:
-            matches.append({
-                "confidence": round(score, 4),
-                "category": categorize_score(score),
-                "record": record,
-            })
-
-    # sort is stable, so equal scores keep search order (the old best-match pick)
-    matches.sort(key=lambda m: m["confidence"], reverse=True)
-    return {
-        "query": query,
-        "matches": matches,
-        "exact_match": bool(matches and matches[0]["category"] == "exact"),
-    }
-
-
-def _check_candidate_duplicates(
-    client: BullhornClient,
-    first_name: str,
-    last_name: str,
-    email: str | None,
-) -> dict | None:
-    """Best match from ``_find_candidate_duplicates``, or None.
-
-    Used by the create and parse paths, where a failed search must not block the
-    call, so search errors give None (non-fatal).
+    ``errors`` collects the failure text so a create path can warn about it.
     """
     try:
-        matches = _find_candidate_duplicates(client, first_name, last_name, email)["matches"]
-    except (AuthenticationError, BullhornAPIError):
+        return match_candidates(client, profile, caller=_match_caller(client))
+    except Exception as exc:  # noqa: BLE001 - AuthenticationError, BullhornAPIError or a retrieval bug
+        _logger.warning("Candidate match check could not run: %s", exc)
+        if errors is not None:
+            errors.append(str(exc))
         return None
-    return matches[0] if matches else None
+
+
+def _log_match_outcome(client: BullhornClient, match_check_id: str | None, outcome: str, candidate_id: int | None) -> None:
+    """Log an outcome under a match_check_id (D12). No id, nothing logged. Never raises."""
+    if not match_check_id:
+        return
+    try:
+        match_log.log_outcome(match_check_id, outcome, candidate_id, caller=_match_caller(client))
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("match log: outcome not logged: %s", exc)
+
+
+def _is_guaranteed(match: dict) -> bool:
+    return any(str(f).startswith("guaranteed_match:") for f in match.get("flags") or [])
+
+
+def _match_summary(match: dict) -> str:
+    reasons = "; ".join(b.get("reason", "") for b in match.get("breakdown") or [] if b.get("reason"))
+    text = f"{match.get('name')} (Candidate {match.get('candidate_id')}) {match.get('percentage')}% {match.get('band')}"
+    return f"{text}: {reasons}" if reasons else text
+
+
+def _duplicate_policy(result: dict | None, hint: str) -> dict | None:
+    """D9: the stop response for a create, or None when the create may go ahead.
+
+    A high band or a guaranteed identifier gives ``duplicate_found``; otherwise any
+    uncertain match gives ``possible_duplicates``. ``hint`` may hold ``{candidate_id}``
+    and ``{match_check_id}`` placeholders. A deleted match alone never stops.
+    """
+    if not result:
+        return None
+    matches = result.get("matches") or []
+    strong = [m for m in matches if m.get("band") == "high" or _is_guaranteed(m)]
+    uncertain = [m for m in matches if m.get("band") == "uncertain"]
+    if strong:
+        kind, listed = "duplicate_found", strong
+        intro = "This Candidate looks like one already on file"
+    elif uncertain:
+        kind, listed = "possible_duplicates", matches
+        intro = "This Candidate may already be on file"
+    else:
+        return None
+    check_id = result.get("match_check_id")
+    top = listed[0]
+    return {
+        kind: True,
+        "match_check_id": check_id,
+        "matches": matches,
+        "deleted_matches": result.get("deleted_matches") or [],
+        "flags": result.get("flags") or [],
+        "message": f"{intro}. Nothing was created. " + " | ".join(_match_summary(m) for m in listed),
+        "hint": hint.replace("{candidate_id}", str(top.get("candidate_id"))).replace("{match_check_id}", str(check_id)),
+    }
 
 
 def _truncate_against_meta(metadata: BullhornMetadata, entity: str, fields: dict) -> dict:
@@ -2171,12 +2178,16 @@ def create_candidate(
     education: list | None = None,
     skills: list | None = None,
     primary_skills: list | None = None,
+    match_check_id: str | None = None,
 ) -> str:
     """Create a new Candidate record in Bullhorn CRM.
 
     For a candidate found on LinkedIn or through people_search_perplexity, also pass
     their work_history, education and skills; they are written after the Candidate and
     the response lists what was written. For a CV file use create_candidate_from_cv.
+    Runs a duplicate check first. A likely or possible duplicate stops the create
+    (duplicate_found / possible_duplicates): show the consultant who, the percentage
+    and the reasons, and only create anyway (force=True) if they say so.
 
     Args:
         fields: Dictionary of field names (or display labels) and values.
@@ -2200,6 +2211,8 @@ def create_candidate(
                 [{"school": "UCD", "major": "Accounting", "graduationDate": <epoch ms>}]
         skills: Optional free-text skill names, added to skillSet.
         primary_skills: Optional Bullhorn Skill ids to link as primarySkills.
+        match_check_id: The match_check_id of the find_duplicate_candidates call this create follows;
+                with force=True it records the outcome under that check.
 
     Returns:
         JSON object with changedEntityId, changeType, and full data of the created record,
@@ -2279,20 +2292,18 @@ def create_candidate(
         if computed:
             resolved["name"] = computed
 
+        check = None
         if not force:
-            first_name = str(resolved.get("firstName", ""))
-            last_name = str(resolved.get("lastName", ""))
-            email = resolved.get("email")
-            dup = _check_candidate_duplicates(client, first_name, last_name, email)
-            if dup is not None:
-                return format_response({
-                    "duplicate_found": True,
-                    "match": dup,
-                    "message": (
-                        "A Candidate matching this name or email already exists. "
-                        "Use update_record to modify the existing record, or set force=True to create regardless."
-                    ),
-                })
+            check_errors: list[str] = []
+            check = _run_match_check(client, profile_from_fields(resolved, work_history, education), check_errors)
+            if check is None:
+                warnings.append(f"Duplicate check could not run: {check_errors[0] if check_errors else 'unknown error'}")
+            stop = _duplicate_policy(check, (
+                "Use update_record on Candidate {candidate_id} to change the existing record. To create a new "
+                "Candidate anyway, call create_candidate again with force=True and match_check_id='{match_check_id}'."
+            ))
+            if stop is not None:
+                return format_response(stop)
 
         has_children = any(x is not None for x in (work_history, education, skills, primary_skills))
         skill_names, primary_ids = _normalize_skills(skills, primary_skills)
@@ -2302,6 +2313,10 @@ def create_candidate(
             resolved["skillSet"], skill_set_written = _merge_skill_set(resolved.get("skillSet"), skill_names)
 
         result = client.create("Candidate", resolved)
+        if force:
+            _log_match_outcome(client, match_check_id, "created_with_force", result.get("changedEntityId"))
+        elif check is not None:
+            _log_match_outcome(client, check["match_check_id"], "created_new", result.get("changedEntityId"))
         if not has_children:
             if warnings:
                 data = json.loads(format_response(result))
@@ -2335,30 +2350,77 @@ def create_candidate(
 
 @mcp.tool()
 def find_duplicate_candidates(
-    first_name: str,
-    last_name: str,
+    first_name: str | None = None,
+    last_name: str | None = None,
     email: str | None = None,
+    phones: list | None = None,
+    linkedin_url: str | None = None,
+    current_company: str | None = None,
+    work_history: list | None = None,
+    education: list | None = None,
+    upload_id: str | None = None,
 ) -> str:
-    """Check whether a Candidate already exists in Bullhorn using name and optional email.
+    """Check whether a Candidate is already in Bullhorn, weighing every signal given.
+
+    Give as much as you know: name, email, phones, LinkedIn URL, current employer,
+    work history, education. Or give upload_id to use the stored parse of a CV and
+    pass only corrections. Show the consultant EVERY match: who (name and id), the
+    percentage, the band and the reasons from its breakdown. Matches are ranked;
+    deleted_matches are removed records, shown for information only. Pass the
+    returned match_check_id to create_candidate, create_candidate_from_cv or
+    attach_cv so the outcome is recorded. Nothing is written to Bullhorn.
 
     Args:
-        first_name: Candidate's first name
-        last_name: Candidate's last name
-        email: Optional email for exact-match detection (highest signal)
-
-    Returns:
-        JSON object: {"query": {...}, "matches": [...], "exact_match": bool}
-        Each match includes confidence score, category (exact/likely/possible), and record fields.
-
-    Examples:
-        - find_duplicate_candidates("Jane", "Doe")
-        - find_duplicate_candidates("Jane", "Doe", email="jane@example.com")
+        first_name: First name
+        last_name: Last name
+        email: Email address
+        phones: Phone numbers (list of strings)
+        linkedin_url: LinkedIn profile URL
+        current_company: Current employer name
+        work_history: Entries with companyName, title, startDate, endDate (epoch ms)
+        education: Entries with school, degree, graduationDate (epoch ms)
+        upload_id: A received CV upload whose stored parse is the base profile; the other arguments override it
     """
     try:
-        if not (first_name or last_name or email):
-            return format_response({"error": "query_required", "message": "Provide at least one of: first_name, last_name, email."})
+        client = get_client()
+        profile = CandidateProfile()
+        if upload_id is not None:
+            upload, error = _load_received_upload(upload_id)
+            if error:
+                return error
+            profile = profile_from_parse(_parse_upload(client, upload))
+        if first_name is not None:
+            profile.first_name = first_name.strip() or None
+        if last_name is not None:
+            profile.last_name = last_name.strip() or None
+        if email is not None:
+            profile.emails = [email.strip()] if email.strip() else []
+        if phones is not None:
+            profile.phones = [str(p).strip() for p in phones if str(p).strip()]
+        if linkedin_url is not None:
+            profile.linkedin_url = linkedin_url.strip() or None
+        if current_company is not None:
+            profile.current_company = current_company.strip() or None
+        if work_history is not None or education is not None:
+            given = profile_from_fields({}, work_history, education)
+            if work_history is not None:
+                profile.work_history = given.work_history
+            if education is not None:
+                profile.education = given.education
 
-        return format_response(_find_candidate_duplicates(get_client(), first_name, last_name, email))
+        if not (
+            profile.first_name or profile.last_name or profile.emails or profile.phones
+            or profile.linkedin_url or profile.current_company or profile.work_history
+        ):
+            return format_response({
+                "error": "query_required",
+                "message": (
+                    "Provide at least one of: a name, email, phones, linkedin_url, current_company, "
+                    "work_history, or an upload_id."
+                ),
+            })
+
+        return format_response(match_candidates(client, profile, caller=_match_caller(client)))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -3018,7 +3080,8 @@ def parse_cv(upload_id: str) -> str:
     (new candidate) or attach_cv (existing candidate) with the same upload_id and your
     corrections. The parse is kept with the upload, so the write uses exactly this
     parse and the file is not parsed again. Nothing is written to Bullhorn here.
-    Also runs a duplicate candidate check on the parsed name and email.
+    Also runs the duplicate check (duplicate_check, with a match_check_id): show the
+    consultant every match with who, the percentage and the reasons.
 
     Args:
         upload_id: The id from request_cv_upload, once get_cv_upload shows 'received'.
@@ -3026,7 +3089,7 @@ def parse_cv(upload_id: str) -> str:
     Returns:
         JSON {"parsed": {confidenceScore, candidate, description_length,
         candidateWorkHistory, candidateEducation, skillList, primarySkills},
-        "duplicate_check": null | {confidence, category, record}}. The HTML
+        "duplicate_check": null | {match_check_id, matches, ...}}. The HTML
         description is left out (only its length is shown); it is always written
         from the stored parse.
     """
@@ -3038,10 +3101,7 @@ def parse_cv(upload_id: str) -> str:
         # The upload keeps its file and now its parse: create or attach needs both.
         parsed = _parse_upload(client, upload)
 
-        candidate_data = parsed.get("candidate") or {}
-        dup = _check_candidate_duplicates(
-            client, candidate_data.get("firstName", ""), candidate_data.get("lastName", ""), candidate_data.get("email"),
-        )
+        dup = _run_match_check(client, profile_from_parse(parsed))
         return format_response({"parsed": _cv_response_view(parsed), "duplicate_check": dup})
 
     except (AuthenticationError, BullhornAPIError) as e:
@@ -3057,23 +3117,21 @@ def parse_cv_text(
 
     Check the result against the CV text and pass your corrections to
     create_candidate_from_cv(content=..., ...). Pasted text is not stored, so that
-    call parses it again. Also runs a duplicate candidate check on the parsed name and email.
+    call parses it again. Also runs the duplicate check (duplicate_check, with a match_check_id):
+    show the consultant every match with who, the percentage and the reasons.
 
     Args:
         content: Plain text or HTML CV content
         content_type: MIME type: "text/plain" (default) or "text/html"
 
     Returns:
-        JSON {"parsed": {...same view as parse_cv...}, "duplicate_check": null | {...}}.
+        JSON {"parsed": {...same view as parse_cv...}, "duplicate_check": null | {match_check_id, matches, ...}}.
     """
     try:
         client = get_client()
         parsed = client.parse_resume_text(content, content_type)
 
-        candidate_data = parsed.get("candidate") or {}
-        dup = _check_candidate_duplicates(
-            client, candidate_data.get("firstName", ""), candidate_data.get("lastName", ""), candidate_data.get("email"),
-        )
+        dup = _run_match_check(client, profile_from_parse(parsed))
         return format_response({"parsed": _cv_response_view(parsed), "duplicate_check": dup})
 
     except (AuthenticationError, BullhornAPIError) as e:
@@ -3091,6 +3149,7 @@ def create_candidate_from_cv(
     education: list | None = None,
     skills: list | None = None,
     primary_skills: list | None = None,
+    match_check_id: str | None = None,
 ) -> str:
     """Create a new Candidate from a CV, written with your corrections to the parse.
 
@@ -3100,7 +3159,8 @@ def create_candidate_from_cv(
     an empty list writes none). In one call this writes the Candidate, its work
     history, education, skillSet and primarySkills, and attaches the CV file (file
     mode). Nothing is shown for confirmation first: tell the user exactly what the
-    response says was written. Stops on a likely duplicate unless force=True.
+    response says was written. Stops on a likely or possible duplicate unless force=True:
+    show the consultant who, the percentage and the reasons, and offer attach_cv.
     Exactly one of upload_id (file, from request_cv_upload) or content (text) is needed.
 
     Args:
@@ -3114,12 +3174,14 @@ def create_candidate_from_cv(
         education: Corrected CandidateEducation entries (replaces the parsed list).
         skills: Corrected free-text skill names for skillSet (replaces parsed skillList).
         primary_skills: Corrected Bullhorn Skill ids to link (replaces parsed primarySkills).
+        match_check_id: The match_check_id from parse_cv or find_duplicate_candidates; with force=True
+                        it records the outcome under that check.
 
     Returns:
         {"created": true, "candidate_id", "written": {fields, description_length,
         work_history, education, skill_set, primary_skills, file}, "warnings",
         "duplicate_check", and "cv_attach_retry" when the file was not attached}.
-        If a duplicate is found: {"duplicate_found": true, "match", "parsed", "hint"}.
+        If a duplicate is found: {"duplicate_found" or "possible_duplicates": true, "matches", "parsed", "hint"}.
     """
     is_binary = upload_id is not None
     is_text = content is not None
@@ -3135,7 +3197,7 @@ def create_candidate_from_cv(
             "message": "Provide either upload_id or content, not both.",
         })
 
-    corrections = (fields_override, work_history, education, skills, primary_skills)
+    corrections = (fields_override, work_history, education, skills, primary_skills, match_check_id)
     if not is_binary:
         return _create_candidate_from_cv(None, None, content, content_type, force, *corrections)
     upload, error = _load_received_upload(upload_id, claim=True)
@@ -3158,6 +3220,7 @@ def _create_candidate_from_cv(
     education: list | None,
     skills: list | None,
     primary_skills: list | None,
+    match_check_id: str | None = None,
 ) -> str:
     """Body of create_candidate_from_cv once the input is checked and any upload claimed."""
     try:
@@ -3194,23 +3257,20 @@ def _create_candidate_from_cv(
         # The check runs on the corrected names and email (CR43 P5).
         dup = None
         if not force:
-            dup = _check_candidate_duplicates(
-                client,
-                str(candidate_data.get("firstName") or ""),
-                str(candidate_data.get("lastName") or ""),
-                candidate_data.get("email"),
-            )
-            if dup is not None:
-                return format_response({
-                    "duplicate_found": True,
-                    "match": dup,
-                    "parsed": _cv_response_view(parsed),
-                    "hint": (
-                        "A matching Candidate already exists. "
-                        "Use attach_cv to update the existing record and attach this CV, "
-                        "or pass force=True to create a new record anyway."
-                    ),
-                })
+            check_errors: list[str] = []
+            dup = _run_match_check(client, profile_from_fields(candidate_data, work_history, education), check_errors)
+            if dup is None:
+                warnings.append(f"Duplicate check could not run: {check_errors[0] if check_errors else 'unknown error'}")
+            upload_ref = f"upload_id='{upload_id}', " if upload_id else ""
+            stop = _duplicate_policy(dup, (
+                "To add this CV to the existing record call attach_cv(candidate_id={candidate_id}, "
+                + upload_ref
+                + "match_check_id='{match_check_id}'). To create a new Candidate anyway, call "
+                "create_candidate_from_cv again with force=True and match_check_id='{match_check_id}'."
+            ))
+            if stop is not None:
+                stop["parsed"] = _cv_response_view(parsed)
+                return format_response(stop)
 
         # Owner stamping
         if "owner" not in candidate_data:
@@ -3275,6 +3335,10 @@ def _create_candidate_from_cv(
         "file": None,
     }
     result: dict = {"created": True, "candidate_id": candidate_id, "written": written}
+    if force:
+        _log_match_outcome(client, match_check_id, "created_with_force", candidate_id)
+    elif dup is not None:
+        _log_match_outcome(client, dup["match_check_id"], "created_new", candidate_id)
     if upload is not None:
         # Everything from this CV is written below with Claude's corrections; a later
         # attach_cv for this Candidate must only attach the file, never replay the
@@ -3333,6 +3397,7 @@ def attach_cv(
     skills: list | None = None,
     primary_skills: list | None = None,
     confirm: bool = False,
+    match_check_id: str | None = None,
 ) -> str:
     """Attach a CV to an existing Candidate and add what the CV has that the record lacks.
 
@@ -3359,6 +3424,7 @@ def attach_cv(
         skills: Corrected free-text skill names (replaces parsed skillList).
         primary_skills: Corrected Bullhorn Skill ids (replaces parsed primarySkills).
         confirm: True writes the overwrites too. Default False.
+        match_check_id: The match_check_id from the duplicate check that led here; the outcome is recorded under it.
 
     Returns:
         {"committed": true, "candidate_id", "written": {fields, work_history, education,
@@ -3387,7 +3453,7 @@ def attach_cv(
             })
         return _attach_cv(
             candidate_id, upload, upload_id, fields_to_update, fields_override,
-            work_history, education, skills, primary_skills, confirm,
+            work_history, education, skills, primary_skills, confirm, match_check_id,
         )
     finally:
         upload_store.release(upload_id)
@@ -3410,11 +3476,14 @@ def _attach_cv(
     skills: list | None,
     primary_skills: list | None,
     confirm: bool,
+    match_check_id: str | None = None,
 ) -> str:
     """Body of attach_cv once the upload is loaded and claimed."""
     if upload.get("created_candidate_id") == candidate_id:
         corrections = (fields_to_update, fields_override, work_history, education, skills, primary_skills)
-        return _attach_created_cv_file(candidate_id, upload, upload_id, any(c is not None for c in corrections))
+        return _attach_created_cv_file(
+            candidate_id, upload, upload_id, any(c is not None for c in corrections), match_check_id,
+        )
     warnings: list[str] = []
     try:
         client = get_client()
@@ -3546,6 +3615,7 @@ def _attach_cv(
         result["partial"] = True
         result["error"] = f"Writing to Candidate {candidate_id} stopped part way: {exc}"
 
+    _log_attached(match_check_id, candidate_id, written)
     already = plan["already_present"]
     if any(already.values()):
         result["already_present"] = already
@@ -3563,7 +3633,19 @@ def _attach_cv(
     return format_response(result)
 
 
-def _attach_created_cv_file(candidate_id: int, upload: dict, upload_id: str, had_corrections: bool) -> str:
+def _log_attached(match_check_id: str | None, candidate_id: int, written: dict) -> None:
+    """D12: log ``attached_to`` under the given match_check_id after a call that wrote something."""
+    file_info = written.get("file") or {}
+    wrote = any(written.get(k) for k in ("fields", "work_history", "education", "skill_set", "primary_skills")) or (
+        bool(file_info) and not file_info.get("already_attached")
+    )
+    if wrote:
+        _log_match_outcome(get_client(), match_check_id, "attached_to", candidate_id)
+
+
+def _attach_created_cv_file(
+    candidate_id: int, upload: dict, upload_id: str, had_corrections: bool, match_check_id: str | None = None,
+) -> str:
     """attach_cv for the Candidate create_candidate_from_cv made from this upload: the file only.
 
     The create already wrote the fields, work history, education and skills with
@@ -3595,6 +3677,7 @@ def _attach_created_cv_file(candidate_id: int, upload: dict, upload_id: str, had
                 f"CV file attachment failed: {exc}. Retry with attach_cv(candidate_id={candidate_id}, "
                 f"upload_id='{upload_id}'); the upload is kept until it expires."
             )
+    _log_attached(match_check_id, candidate_id, written)
     if warnings:
         result["warnings"] = warnings
     return format_response(result)

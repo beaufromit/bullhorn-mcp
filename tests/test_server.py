@@ -41,6 +41,38 @@ def mock_client(sample_job, sample_candidate):
     return client
 
 
+def _match(candidate_id=50, name="Jane Doe", percentage=97, band="high", flags=None, reasons=None):
+    """One scored match as match_candidates returns it."""
+    reasons = reasons or ["Same email jane@example.com", "Same name Jane Doe"]
+    return {
+        "candidate_id": candidate_id, "name": name, "points": 12.5, "percentage": percentage, "band": band,
+        "breakdown": [{"signal": "email", "points": 6.0, "reason": r} for r in reasons],
+        "flags": list(flags or []),
+    }
+
+
+def _match_result(matches=None, deleted_matches=None, flags=None, check_id="chk-new"):
+    """A match_candidates result; no matches by default."""
+    return {
+        "match_check_id": check_id, "config_version": "1", "profile": {},
+        "matches": list(matches or []), "flags": list(flags or []),
+        "deleted_matches": list(deleted_matches or []),
+    }
+
+
+@pytest.fixture(autouse=True)
+def match_stub():
+    """Stub the CR44 retrieval and the match log: no tool test depends on retrieval or writes a log.
+
+    Retrieval has its own tests (tests/test_duplicate_retrieval.py). Tests set
+    ``match_stub.match.return_value`` / ``side_effect`` and assert on ``match_stub.log``.
+    """
+    from types import SimpleNamespace
+    with patch.object(server, "match_candidates", return_value=_match_result()) as match, \
+         patch.object(server.match_log, "log_outcome") as log:
+        yield SimpleNamespace(match=match, log=log)
+
+
 @pytest.fixture(autouse=True)
 def reset_client():
     """Reset the global client, metadata cache, and one-shot flags before each test."""
@@ -5514,13 +5546,10 @@ class TestCreateCandidate:
         call_kwargs = mock_client.create.call_args[0][1]
         assert call_kwargs["name"] == "Alice Smith"
 
-    def test_create_candidate_dup_found_no_force(self, mock_client, mock_metadata):
-        """create_candidate returns duplicate_found when a match is detected."""
+    def test_create_candidate_dup_found_no_force(self, mock_client, mock_metadata, match_stub):
+        """create_candidate returns duplicate_found (match list with reasons) and writes nothing on a high match."""
         mock_client.resolve_owner.return_value = {"id": 1}
-        mock_client.search.return_value = [
-            {"id": 50, "firstName": "Jane", "lastName": "Doe",
-             "email": "jane@example.com", "phone": "", "occupation": "", "companyName": "", "dateAdded": 0},
-        ]
+        match_stub.match.return_value = _match_result([_match()])
 
         with patch.object(server, "get_client", return_value=mock_client), \
              patch.object(server, "get_metadata", return_value=mock_metadata), \
@@ -5531,8 +5560,133 @@ class TestCreateCandidate:
 
         data = json.loads(result)
         assert data["duplicate_found"] is True
-        assert "match" in data
+        assert data["matches"][0]["candidate_id"] == 50
         mock_client.create.assert_not_called()
+
+    def _create(self, mock_client, mock_metadata, fields=None, **kwargs):
+        """Run create_candidate against a client that can create; returns the parsed JSON."""
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.create.return_value = {
+            "changedEntityId": 111, "changeType": "INSERT",
+            "data": {"id": 111, "firstName": "Jane", "lastName": "Doe"},
+        }
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            return json.loads(server.create_candidate(
+                fields or {"firstName": "Jane", "lastName": "Doe", "owner": {"id": 1}}, **kwargs
+            ))
+
+    def test_match_candidates_called_once_per_create(self, mock_client, mock_metadata, match_stub):
+        """One create runs one match check, on a profile built from the resolved fields and lists."""
+        fields = {"firstName": "Jane", "lastName": "Doe", "email": "jane@example.com",
+                  "companyName": "Acme", "owner": {"id": 1}}
+        work = [{"companyName": "Acme", "title": "Engineer", "startDate": 1514764800000, "endDate": None}]
+
+        self._create(mock_client, mock_metadata, fields, work_history=work)
+
+        match_stub.match.assert_called_once()
+        profile = match_stub.match.call_args.args[1]
+        assert (profile.first_name, profile.last_name, profile.emails) == ("Jane", "Doe", ["jane@example.com"])
+        assert len(profile.work_history) == 1
+        assert match_stub.match.call_args.kwargs == {"caller": 1}
+
+    def test_high_band_stops(self, mock_client, mock_metadata, match_stub):
+        """A high-band match stops the create with duplicate_found and logs nothing."""
+        match_stub.match.return_value = _match_result([_match(band="high")])
+
+        data = self._create(mock_client, mock_metadata)
+
+        assert data["duplicate_found"] is True
+        assert data["match_check_id"] == "chk-new"
+        mock_client.create.assert_not_called()
+        match_stub.log.assert_not_called()
+
+    def test_guaranteed_identifier_stops(self, mock_client, mock_metadata, match_stub):
+        """A guaranteed_match flag stops the create even when the band is uncertain."""
+        match_stub.match.return_value = _match_result(
+            [_match(band="uncertain", percentage=60, flags=["guaranteed_match:email"])]
+        )
+
+        data = self._create(mock_client, mock_metadata)
+
+        assert data["duplicate_found"] is True
+        assert "possible_duplicates" not in data
+        mock_client.create.assert_not_called()
+
+    def test_uncertain_stops_and_lists(self, mock_client, mock_metadata, match_stub):
+        """An uncertain match stops with possible_duplicates and lists every non-low match."""
+        match_stub.match.return_value = _match_result([
+            _match(candidate_id=50, band="uncertain", percentage=55),
+            _match(candidate_id=51, name="J Doe", band="uncertain", percentage=45),
+        ])
+
+        data = self._create(mock_client, mock_metadata)
+
+        assert data["possible_duplicates"] is True
+        assert "duplicate_found" not in data
+        assert [m["candidate_id"] for m in data["matches"]] == [50, 51]
+        assert "force=True" in data["hint"] and "chk-new" in data["hint"]
+        assert "update_record on Candidate 50" in data["hint"]
+        mock_client.create.assert_not_called()
+
+    def test_low_band_writes(self, mock_client, mock_metadata, match_stub):
+        """No non-low match (or only a deleted match): the Candidate is created."""
+        match_stub.match.return_value = _match_result(deleted_matches=[{"candidate_id": 9, "name": "Jane Doe"}])
+
+        data = self._create(mock_client, mock_metadata)
+
+        assert data["changedEntityId"] == 111
+        mock_client.create.assert_called_once()
+
+    def test_stop_response_has_reasons(self, mock_client, mock_metadata, match_stub):
+        """A stop says who, the percentage and why; it also carries deleted matches and flags."""
+        match_stub.match.return_value = _match_result(
+            [_match(reasons=["Same email jane@example.com"])],
+            deleted_matches=[{"candidate_id": 9, "name": "Jane Doe"}], flags=["lookup_failed"],
+        )
+
+        data = self._create(mock_client, mock_metadata)
+
+        assert data["matches"][0]["breakdown"][0]["reason"] == "Same email jane@example.com"
+        assert "Jane Doe (Candidate 50) 97% high: Same email jane@example.com" in data["message"]
+        assert data["deleted_matches"] == [{"candidate_id": 9, "name": "Jane Doe"}]
+        assert data["flags"] == ["lookup_failed"]
+
+    def test_force_skips_check_and_logs_created_with_force(self, mock_client, mock_metadata, match_stub):
+        """force=True runs no check; a given match_check_id gets created_with_force."""
+        match_stub.match.return_value = _match_result([_match()])
+
+        data = self._create(mock_client, mock_metadata, force=True, match_check_id="chk-earlier")
+
+        assert data["changedEntityId"] == 111
+        match_stub.match.assert_not_called()
+        match_stub.log.assert_called_once_with("chk-earlier", "created_with_force", 111, caller=1)
+
+    def test_force_without_id_logs_nothing(self, mock_client, mock_metadata, match_stub):
+        """force=True with no match_check_id: no check and nothing logged."""
+        self._create(mock_client, mock_metadata, force=True)
+
+        match_stub.match.assert_not_called()
+        match_stub.log.assert_not_called()
+
+    def test_create_logs_created_new(self, mock_client, mock_metadata, match_stub):
+        """A create that goes ahead logs created_new under the new check's id."""
+        match_stub.match.return_value = _match_result(check_id="chk-77")
+
+        self._create(mock_client, mock_metadata)
+
+        match_stub.log.assert_called_once_with("chk-77", "created_new", 111, caller=1)
+
+    def test_check_failure_does_not_block_create(self, mock_client, mock_metadata, match_stub):
+        """A failed check creates anyway and says so in warnings; no outcome is logged."""
+        match_stub.match.side_effect = BullhornAPIError("boom")
+
+        data = self._create(mock_client, mock_metadata)
+
+        assert data["changedEntityId"] == 111
+        assert data["warnings"] == ["Duplicate check could not run: boom"]
+        match_stub.log.assert_not_called()
 
     def test_create_candidate_force_bypasses_dup_check(self, mock_client, mock_metadata):
         """create_candidate with force=True skips duplicate check."""
@@ -5569,7 +5723,7 @@ class TestCreateCandidate:
              patch.object(server, "resolve_caller", return_value={"id": 42}) as mock_caller:
             server.create_candidate({"firstName": "Jane", "lastName": "Doe"})
 
-        mock_caller.assert_called_once()
+        mock_caller.assert_called()  # also called by the match log's caller lookup
         call_kwargs = mock_client.create.call_args[0][1]
         assert call_kwargs.get("owner") == {"id": 42}
 
@@ -5839,92 +5993,152 @@ class TestCreateCandidate:
 
 
 class TestFindDuplicateCandidates:
-    """Tests for find_duplicate_candidates tool."""
+    """Tests for find_duplicate_candidates tool (CR44: one match check, every signal)."""
 
-    def test_find_dup_candidates_email_exact_match(self, mock_client, sample_candidate):
-        """find_duplicate_candidates detects email exact match as 'exact' category."""
-        sample_candidate["email"] = "jane@example.com"
-        sample_candidate["firstName"] = "Jane"
-        sample_candidate["lastName"] = "Doe"
-        sample_candidate["occupation"] = "Engineer"
-        sample_candidate["companyName"] = "Acme"
-        sample_candidate["dateAdded"] = 0
-        mock_client.search.return_value = [sample_candidate]
+    def test_find_dup_candidates_email_exact_match(self, mock_client, match_stub):
+        """find_duplicate_candidates returns the match result as is, and builds the profile from the arguments."""
+        result_in = _match_result([_match(flags=["guaranteed_match:email"])])
+        match_stub.match.return_value = result_in
 
         with patch.object(server, "get_client", return_value=mock_client):
-            result = server.find_duplicate_candidates("Jane", "Doe", email="jane@example.com")
+            data = json.loads(server.find_duplicate_candidates("Jane", "Doe", email="jane@example.com"))
 
-        data = json.loads(result)
-        assert data["exact_match"] is True
-        assert len(data["matches"]) == 1
-        assert data["matches"][0]["category"] == "exact"
+        assert data == result_in
+        profile = match_stub.match.call_args.args[1]
+        assert (profile.first_name, profile.last_name, profile.emails) == ("Jane", "Doe", ["jane@example.com"])
 
-    def test_find_dup_candidates_name_fuzzy_match(self, mock_client, sample_candidate):
-        """find_duplicate_candidates scores name-only match correctly."""
-        sample_candidate["firstName"] = "Jane"
-        sample_candidate["lastName"] = "Doe"
-        sample_candidate["email"] = "other@example.com"
-        sample_candidate["occupation"] = ""
-        sample_candidate["companyName"] = ""
-        sample_candidate["dateAdded"] = 0
-        mock_client.search.return_value = [sample_candidate]
+    def test_find_dup_candidates_name_fuzzy_match(self, mock_client, match_stub):
+        """A name-only query is a usable profile and its matches come back ranked."""
+        match_stub.match.return_value = _match_result([
+            _match(band="uncertain", percentage=52), _match(candidate_id=51, band="uncertain", percentage=40),
+        ])
 
         with patch.object(server, "get_client", return_value=mock_client):
-            result = server.find_duplicate_candidates("Jane", "Doe")
+            data = json.loads(server.find_duplicate_candidates("Jane", "Doe"))
 
-        data = json.loads(result)
-        assert len(data["matches"]) == 1
-        assert data["matches"][0]["confidence"] >= 0.50
+        assert [m["candidate_id"] for m in data["matches"]] == [50, 51]
+        assert match_stub.match.call_args.args[1].emails == []
 
     def test_find_dup_candidates_no_match(self, mock_client):
-        """find_duplicate_candidates returns empty matches when no records found."""
-        mock_client.search.return_value = []
-
+        """No match: an empty list with a match_check_id."""
         with patch.object(server, "get_client", return_value=mock_client):
-            result = server.find_duplicate_candidates("Completely", "Unknown")
+            data = json.loads(server.find_duplicate_candidates("Completely", "Unknown"))
 
-        data = json.loads(result)
         assert data["matches"] == []
-        assert data["exact_match"] is False
+        assert data["match_check_id"] == "chk-new"
 
-    def test_find_dup_candidates_api_error(self, mock_client):
+    def test_find_dup_candidates_api_error(self, mock_client, match_stub):
         """find_duplicate_candidates returns ERROR: prefix on BullhornAPIError."""
-        mock_client.search.side_effect = BullhornAPIError("Search failed")
+        match_stub.match.side_effect = BullhornAPIError("Search failed")
 
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.find_duplicate_candidates("Jane", "Doe")
 
-        assert result.startswith("ERROR:")
-    def test_tool_and_create_path_agree_on_same_fixture(self, mock_client):
-        """The tool's best match equals what the create paths' wrapper returns, from one search."""
-        record = {
-            "id": 50, "firstName": "Jane", "lastName": "Doe", "email": "other@example.com",
-            "phone": "", "occupation": "", "companyName": "", "dateAdded": 0,
-        }
-        mock_client.search.return_value = [record]
+        assert result == "ERROR: Search failed"
+
+    def test_tool_and_create_path_agree_on_same_fixture(self, mock_client, match_stub):
+        """The tool and create_candidate build the same profile for the same person and call the same function."""
+        from unittest.mock import Mock
+        from bullhorn_mcp.metadata import BullhornMetadata
+        meta = Mock(spec=BullhornMetadata)
+        meta.resolve_fields.side_effect = lambda entity, fields: fields
+        mock_client.resolve_owner.return_value = {"id": 1}
+        mock_client.create.return_value = {"changedEntityId": 5, "changeType": "INSERT", "data": {"id": 5}}
+
+        with patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=meta), \
+             patch.object(server, "get_candidate_required", return_value=[]), \
+             patch.object(server, "resolve_caller", return_value={"id": 1}):
+            server.find_duplicate_candidates("Jane", "Doe", email="jane@example.com")
+            server.create_candidate(
+                {"firstName": "Jane", "lastName": "Doe", "email": "jane@example.com", "owner": {"id": 1}}
+            )
+
+        tool_call, create_call = match_stub.match.call_args_list
+        assert tool_call.args[1] == create_call.args[1]
+
+    def test_run_match_check_swallows_errors(self, mock_client, match_stub):
+        """The create/parse wrapper returns None on a retrieval failure and reports the text; the tool reports ERROR:."""
+        match_stub.match.side_effect = BullhornAPIError("Search failed")
+        errors: list[str] = []
+
+        assert server._run_match_check(mock_client, server.CandidateProfile(first_name="Jane"), errors) is None
+        assert errors == ["Search failed"]
+
+        match_stub.match.side_effect = AuthenticationError("expired")
+        assert server._run_match_check(mock_client, server.CandidateProfile(first_name="Jane")) is None
+
+    def test_requires_a_signal(self, mock_client, match_stub):
+        """Nothing usable (blank strings, empty lists) is query_required; no check runs."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            data = json.loads(server.find_duplicate_candidates(first_name="  ", phones=[], work_history=[]))
+
+        assert data["error"] == "query_required"
+        match_stub.match.assert_not_called()
+
+    def test_all_signals_reach_the_profile(self, mock_client, match_stub):
+        """Phones, LinkedIn, employer, work history and education all land on the profile."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.find_duplicate_candidates(
+                phones=["+353 87 123 4567"], linkedin_url="https://www.linkedin.com/in/jane-doe",
+                current_company="Acme",
+                work_history=[{"companyName": "Acme", "title": "Engineer", "startDate": 1514764800000}],
+                education=[{"school": "UCD", "degree": "BA"}],
+            )
+
+        profile = match_stub.match.call_args.args[1]
+        assert profile.phones == ["+353 87 123 4567"]
+        assert profile.linkedin_url == "https://www.linkedin.com/in/jane-doe"
+        assert profile.current_company == "Acme"
+        assert len(profile.work_history) == 1 and len(profile.education) == 1
+
+    @pytest.mark.usefixtures("clean_upload_store")
+    def test_profile_from_upload_id(self, mock_client, match_stub, sample_parsed_resume):
+        """upload_id uses the stored parse as the profile; given arguments override its parts."""
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        upload_id = _seed_upload()
+
+        with _http_as(), patch.object(server, "get_client", return_value=mock_client):
+            server.find_duplicate_candidates(upload_id=upload_id)
+            server.find_duplicate_candidates(upload_id=upload_id, last_name="Smith", email="new@example.com")
+
+        base, overridden = (c.args[1] for c in match_stub.match.call_args_list)
+        cand = sample_parsed_resume["candidate"]
+        assert (base.first_name, base.last_name) == (cand["firstName"], cand["lastName"])
+        assert cand["email"] in base.emails and len(base.work_history) > 0
+        assert (overridden.first_name, overridden.last_name, overridden.emails) == ("Jane", "Smith", ["new@example.com"])
+        assert len(overridden.work_history) == len(base.work_history)
+        mock_client.parse_resume_file.assert_called_once()  # the stored parse served the second call
+
+    def test_deleted_match_flagged(self, mock_client, match_stub):
+        """deleted_matches come back separately from matches, as ids and names only."""
+        match_stub.match.return_value = _match_result(deleted_matches=[{"candidate_id": 9, "name": "Jane Doe"}])
 
         with patch.object(server, "get_client", return_value=mock_client):
-            tool = json.loads(server.find_duplicate_candidates("Jane", "Doe", email="jane@example.com"))
-        wrapped = server._check_candidate_duplicates(mock_client, "Jane", "Doe", "jane@example.com")
+            data = json.loads(server.find_duplicate_candidates("Jane", "Doe"))
 
-        assert tool["matches"][0] == wrapped
-        assert wrapped["record"] == record
-        assert wrapped["confidence"] >= 0.50
-        assert mock_client.search.call_args_list[0] == mock_client.search.call_args_list[1]
+        assert data["matches"] == []
+        assert data["deleted_matches"] == [{"candidate_id": 9, "name": "Jane Doe"}]
 
-    def test_check_wrapper_swallows_search_error(self, mock_client):
-        """The tool reports a search failure as ERROR:; the create-path wrapper returns None."""
-        mock_client.search.side_effect = BullhornAPIError("Search failed")
+    def test_response_has_reasons(self, mock_client, match_stub):
+        """Every match carries who, percentage, band and the breakdown reasons."""
+        match_stub.match.return_value = _match_result([_match()])
 
         with patch.object(server, "get_client", return_value=mock_client):
-            tool_result = server.find_duplicate_candidates("Jane", "Doe")
-        wrapped = server._check_candidate_duplicates(mock_client, "Jane", "Doe", None)
+            data = json.loads(server.find_duplicate_candidates("Jane", "Doe"))
 
-        assert tool_result == "ERROR: Search failed"
-        assert wrapped is None
+        m = data["matches"][0]
+        assert (m["candidate_id"], m["name"], m["percentage"], m["band"]) == (50, "Jane Doe", 97, "high")
+        assert [b["reason"] for b in m["breakdown"]] == ["Same email jane@example.com", "Same name Jane Doe"]
 
-        mock_client.search.side_effect = AuthenticationError("expired")
-        assert server._check_candidate_duplicates(mock_client, "Jane", "Doe", None) is None
+    def test_description_tells_claude_to_show_reasons(self):
+        """The rendered description (before Args:) carries the show-the-reasons instruction (D8b)."""
+        import asyncio
+        tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+        text = tools["find_duplicate_candidates"].description
+        assert "percentage" in text and "reasons" in text and "match_check_id" in text
+        for name in ("create_candidate", "create_candidate_from_cv"):
+            assert "reasons" in tools[name].description
 
 
 # --- CR41: CV upload ticket helpers ------------------------------------------
@@ -6007,16 +6221,10 @@ class TestParseCv:
         assert "duplicate_check" in data
         mock_client.create.assert_not_called()
 
-    def test_parse_cv_dup_found_in_preview(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
-        """parse_cv includes duplicate_check result when a matching Candidate is found."""
+    def test_parse_cv_dup_found_in_preview(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """parse_cv includes the full match result as duplicate_check, checked on the parsed profile."""
         mock_client.parse_resume_file.return_value = sample_parsed_resume
-        sample_candidate["firstName"] = "Jane"
-        sample_candidate["lastName"] = "Doe"
-        sample_candidate["email"] = "jane.doe@example.com"
-        sample_candidate["occupation"] = ""
-        sample_candidate["companyName"] = ""
-        sample_candidate["dateAdded"] = 0
-        mock_client.search.return_value = [sample_candidate]
+        match_stub.match.return_value = _match_result([_match(flags=["guaranteed_match:email"])], check_id="chk-parse")
 
         upload_id = _seed_upload()
 
@@ -6028,8 +6236,40 @@ class TestParseCv:
             )
 
         data = json.loads(result)
-        assert data["duplicate_check"] is not None
-        assert data["duplicate_check"]["category"] == "exact"
+        assert data["duplicate_check"]["matches"][0]["candidate_id"] == 50
+        assert data["duplicate_check"]["matches"][0]["breakdown"]
+        profile = match_stub.match.call_args.args[1]
+        assert (profile.first_name, profile.last_name) == ("Jane", "Doe")
+        assert profile.emails == ["jane.doe@example.com"]
+
+    @pytest.mark.usefixtures("clean_upload_store")
+    def test_parse_cv_returns_match_check_id(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """parse_cv's duplicate_check carries the match_check_id to pass to the write tools."""
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        match_stub.match.return_value = _match_result(check_id="chk-parse")
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            data = json.loads(server.parse_cv(upload_id=upload_id))
+
+        assert data["duplicate_check"]["match_check_id"] == "chk-parse"
+
+    @pytest.mark.usefixtures("clean_upload_store")
+    def test_parse_cv_check_failure_gives_null(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """A failed check does not fail the parse: duplicate_check is null."""
+        mock_client.parse_resume_file.return_value = sample_parsed_resume
+        match_stub.match.side_effect = BullhornAPIError("boom")
+        upload_id = _seed_upload()
+
+        with _http_as(), \
+             patch.object(server, "get_client", return_value=mock_client), \
+             patch.object(server, "get_metadata", return_value=mock_metadata):
+            data = json.loads(server.parse_cv(upload_id=upload_id))
+
+        assert data["duplicate_check"] is None
+        assert data["parsed"]["candidate"]["firstName"] == "Jane"
 
     def test_parse_cv_api_error(self, mock_client, mock_metadata):
         """parse_cv returns ERROR: prefix on BullhornAPIError from parse_resume_file."""
@@ -6121,7 +6361,7 @@ class TestParseCv:
                 "skillList": ["EXCEL", "ANNUAL BUDGET", "IFRS"],
                 "primarySkills": [{"name": "IFRS", "id": 1000125}, {"name": "Python", "id": 1000200}],
             },
-            "duplicate_check": None,
+            "duplicate_check": _match_result(),
         }
         assert server.upload_store.get(upload_id, "user-a")["parsed"] == sample_parsed_resume
         mock_client.parse_resume_file.assert_called_once()  # the second call used the stored parse
@@ -6191,7 +6431,7 @@ class TestParseCvText:
             "candidateEducation", "skillList", "primarySkills",
         }
         assert data["parsed"]["skillList"] == ["EXCEL", "ANNUAL BUDGET", "IFRS"]
-        assert data["duplicate_check"] is None
+        assert data["duplicate_check"] == _match_result()
 
 
 @pytest.mark.usefixtures("clean_upload_store")
@@ -6571,16 +6811,10 @@ class TestCreateCandidateFromCv:
             "Candidate", self._candidate_payload(sample_parsed_resume)
         )
 
-    def test_create_from_cv_duplicate_found(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+    def test_create_from_cv_duplicate_found(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
         """create_candidate_from_cv returns duplicate_found with the reviewable parse when a match is detected."""
         mock_client.parse_resume_file.return_value = sample_parsed_resume
-        sample_candidate["firstName"] = "Jane"
-        sample_candidate["lastName"] = "Doe"
-        sample_candidate["email"] = "jane.doe@example.com"
-        sample_candidate["occupation"] = ""
-        sample_candidate["companyName"] = ""
-        sample_candidate["dateAdded"] = 0
-        mock_client.search.return_value = [sample_candidate]
+        match_stub.match.return_value = _match_result([_match()])
 
         upload_id = _seed_upload()
 
@@ -6594,8 +6828,8 @@ class TestCreateCandidateFromCv:
 
         data = json.loads(result)
         assert data["duplicate_found"] is True
-        assert "hint" in data
-        assert data["match"]["category"] == "exact"
+        assert data["matches"][0]["candidate_id"] == 50
+        assert f"attach_cv(candidate_id=50, upload_id='{upload_id}', match_check_id='chk-new')" in data["hint"]
         assert "description" not in data["parsed"]["candidate"]
         assert data["parsed"]["description_length"] == len(sample_parsed_resume["candidate"]["description"])
         mock_client.create.assert_not_called()
@@ -6782,14 +7016,10 @@ class TestCreateCandidateFromCv:
         assert rec["data"] is None
         assert rec["file_id"] == 55
 
-    def test_create_duplicate_found_keeps_upload(self, mock_client, mock_metadata, sample_parsed_resume, sample_candidate):
+    def test_create_duplicate_found_keeps_upload(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
         """A duplicate stops before any write, so the upload and its bytes are kept."""
         self._wire_create(mock_client, sample_parsed_resume)
-        sample_candidate.update({
-            "firstName": "Jane", "lastName": "Doe", "email": "jane.doe@example.com",
-            "occupation": "", "companyName": "", "dateAdded": 0,
-        })
-        mock_client.search.return_value = [sample_candidate]
+        match_stub.match.return_value = _match_result([_match()])
         upload_id = _seed_upload()
 
         data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
@@ -6963,13 +7193,13 @@ class TestCreateCandidateFromCv:
         with pytest.raises(UploadInUse):
             server.upload_store.claim(upload_id, "user-a")  # the other call still holds it
 
-    def test_create_releases_claim_on_duplicate(self, mock_client, mock_metadata, sample_parsed_resume):
+    def test_create_releases_claim_on_duplicate(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
         """Returning early (duplicate found) still releases the upload for the next call."""
         self._wire_create(mock_client, sample_parsed_resume)
         upload_id = _seed_upload()
 
-        with patch.object(server, "_check_candidate_duplicates", return_value={"id": 9}):
-            data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+        match_stub.match.return_value = _match_result([_match(candidate_id=9)])
+        data = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
 
         assert data["duplicate_found"] is True
         server.upload_store.claim(upload_id, "user-a")  # does not raise
@@ -7151,8 +7381,104 @@ class TestCreateCandidateFromCv:
         assert data["written"]["description_length"] == len(html)
         assert "description" not in data["written"]["fields"]
 
-    def test_create_dup_check_uses_corrected_names(self, mock_client, mock_metadata, sample_parsed_resume):
-        """The duplicate search runs on the corrected names and email, not the raw parse."""
+    def test_create_from_cv_checks_corrected_profile(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """The profile is built from the corrected fields and the corrected work history and education (P5)."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        work = [{"companyName": "Gamma Ltd", "title": "Controller", "startDate": 1514764800000}]
+
+        self._run_create(
+            mock_client, mock_metadata, upload_id,
+            fields_override={"companyName": "Gamma Ltd"}, work_history=work, education=[],
+        )
+
+        match_stub.match.assert_called_once()
+        profile = match_stub.match.call_args.args[1]
+        assert profile.current_company == "Gamma Ltd"
+        assert len(profile.work_history) == 1 and profile.education == []
+
+    def test_match_candidates_called_once_per_create(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume)
+        self._run_create(mock_client, mock_metadata, _seed_upload())
+        match_stub.match.assert_called_once()
+
+    def test_high_band_stops(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume)
+        match_stub.match.return_value = _match_result([_match(band="high")])
+        data = json.loads(self._run_create(mock_client, mock_metadata, _seed_upload()))
+        assert data["duplicate_found"] is True
+        mock_client.create.assert_not_called()
+        match_stub.log.assert_not_called()
+
+    def test_guaranteed_identifier_stops(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume)
+        match_stub.match.return_value = _match_result(
+            [_match(band="uncertain", percentage=55, flags=["guaranteed_match:phone"])]
+        )
+        data = json.loads(self._run_create(mock_client, mock_metadata, _seed_upload()))
+        assert data["duplicate_found"] is True
+        mock_client.create.assert_not_called()
+
+    def test_uncertain_stops_and_lists(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume)
+        match_stub.match.return_value = _match_result([
+            _match(candidate_id=50, band="uncertain", percentage=55),
+            _match(candidate_id=51, band="uncertain", percentage=45),
+        ])
+        data = json.loads(self._run_create(mock_client, mock_metadata, _seed_upload()))
+        assert data["possible_duplicates"] is True
+        assert [m["candidate_id"] for m in data["matches"]] == [50, 51]
+        assert "force=True" in data["hint"]
+        assert "parsed" in data
+        mock_client.create.assert_not_called()
+
+    def test_low_band_writes(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume)
+        match_stub.match.return_value = _match_result(deleted_matches=[{"candidate_id": 9, "name": "Jane Doe"}])
+        data = json.loads(self._run_create(mock_client, mock_metadata, _seed_upload()))
+        assert data["created"] is True
+        assert data["duplicate_check"]["deleted_matches"] == [{"candidate_id": 9, "name": "Jane Doe"}]
+
+    def test_stop_response_has_reasons(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume)
+        match_stub.match.return_value = _match_result([_match(reasons=["Same email jane@example.com"])])
+        data = json.loads(self._run_create(mock_client, mock_metadata, _seed_upload()))
+        assert "Jane Doe (Candidate 50) 97% high: Same email jane@example.com" in data["message"]
+        assert data["matches"][0]["breakdown"][0]["reason"] == "Same email jane@example.com"
+
+    def test_force_skips_check_and_logs_created_with_force(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume, first_id=400)
+        match_stub.match.return_value = _match_result([_match()])
+        data = json.loads(self._run_create(
+            mock_client, mock_metadata, _seed_upload(), force=True, match_check_id="chk-earlier",
+        ))
+        assert data["created"] is True and data["duplicate_check"] is None
+        match_stub.match.assert_not_called()
+        match_stub.log.assert_called_once_with("chk-earlier", "created_with_force", 400, caller=1)
+
+    def test_force_without_id_logs_nothing(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume)
+        self._run_create(mock_client, mock_metadata, _seed_upload(), force=True)
+        match_stub.match.assert_not_called()
+        match_stub.log.assert_not_called()
+
+    def test_create_logs_created_new(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume, first_id=500)
+        match_stub.match.return_value = _match_result(check_id="chk-77")
+        self._run_create(mock_client, mock_metadata, _seed_upload())
+        match_stub.log.assert_called_once_with("chk-77", "created_new", 500, caller=1)
+
+    def test_check_failure_does_not_block_create(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._wire_create(mock_client, sample_parsed_resume)
+        match_stub.match.side_effect = BullhornAPIError("boom")
+        data = json.loads(self._run_create(mock_client, mock_metadata, _seed_upload()))
+        assert data["created"] is True
+        assert "Duplicate check could not run: boom" in data["warnings"]
+        assert data["duplicate_check"] is None
+        match_stub.log.assert_not_called()
+
+    def test_create_dup_check_uses_corrected_names(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """The match check runs on the corrected names and email, not the raw parse."""
         self._wire_create(mock_client, sample_parsed_resume)
         upload_id = _seed_upload()
 
@@ -7161,13 +7487,8 @@ class TestCreateCandidateFromCv:
             fields_override={"firstName": "Janet", "lastName": "Doe-Smith", "email": "janet@example.com"},
         ))
 
-        from unittest.mock import call
-        assert mock_client.search.call_args_list == [call(
-            "Candidate",
-            query='email:"janet@example.com" OR firstName:"Janet" OR lastName:"Doe-Smith"',
-            fields=server._CANDIDATE_DUP_FIELDS,
-            count=50,
-        )]
+        profile = match_stub.match.call_args.args[1]
+        assert (profile.first_name, profile.last_name, profile.emails) == ("Janet", "Doe-Smith", ["janet@example.com"])
         assert mock_client.create.call_args_list[0].args[1]["name"] == "Janet Doe-Smith"
         assert data["created"] is True
 
@@ -7224,7 +7545,7 @@ class TestCreateCandidateFromCv:
                 "primary_skills": [1000125, 1000200],
                 "file": {"file_id": 55, "name": "Jane_Doe_CV.pdf"},
             },
-            "duplicate_check": None,
+            "duplicate_check": _match_result(),
         }
 
     def test_create_marks_attached_with_candidate_id(self, mock_client, mock_metadata, sample_parsed_resume):
@@ -7454,6 +7775,27 @@ class TestAttachCv:
         assert plan["additions"]["education"] == [edu[0]]
 
     # --- Contract ---------------------------------------------------------------
+
+    def test_attach_cv_logs_outcome_under_given_id(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """A call that wrote something logs attached_to under the given match_check_id."""
+        self._prep(mock_client, sample_parsed_resume)
+
+        data = self._attach(mock_client, mock_metadata, upload_id=_seed_upload(), match_check_id="chk-9")
+
+        assert data["committed"] is True
+        match_stub.log.assert_called_once()
+        assert match_stub.log.call_args.args == ("chk-9", "attached_to", self.CID)
+
+    def test_attach_cv_logs_nothing_without_id(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        self._prep(mock_client, sample_parsed_resume)
+        self._attach(mock_client, mock_metadata, upload_id=_seed_upload())
+        match_stub.log.assert_not_called()
+
+    def test_attach_cv_runs_no_check(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """attach_cv never runs the match check, with or without an id."""
+        self._prep(mock_client, sample_parsed_resume)
+        self._attach(mock_client, mock_metadata, upload_id=_seed_upload(), match_check_id="chk-9")
+        match_stub.match.assert_not_called()
 
     def test_attach_without_confirm_writes_additions_only(self, mock_client, mock_metadata, sample_parsed_resume):
         """No confirm: the update payload has only the empty-field additions, never the overwrite field."""

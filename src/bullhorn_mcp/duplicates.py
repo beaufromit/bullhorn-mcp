@@ -46,6 +46,8 @@ _REQUIRED_KEYS = (
     "caps.name_only_percentage",
     "caps.max_employers",
     "caps.education_points",
+    "retrieval.pool_cap",
+    "retrieval.employer_rerun_over",
     "identifiers.email",
     "identifiers.phone",
     "identifiers.linkedin",
@@ -127,6 +129,8 @@ _PENALTY_LEVELS = ("forename.different", "surname.different")
 _NUMBER_KEYS = (
     ("caps.max_employers", True, 1),
     ("caps.education_points", False, 0),
+    ("retrieval.pool_cap", True, 1),
+    ("retrieval.employer_rerun_over", True, 1),
     ("identifier_guard.generic_min_holders", True, 1),
     ("employer.overlap_bonus", False, 0),
     ("employer.title_bonus", False, 0),

@@ -2,7 +2,7 @@
   "version": "1",
   "_comment": "CR44 match-check weights. Placeholder values until calibration (Sprint 42B T42B.6, then match-log outcomes). Each agreeing signal adds log2(m/u) points; 'points' entries are fixed values. Any change here is a reviewed change and should bump version once shipped.",
   "population": {
-    "fallback_n": 73815,
+    "fallback_n": 74000,
     "pi_numerator": 0.3
   },
   "bands": {
@@ -14,6 +14,10 @@
     "max_employers": 3,
     "education_points": 2.5
   },
+  "retrieval": {
+    "pool_cap": 100,
+    "employer_rerun_over": 200
+  },
   "identifiers": {
     "email": {"m": 0.95, "u": 1e-09, "differ_points": -2},
     "phone": {"m": 0.9, "u": 1e-09, "differ_points": -2},
@@ -21,10 +25,10 @@
   },
   "identifier_guard": {
     "m": 0.85,
-    "generic_min_holders": 25
+    "generic_min_holders": 30
   },
   "forename": {
-    "exact": {"m": 0.88, "u": 0.015},
+    "exact": {"m": 0.88, "u": 0.005},
     "equivalent": {"m": 0.05, "u": 0.004},
     "initial": {"m": 0.04, "u": 0.01},
     "typo": {"m": 0.03, "u": 0.003},
@@ -37,7 +41,7 @@
   },
   "employer": {
     "m": 0.6,
-    "default_u": 0.001,
+    "default_u": 0.005,
     "overlap_bonus": 1.5,
     "title_bonus": 1.0
   },
