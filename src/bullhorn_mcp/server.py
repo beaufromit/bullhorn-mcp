@@ -2431,7 +2431,7 @@ def find_duplicate_candidates(
 
         return format_response(match_candidates(client, profile, caller=_match_caller(client)))
 
-    except (AuthenticationError, BullhornAPIError) as e:
+    except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as e:
         return f"ERROR: {e}"
 
 

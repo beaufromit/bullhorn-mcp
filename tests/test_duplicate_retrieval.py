@@ -303,6 +303,15 @@ class TestPool:
         assert [x.candidate_id for x in pool] == [21]
         assert "lookup_hit_cutoff" not in flags
 
+    def test_employer_rerun_over_cap_sets_cutoff(self, bh):
+        """Review cycle 2 m1: a rerun that itself exceeds the cap is cut, so the cutoff flag is set."""
+        bh.on_search(lambda q: "workHistories" in q and "lastName" in q, ids=list(range(1, 101)), total=137)
+        bh.on_search(lambda q: "workHistories" in q, ids=list(range(1, 101)), total=16961)
+        p = profile(first_name=None, work_history=[WorkEntry(company="Wibble Wobble")])
+        _, ctx, flags = dr.retrieve_pool(bh.client, p, CONFIG)
+        assert ctx.employer_counts == {"wibble wobble": 16961}
+        assert "lookup_hit_cutoff" in flags
+
     def test_employer_over_cap_without_surname_not_rerun(self, bh):
         bh.on_search(lambda q: "workHistories" in q, ids=[1], total=450)
         p = profile(first_name=None, last_name=None, work_history=[WorkEntry(company="Wibble Wobble")])

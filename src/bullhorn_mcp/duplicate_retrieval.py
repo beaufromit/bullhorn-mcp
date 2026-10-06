@@ -269,7 +269,8 @@ def retrieve_pool(client, profile: CandidateProfile, config: dict) -> tuple[list
             except Exception as exc:
                 _logger.warning("employer rerun failed: %s", exc)
                 return {**first, "flags": ["lookup_failed:employer_rerun"]}
-            return {"ids": second["ids"], "total": first["total"], "narrowed": True}
+            # Narrowed only if the rerun itself fits under the cap; else it is cut too.
+            return {"ids": second["ids"], "total": first["total"], "narrowed": second["total"] <= cap}
         return first
 
     employer_keys = profile.to_echo(config)["employers"][: config["caps"]["max_employers"]]

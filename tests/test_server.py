@@ -1,5 +1,6 @@
 """Tests for MCP server tools."""
 
+import contextlib
 import importlib
 import json
 import os
@@ -6027,6 +6028,16 @@ class TestFindDuplicateCandidates:
         assert data["matches"] == []
         assert data["match_check_id"] == "chk-new"
 
+    def test_find_dup_candidates_network_error(self, mock_client, match_stub):
+        """Review cycle 2 m2: a Bullhorn timeout is an ERROR: string on the tool too, as on the create paths."""
+        import httpx
+        match_stub.match.side_effect = httpx.ReadTimeout("timed out")
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.find_duplicate_candidates("Jane", "Doe")
+
+        assert result == "ERROR: timed out"
+
     def test_find_dup_candidates_api_error(self, mock_client, match_stub):
         """find_duplicate_candidates returns ERROR: prefix on BullhornAPIError."""
         match_stub.match.side_effect = BullhornAPIError("Search failed")
@@ -6122,6 +6133,7 @@ class TestFindDuplicateCandidates:
         mock_client.parse_resume_file.assert_called_once()  # the stored parse served the second call
 
     @staticmethod
+    @contextlib.contextmanager
     def _real_check(mock_client, match_stub, answer):
         """Run the real match check behind the tool (review m6); ``answer(query)`` answers each Candidate search."""
         from bullhorn_mcp import duplicate_retrieval as dr
@@ -6135,8 +6147,11 @@ class TestFindDuplicateCandidates:
 
         mock_client.search_with_meta.side_effect = search
         mock_client.query_with_meta.side_effect = lambda entity, where, **kw: {"data": [], "total": 0}
-        log = patch.object(dr, "match_log")
-        return log
+        try:
+            with patch.object(dr, "match_log") as log:
+                yield log
+        finally:
+            dr._reset_n_cache()  # review cycle 2 m3: no cached N left for later tests
 
     def test_deleted_match_flagged(self, mock_client, match_stub):
         """A soft-deleted namesake comes back in deleted_matches, ids and names only, never scored."""
