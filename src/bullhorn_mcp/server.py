@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+import httpx
 from importlib import resources as _pkg_resources
 from typing import Any
 from urllib.parse import urlparse
@@ -98,9 +99,11 @@ def _run_match_check(client: BullhornClient, profile: CandidateProfile, errors: 
 
     ``errors`` collects the failure text so a create path can warn about it.
     """
+    # Only Bullhorn and network failures are swallowed: a bug in retrieval or
+    # scoring must surface, not silently turn duplicate protection off.
     try:
         return match_candidates(client, profile, caller=_match_caller(client))
-    except Exception as exc:  # noqa: BLE001 - AuthenticationError, BullhornAPIError or a retrieval bug
+    except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as exc:
         _logger.warning("Candidate match check could not run: %s", exc)
         if errors is not None:
             errors.append(str(exc))
@@ -149,6 +152,12 @@ def _duplicate_policy(result: dict | None, hint: str) -> dict | None:
         return None
     check_id = result.get("match_check_id")
     top = listed[0]
+    hint = hint.replace("{candidate_id}", str(top.get("candidate_id"))).replace("{match_check_id}", str(check_id))
+    if len(listed) > 1:
+        hint = (
+            f"{len(listed)} candidates are listed; Candidate {top.get('candidate_id')} is the top match. "
+            "Ask the consultant which one, if any, is this person, and use that id. " + hint
+        )
     return {
         kind: True,
         "match_check_id": check_id,
@@ -156,7 +165,7 @@ def _duplicate_policy(result: dict | None, hint: str) -> dict | None:
         "deleted_matches": result.get("deleted_matches") or [],
         "flags": result.get("flags") or [],
         "message": f"{intro}. Nothing was created. " + " | ".join(_match_summary(m) for m in listed),
-        "hint": hint.replace("{candidate_id}", str(top.get("candidate_id"))).replace("{match_check_id}", str(check_id)),
+        "hint": hint,
     }
 
 
@@ -3261,11 +3270,15 @@ def _create_candidate_from_cv(
             dup = _run_match_check(client, profile_from_fields(candidate_data, work_history, education), check_errors)
             if dup is None:
                 warnings.append(f"Duplicate check could not run: {check_errors[0] if check_errors else 'unknown error'}")
-            upload_ref = f"upload_id='{upload_id}', " if upload_id else ""
+            # attach_cv needs an upload; a CV given as content can only update the record.
+            existing_step = (
+                f"To add this CV to the existing record call attach_cv(candidate_id={{candidate_id}}, "
+                f"upload_id='{upload_id}', match_check_id='{{match_check_id}}')."
+                if upload_id else
+                "To change the existing record use update_record on Candidate {candidate_id}."
+            )
             stop = _duplicate_policy(dup, (
-                "To add this CV to the existing record call attach_cv(candidate_id={candidate_id}, "
-                + upload_ref
-                + "match_check_id='{match_check_id}'). To create a new Candidate anyway, call "
+                existing_step + " To create a new Candidate anyway, call "
                 "create_candidate_from_cv again with force=True and match_check_id='{match_check_id}'."
             ))
             if stop is not None:

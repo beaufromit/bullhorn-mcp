@@ -152,6 +152,13 @@ class TestMatchConfig:
         with pytest.raises(MatchConfigError, match=re.escape("population.pi_numerator")):
             load_match_config(_write(tmp_path, bad))
 
+    def test_employer_rerun_must_not_exceed_pool_cap(self, tmp_path, config):
+        """Review m1: a rerun threshold above the cap leaves totals between the two cut, not narrowed."""
+        bad = copy.deepcopy(config)
+        bad["retrieval"]["employer_rerun_over"] = bad["retrieval"]["pool_cap"] + 1
+        with pytest.raises(MatchConfigError, match=re.escape("retrieval.employer_rerun_over")):
+            load_match_config(_write(tmp_path, bad))
+
     def test_version_must_be_string(self, tmp_path, config):
         bad = copy.deepcopy(config)
         bad["version"] = 1

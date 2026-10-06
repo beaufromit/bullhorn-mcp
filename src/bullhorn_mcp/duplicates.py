@@ -177,6 +177,14 @@ def validate_match_config(config: dict) -> dict:
             f"match config 'caps.name_only_percentage' ({cap}) must be below 'bands.high' ({high}), "
             "or a name match alone could reach the high band"
         )
+    pool_cap = _lookup(config, "retrieval.pool_cap")
+    rerun_over = _lookup(config, "retrieval.employer_rerun_over")
+    if rerun_over > pool_cap:
+        raise MatchConfigError(
+            f"match config 'retrieval.employer_rerun_over' ({rerun_over}) must not exceed "
+            f"'retrieval.pool_cap' ({pool_cap}), or an employer search between the two is cut "
+            "at the cap without being narrowed"
+        )
     n = _lookup(config, "population.fallback_n")
     pi = _lookup(config, "population.pi_numerator")
     if not isinstance(n, int) or isinstance(n, bool) or n <= 1:

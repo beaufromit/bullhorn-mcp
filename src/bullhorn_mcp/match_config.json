@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "_comment": "CR44 match-check weights. Placeholder values until calibration (Sprint 42B T42B.6, then match-log outcomes). Each agreeing signal adds log2(m/u) points; 'points' entries are fixed values. Any change here is a reviewed change and should bump version once shipped.",
+  "_comment": "CR44 match-check weights. The u values come from the live calibration (Sprint 42B T42B.6, 2026-10-06); match-log outcomes refine them later. employer_rerun_over must not exceed pool_cap, or an employer search between the two is cut at the cap without being narrowed. Each agreeing signal adds log2(m/u) points; 'points' entries are fixed values. Any change here is a reviewed change and should bump version once shipped.",
   "population": {
     "fallback_n": 74000,
     "pi_numerator": 0.3
@@ -16,7 +16,7 @@
   },
   "retrieval": {
     "pool_cap": 100,
-    "employer_rerun_over": 200
+    "employer_rerun_over": 100
   },
   "identifiers": {
     "email": {"m": 0.95, "u": 1e-09, "differ_points": -2},

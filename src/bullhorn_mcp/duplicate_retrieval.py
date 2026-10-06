@@ -147,6 +147,15 @@ def _surname_query(profile: CandidateProfile, with_initial: bool) -> str | None:
     return query
 
 
+def _surname_count_query(profile: CandidateProfile) -> str | None:
+    # Commonness only, and exact: the scorer uses it for an exact surname
+    # agreement, and a ~1 total would also count every one-letter variant.
+    forms = name_forms(profile.last_name)
+    if not forms:
+        return None
+    return _or([f"lastName:{_lucene_term(f)}" for f in forms])
+
+
 def _forename_query(profile: CandidateProfile) -> str | None:
     # Commonness only: without it an exact forename falls back to the config u,
     # which puts every same-name pair in the uncertain band and stops the create.
@@ -228,13 +237,8 @@ def retrieve_pool(client, profile: CandidateProfile, config: dict) -> tuple[list
     rerun_over = config["retrieval"]["employer_rerun_over"]
     cc = config["default_country_code"]
 
-    # Read the session once so parallel first calls do not each refresh it, and
-    # settle the isDeleted gate for Candidate before fanning out.
-    client.auth.session
-    try:
-        client._entity_has_isdeleted("Candidate")
-    except Exception:
-        pass
+    # Settle the session and the Candidate isDeleted gate before fanning out.
+    client.prepare_for_parallel("Candidate")
 
     surname_pool_query = _surname_query(profile, with_initial=True)
     surname_plain_query = _surname_query(profile, with_initial=False)
@@ -250,8 +254,9 @@ def retrieve_pool(client, profile: CandidateProfile, config: dict) -> tuple[list
         tasks.append(("linkedin", lkey, lambda q=_linkedin_query(lkey): _run_search(client, q, cap)))
     if surname_pool_query:
         tasks.append(("surname", "pool", lambda q=surname_pool_query: _run_search(client, q, cap)))
-        if surname_pool_query != surname_plain_query:
-            tasks.append(("surname_count", "plain", lambda q=surname_plain_query: _run_search(client, q, 1)))
+    surname_count_query = _surname_count_query(profile)
+    if surname_count_query:
+        tasks.append(("surname_count", "plain", lambda q=surname_count_query: _run_search(client, q, 1)))
     forename_query = _forename_query(profile)
     if forename_query:
         tasks.append(("forename_count", "plain", lambda q=forename_query: _run_search(client, q, 1)))
@@ -303,7 +308,7 @@ def retrieve_pool(client, profile: CandidateProfile, config: dict) -> tuple[list
             if profile.candidate_id is not None and profile.candidate_id in res["ids"]:
                 holders = max(0, holders - 1)  # the profile's own record is not another holder
             context.identifier_holders.setdefault(kind, {})[key] = holders
-        elif kind == "surname_count" or (kind == "surname" and surname_pool_query == surname_plain_query):
+        elif kind == "surname_count":
             skey = name_key(profile.last_name)
             if skey:
                 context.surname_counts[skey] = res["total"]

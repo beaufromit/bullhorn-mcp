@@ -154,19 +154,21 @@ class TestSearchShapes:
         dr.retrieve_pool(bh.client, profile(linkedin_url="linkedin.com/pub/aoife-zephyr/a/216/98"), CONFIG)
         assert queries_matching(bh, "companyURL") == ['(companyURL:"aoife-zephyr a 216 98") AND isDeleted:0']
 
-    def test_surname_with_initial_and_plain_count(self, bh):
+    def test_surname_with_initial_and_exact_count(self, bh):
         dr.retrieve_pool(bh.client, profile(), CONFIG)
         # searches run in parallel, so arrival order is not fixed
         assert sorted(queries_matching(bh, "lastName")) == sorted([
             "(lastName:zephyr~1 AND firstName:a*) AND isDeleted:0",
-            "(lastName:zephyr~1) AND isDeleted:0",
+            "(lastName:zephyr) AND isDeleted:0",
         ])
+        counts = [s for s in bh.searches if s["query"] == "(lastName:zephyr) AND isDeleted:0"]
+        assert counts[0]["count"] == "1"
 
     def test_surname_both_apostrophe_forms(self, bh):
         dr.retrieve_pool(bh.client, profile(last_name="O'Brien"), CONFIG)
         assert sorted(queries_matching(bh, "lastName")) == sorted([
             "((lastName:o'brien~1 OR lastName:obrien~1) AND firstName:a*) AND isDeleted:0",
-            "((lastName:o'brien~1 OR lastName:obrien~1)) AND isDeleted:0",
+            "((lastName:o'brien OR lastName:obrien)) AND isDeleted:0",
         ])
 
     def test_forename_count_search_both_apostrophe_forms(self, bh):
@@ -190,9 +192,21 @@ class TestSearchShapes:
         assert "lookup_failed:forename" in flags
         assert ctx.forename_counts == {}
 
-    def test_surname_without_first_name_is_one_search(self, bh):
+    def test_surname_without_first_name_pool_and_exact_count(self, bh):
         dr.retrieve_pool(bh.client, profile(first_name=None), CONFIG)
-        assert queries_matching(bh, "lastName") == ["(lastName:zephyr~1) AND isDeleted:0"]
+        assert sorted(queries_matching(bh, "lastName")) == sorted([
+            "(lastName:zephyr~1) AND isDeleted:0",
+            "(lastName:zephyr) AND isDeleted:0",
+        ])
+
+    def test_surname_commonness_is_exact_total_not_fuzzy(self, bh):
+        """Review M1: the exact-surname u comes from the exact total; the ~1 total takes in every one-letter variant."""
+        bh.on_search(lambda q: q.startswith("(lastName:lee~1)"), ids=[31], total=124)
+        bh.on_search(lambda q: q.startswith("(lastName:lee)"), ids=[31], total=74)
+        bh.candidates = {31: {"id": 31, "firstName": "Bo", "lastName": "Lea"}}
+        pool, ctx, _ = dr.retrieve_pool(bh.client, profile(first_name=None, last_name="Lee"), CONFIG)
+        assert ctx.surname_counts == {"lee": 74}
+        assert [p.candidate_id for p in pool] == [31]  # the fuzzy search still feeds the pool
 
     def test_employer_company_and_title(self, bh):
         p = profile(first_name=None, last_name=None, work_history=[WorkEntry(company="Wibble Wobble Ltd")])
@@ -264,7 +278,7 @@ class TestPool:
         assert [q["start"] for q in wh] == ["0", "500"]
         assert len(pool[0].work_history) == 700
 
-    def test_employer_over_200_reruns_with_surname_keeps_total(self, bh):
+    def test_employer_over_cap_reruns_with_surname_keeps_total(self, bh):
         emp = "(workHistories.companyName:(wibble AND wobble) OR workHistories.title:(wibble AND wobble))"
         bh.on_search(lambda q: q.startswith("((" + emp[1:]) and "lastName" in q, ids=[21])
         bh.on_search(lambda q: "workHistories" in q, ids=[1, 2], total=450)
@@ -277,7 +291,19 @@ class TestPool:
         assert [x.candidate_id for x in pool] == [21]
         assert "lookup_hit_cutoff" not in flags
 
-    def test_employer_over_200_without_surname_not_rerun(self, bh):
+    def test_employer_between_cap_and_old_200_is_narrowed(self, bh):
+        """Review m1: a total of 150 (over the 100 cap) is narrowed by surname, not cut at the cap."""
+        bh.on_search(lambda q: "workHistories" in q and "lastName" in q, ids=[21])
+        bh.on_search(lambda q: "workHistories" in q, ids=list(range(1, 101)), total=150)
+        bh.candidates = {21: {"id": 21, "firstName": "A", "lastName": "Zephyr"}}
+        p = profile(first_name=None, work_history=[WorkEntry(company="Wibble Wobble")])
+        pool, ctx, flags = dr.retrieve_pool(bh.client, p, CONFIG)
+        assert len(queries_matching(bh, "workHistories")) == 2
+        assert ctx.employer_counts == {"wibble wobble": 150}
+        assert [x.candidate_id for x in pool] == [21]
+        assert "lookup_hit_cutoff" not in flags
+
+    def test_employer_over_cap_without_surname_not_rerun(self, bh):
         bh.on_search(lambda q: "workHistories" in q, ids=[1], total=450)
         p = profile(first_name=None, last_name=None, work_history=[WorkEntry(company="Wibble Wobble")])
         _, ctx, flags = dr.retrieve_pool(bh.client, p, CONFIG)

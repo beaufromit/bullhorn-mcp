@@ -6068,6 +6068,17 @@ class TestFindDuplicateCandidates:
         match_stub.match.side_effect = AuthenticationError("expired")
         assert server._run_match_check(mock_client, server.CandidateProfile(first_name="Jane")) is None
 
+        import httpx
+        match_stub.match.side_effect = httpx.ReadTimeout("timed out")
+        assert server._run_match_check(mock_client, server.CandidateProfile(first_name="Jane")) is None
+
+    def test_run_match_check_does_not_hide_bugs(self, mock_client, match_stub):
+        """Review M2: a programming error in retrieval or scoring surfaces instead of turning the check off."""
+        match_stub.match.side_effect = KeyError("surname")
+
+        with pytest.raises(KeyError):
+            server._run_match_check(mock_client, server.CandidateProfile(first_name="Jane"), [])
+
     def test_requires_a_signal(self, mock_client, match_stub):
         """Nothing usable (blank strings, empty lists) is query_required; no check runs."""
         with patch.object(server, "get_client", return_value=mock_client):
@@ -6110,26 +6121,57 @@ class TestFindDuplicateCandidates:
         assert len(overridden.work_history) == len(base.work_history)
         mock_client.parse_resume_file.assert_called_once()  # the stored parse served the second call
 
-    def test_deleted_match_flagged(self, mock_client, match_stub):
-        """deleted_matches come back separately from matches, as ids and names only."""
-        match_stub.match.return_value = _match_result(deleted_matches=[{"candidate_id": 9, "name": "Jane Doe"}])
+    @staticmethod
+    def _real_check(mock_client, match_stub, answer):
+        """Run the real match check behind the tool (review m6); ``answer(query)`` answers each Candidate search."""
+        from bullhorn_mcp import duplicate_retrieval as dr
+        dr._reset_n_cache()
+        match_stub.match.side_effect = dr.match_candidates
 
-        with patch.object(server, "get_client", return_value=mock_client):
+        def search(entity, query, **kw):
+            if query.startswith("id:[1 TO *]"):
+                return {"data": [{"id": 1}], "total": 70000}
+            return answer(query) or {"data": [], "total": 0}
+
+        mock_client.search_with_meta.side_effect = search
+        mock_client.query_with_meta.side_effect = lambda entity, where, **kw: {"data": [], "total": 0}
+        log = patch.object(dr, "match_log")
+        return log
+
+    def test_deleted_match_flagged(self, mock_client, match_stub):
+        """A soft-deleted namesake comes back in deleted_matches, ids and names only, never scored."""
+        def answer(query):
+            if "isDeleted:1" in query and "lastName" in query:
+                return {"data": [{"id": 9, "firstName": "Jane", "lastName": "Doe"}], "total": 1}
+            return None
+
+        with self._real_check(mock_client, match_stub, answer) as log, \
+             patch.object(server, "get_client", return_value=mock_client):
+            log.new_match_check_id.return_value = "chk-real"
             data = json.loads(server.find_duplicate_candidates("Jane", "Doe"))
 
         assert data["matches"] == []
         assert data["deleted_matches"] == [{"candidate_id": 9, "name": "Jane Doe"}]
+        assert data["match_check_id"] == "chk-real"
 
     def test_response_has_reasons(self, mock_client, match_stub):
-        """Every match carries who, percentage, band and the breakdown reasons."""
-        match_stub.match.return_value = _match_result([_match()])
+        """A scored match carries who, percentage, band and a reason naming the shared email."""
+        def answer(query):
+            if query.startswith("id:("):
+                return {"data": [{"id": 50, "firstName": "Jane", "lastName": "Doe", "email": "jane@example.com"}], "total": 1}
+            if "email:" in query and "isDeleted:1" not in query:
+                return {"data": [{"id": 50}], "total": 1}
+            return None
 
-        with patch.object(server, "get_client", return_value=mock_client):
-            data = json.loads(server.find_duplicate_candidates("Jane", "Doe"))
+        with self._real_check(mock_client, match_stub, answer) as log, \
+             patch.object(server, "get_client", return_value=mock_client):
+            log.new_match_check_id.return_value = "chk-real"
+            data = json.loads(server.find_duplicate_candidates("Jane", "Doe", email="jane@example.com"))
 
-        m = data["matches"][0]
-        assert (m["candidate_id"], m["name"], m["percentage"], m["band"]) == (50, "Jane Doe", 97, "high")
-        assert [b["reason"] for b in m["breakdown"]] == ["Same email jane@example.com", "Same name Jane Doe"]
+        [m] = data["matches"]
+        assert (m["candidate_id"], m["name"]) == (50, "Jane Doe")
+        assert m["band"] == "high" and isinstance(m["percentage"], (int, float))
+        assert any("jane@example.com" in b["reason"] for b in m["breakdown"])
 
     def test_description_tells_claude_to_show_reasons(self):
         """The rendered description (before Args:) carries the show-the-reasons instruction (D8b)."""
@@ -7446,6 +7488,35 @@ class TestCreateCandidateFromCv:
         assert "Jane Doe (Candidate 50) 97% high: Same email jane@example.com" in data["message"]
         assert data["matches"][0]["breakdown"][0]["reason"] == "Same email jane@example.com"
 
+    def test_stop_hint_by_source(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """Review m2: an upload stop names attach_cv with the upload_id; a text CV (no upload) names update_record."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        mock_client.parse_resume_text.return_value = sample_parsed_resume
+        match_stub.match.return_value = _match_result([_match(band="high")])
+        upload_id = _seed_upload()
+
+        upload_stop = json.loads(self._run_create(mock_client, mock_metadata, upload_id))
+        text_stop = json.loads(self._run_text(mock_client, mock_metadata))
+
+        assert f"attach_cv(candidate_id=50, upload_id='{upload_id}', match_check_id='chk-new')" in upload_stop["hint"]
+        assert "attach_cv" not in text_stop["hint"]
+        assert "update_record on Candidate 50" in text_stop["hint"]
+        assert "force=True and match_check_id='chk-new'" in text_stop["hint"]
+
+    def test_stop_hint_names_every_listed_candidate(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """Review m7: with more than one listed match the hint says so instead of naming only the top id."""
+        self._wire_create(mock_client, sample_parsed_resume)
+        match_stub.match.return_value = _match_result([
+            _match(candidate_id=50, band="uncertain", percentage=55),
+            _match(candidate_id=51, band="uncertain", percentage=45),
+        ])
+        data = json.loads(self._run_create(mock_client, mock_metadata, _seed_upload()))
+        assert data["hint"].startswith("2 candidates are listed; Candidate 50 is the top match.")
+
+        match_stub.match.return_value = _match_result([_match(candidate_id=50, band="uncertain", percentage=55)])
+        data = json.loads(self._run_create(mock_client, mock_metadata, _seed_upload()))
+        assert "candidates are listed" not in data["hint"]
+
     def test_force_skips_check_and_logs_created_with_force(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
         self._wire_create(mock_client, sample_parsed_resume, first_id=400)
         match_stub.match.return_value = _match_result([_match()])
@@ -7789,6 +7860,47 @@ class TestAttachCv:
     def test_attach_cv_logs_nothing_without_id(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
         self._prep(mock_client, sample_parsed_resume)
         self._attach(mock_client, mock_metadata, upload_id=_seed_upload())
+        match_stub.log.assert_not_called()
+
+    def test_attach_cv_logs_nothing_when_nothing_written(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """Review M3: a call that wrote nothing (record already holds it all, file attached) logs no outcome."""
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        self._attach(mock_client, mock_metadata, upload_id=upload_id)
+        existing, wh, edu, linked = self._written_state(sample_parsed_resume)
+        self._prep(mock_client, sample_parsed_resume, existing, wh, edu, linked)
+        mock_client.update.reset_mock()
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id, match_check_id="chk-9")
+
+        mock_client.update.assert_not_called()  # the overwrite waits for confirm
+        assert data["written"]["file"]["already_attached"] is True
+        match_stub.log.assert_not_called()
+
+    def test_attach_cv_created_upload_logs_outcome(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """Review M3: the file-only path for the Candidate the upload created logs attached_to when the file goes on."""
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        server.upload_store.mark_created(upload_id, self.CID)
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id, match_check_id="chk-9")
+
+        assert data["written"]["file"] == {"file_id": 80, "name": "Jane_Doe_CV.pdf"}
+        match_stub.log.assert_called_once()
+        assert match_stub.log.call_args.args == ("chk-9", "attached_to", self.CID)
+
+    def test_attach_cv_created_upload_already_attached_logs_nothing(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):
+        """Review M3: the file-only path with the file already on the record writes nothing and logs nothing."""
+        self._prep(mock_client, sample_parsed_resume)
+        upload_id = _seed_upload()
+        server.upload_store.set_parsed(upload_id, "user-a", sample_parsed_resume)  # the create parsed it
+        server.upload_store.mark_created(upload_id, self.CID)
+        server.upload_store.mark_attached(upload_id, 80, self.CID)
+
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id, match_check_id="chk-9")
+
+        assert data["written"]["file"]["already_attached"] is True
+        mock_client.attach_file.assert_not_called()
         match_stub.log.assert_not_called()
 
     def test_attach_cv_runs_no_check(self, mock_client, mock_metadata, sample_parsed_resume, match_stub):

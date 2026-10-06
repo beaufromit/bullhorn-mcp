@@ -1,5 +1,6 @@
 """Bullhorn REST API client."""
 
+import threading
 import httpx
 from typing import Any
 
@@ -75,6 +76,20 @@ class BullhornClient:
         self._isdeleted_cache: dict[str, bool] = {}
         # Cached verdict of note_search_returns_results(); None until probed.
         self._note_search_probe: bool | None = None
+        # Serialises the 401 refresh, so parallel calls refresh an expired session once.
+        self._refresh_lock = threading.Lock()
+
+    def prepare_for_parallel(self, entity: str) -> None:
+        """Settle the session and the isDeleted gate for ``entity`` before parallel calls.
+
+        Without it, concurrent first calls would each refresh the session and each
+        fetch /meta. A failed /meta is left to the gate's own safe default.
+        """
+        self.auth.session
+        try:
+            self._entity_has_isdeleted(entity)
+        except Exception:
+            pass
 
     def note_search_returns_results(self) -> bool | None:
         """Return whether the Lucene /search/Note route returns any documents.
@@ -126,6 +141,17 @@ class BullhornClient:
         self._isdeleted_cache[entity] = has
         return has
 
+    def _refresh_after_401(self, failed_token: str):
+        """Refresh the session after a 401 and return it.
+
+        A call that waited on the lock while another refreshed sees a new token
+        and reuses it instead of logging in again.
+        """
+        with self._refresh_lock:
+            if self.auth.session.bh_rest_token == failed_token:
+                self.auth._refresh_session()
+            return self.auth.session
+
     def _request(
         self,
         method: str,
@@ -144,8 +170,7 @@ class BullhornClient:
 
             if response.status_code == 401:
                 # Session expired, force refresh and retry
-                self.auth._refresh_session()
-                session = self.auth.session
+                session = self._refresh_after_401(headers["BhRestToken"])
                 headers = {"BhRestToken": session.bh_rest_token}
                 response = client.request(method, url, params=params, json=json, headers=headers)
 
@@ -185,8 +210,7 @@ class BullhornClient:
             response = client.request(method, url, files=files, params=params, headers=headers)
 
             if response.status_code == 401:
-                self.auth._refresh_session()
-                session = self.auth.session
+                session = self._refresh_after_401(headers["BhRestToken"])
                 headers = {"BhRestToken": session.bh_rest_token}
                 response = client.request(method, url, files=files, params=params, headers=headers)
 

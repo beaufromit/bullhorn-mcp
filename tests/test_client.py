@@ -196,6 +196,74 @@ class TestBullhornClient:
         assert "500" in str(exc_info.value)
 
     @respx.mock
+    def test_401_after_another_refresh_reuses_new_token(self, mock_session, sample_job):
+        """Review m4: a 401 on a token another call already replaced retries with the new one, no second login."""
+        new_session = Mock(rest_url=mock_session.rest_url, bh_rest_token="new-token")
+        auth = Mock(spec=BullhornAuth)
+        # the search reads the old session; once it is sent, another call swaps in the new one
+        current = {"session": mock_session}
+        type(auth).session = PropertyMock(side_effect=lambda: current["session"])
+        route = respx.get(f"{mock_session.rest_url}/search/JobOrder")
+
+        def first_401_then_swap(request):
+            if request.headers["BhRestToken"] == mock_session.bh_rest_token:
+                current["session"] = new_session
+                return httpx.Response(401, text="Unauthorized")
+            return httpx.Response(200, json={"data": [sample_job]})
+        route.side_effect = first_401_then_swap
+
+        results = BullhornClient(auth).search("JobOrder", "isOpen:1", exclude_deleted=False)
+
+        auth._refresh_session.assert_not_called()
+        assert route.calls[1].request.headers["BhRestToken"] == "new-token"
+        assert len(results) == 1
+
+    def test_parallel_401s_refresh_once(self, mock_session):
+        """Review m4: concurrent calls whose token expired together trigger one refresh between them."""
+        import threading
+        state = {"token": mock_session.bh_rest_token, "refreshes": 0}
+        auth = Mock(spec=BullhornAuth)
+        type(auth).session = PropertyMock(
+            side_effect=lambda: Mock(rest_url=mock_session.rest_url, bh_rest_token=state["token"])
+        )
+
+        def refresh():
+            state["refreshes"] += 1
+            state["token"] = f"token-{state['refreshes']}"
+        auth._refresh_session.side_effect = refresh
+
+        client = BullhornClient(auth)
+        old = state["token"]
+        barrier = threading.Barrier(5)
+
+        def worker():
+            barrier.wait()
+            client._refresh_after_401(old)
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert state["refreshes"] == 1
+
+    def test_prepare_for_parallel_settles_session_and_gate(self, mock_session):
+        """Review m5: one call reads the session and caches the isDeleted gate; a /meta failure is not raised."""
+        auth = Mock(spec=BullhornAuth)
+        session_prop = PropertyMock(return_value=mock_session)
+        type(auth).session = session_prop
+        client = BullhornClient(auth)
+        with respx.mock:
+            respx.get(f"{mock_session.rest_url}/meta/Candidate").mock(
+                return_value=httpx.Response(200, json={"fields": [{"name": "isDeleted"}]})
+            )
+            client.prepare_for_parallel("Candidate")
+            respx.get(f"{mock_session.rest_url}/meta/Widget").mock(return_value=httpx.Response(500, text="boom"))
+            client.prepare_for_parallel("Widget")
+        assert client._isdeleted_cache["Candidate"] is True
+        assert session_prop.call_count >= 2
+
+    @respx.mock
     def test_session_refresh_on_401(self, mock_auth, mock_session, sample_job):
         """Test that 401 triggers session refresh and retry."""
         # First call returns 401, second succeeds
