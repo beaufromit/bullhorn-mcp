@@ -964,15 +964,24 @@ def get_contact(contact_id: int, fields: str | None = None) -> str:
 
 @mcp.tool()
 def list_tearsheets(
-    query: str | None = None,
+    name: str | None = None,
+    owner_id: int | None = None,
+    where: str | None = None,
     limit: int = 20,
     start: int = 0,
     fields: str | None = None,
 ) -> str:
-    """List tearsheets (hotlists) from Bullhorn.
+    """List tearsheets (hotlists) from Bullhorn, newest first.
+
+    Tearsheet is not a Lucene /search entity, so filter with name, owner_id or a
+    SQL-style where clause (e.g. "isPrivate=false"); filters combine with AND.
+    With no filter, all tearsheets are listed. Example: list_tearsheets(name="CFO")
+    returns tearsheets whose name contains CFO, in any case.
 
     Args:
-        query: Lucene query to filter tearsheets (e.g. 'name:CFO*' or 'owner.id:123')
+        name: Case-insensitive substring of the tearsheet name
+        owner_id: CorporateUser ID of the tearsheet owner
+        where: Extra SQL-style WHERE clause, e.g. "isPrivate=false"
         limit: Maximum number of results (1-500, default 20)
         start: Pagination offset (default 0)
         fields: Comma-separated fields to return
@@ -980,21 +989,32 @@ def list_tearsheets(
 
     Returns:
         JSON object with ``data`` (array of tearsheets) and ``pagination``.
-
-    Examples:
-        - list_tearsheets() - All tearsheets
-        - list_tearsheets(query="name:CFO*") - Tearsheets whose name starts with CFO
-        - list_tearsheets(query="owner.id:99") - Tearsheets owned by CorporateUser 99
     """
+    if name is not None and "'" in name:
+        return format_response({
+            "error": "invalid_name",
+            "message": f"name must not contain single quotes. Got: {name!r}",
+        })
+
+    clauses = []
+    if name:
+        clauses.append(f"name LIKE '%{name}%'")
+    if owner_id is not None:
+        clauses.append(f"owner.id={owner_id}")
+    if where:
+        clauses.append(f"({where})")
+
     try:
         client = get_client()
-        meta = client.search_with_meta(
+        # /search/Tearsheet does not exist ("Unknown search entity"), so this
+        # goes through /query, which needs a where clause: id>0 lists them all.
+        meta = client.query_with_meta(
             entity="Tearsheet",
-            query=query or "",
+            where=" AND ".join(clauses) or "id>0",
             fields=fields,
             count=limit,
             start=start,
-            sort="-dateAdded",
+            order_by="-dateAdded",
         )
         return format_response(_paginate_envelope(meta, start, limit))
     except (AuthenticationError, BullhornAPIError) as e:

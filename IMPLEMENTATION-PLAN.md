@@ -140,6 +140,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 41 | **COMPLETE** (reviewed, 3 cycles) | CR43: reviewed CV flow. The parse is stored on the upload; Claude's corrected fields, work history, education and skills are written; `skillSet` plus `primarySkills` by association PUT; `attach_cv` writes additions at once and overwrites only on `confirm=True` (`include_*` and `force_all` removed); `create_candidate` takes child lists; one shared duplicate function; a created id is never hidden. FR-15 Amendment 2, US-50, US-51. Tagged v0.0.54, **not deployed alone**. Built 2026-10-02: 918 tests (843 + 75), 42 tools. **931 tests passing** after review (918 + 13 from review fixes). T41.7 live association check passed. |
 | Sprint 42 | **COMPLETE** (reviewed, 2 cycles) | CR44 part 1: pure match-check scorer (log2(m/u) points, guards, names, employers, education), normalisers, versioned `match_config.json`, synthetic fixtures. Not wired in. FR-23, US-52. Tagged v0.0.55, **not deployed**. Built 2026-10-02: 1,175 tests (931 + 244). **1,198 tests passing** after review (1,175 + 23 from review fixes). |
 | Sprint 42B | **REVIEWED, pushed, tagged v0.0.56** (1,294 tests; 3 review cycles, owner asked for minors fixed too); awaiting owner deploy and T42B.8 | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
+| Sprint 42C | **BUILT** (1,299 tests), awaiting `/review` | CR47 (patch): `list_tearsheets` moves from `/search/Tearsheet` (does not exist) to `/query/Tearsheet`; `query` replaced by `name`, `owner_id`, `where`. FR-21 Amendment, US-40. Ships ahead of CR46. Target v0.0.57. |
 
 ### Sprint 15 post-tag regression note
 
@@ -4066,3 +4067,46 @@ Why these choices were made, for the reviewer and for T42B.8:
 - **Cycle 2 (review of `0492c1a`):** no CRITICAL, no MODERATE. Minors fixed in `f1179c4`: a narrowed employer rerun that itself exceeded the cap was cut without the cutoff flag; `find_duplicate_candidates` did not handle httpx network errors like the create paths; the real-check test helper left the module-level N cache filled.
 - **Cycle 3 (review of `f1179c4`):** clean.
 - **Learnings:** (1) a count used as an exact-agreement u must come from an exact search. Calibration measured exact and fuzzy separately; the runtime must use the same basis as the calibration. (2) Two config values that interact (a rerun threshold and a cap) need a cross-field check in the validator, not only per-value checks. (3) A broad `except Exception` around a protective check turns a bug into silently disabled protection. Catch the API and network errors only. (4) Parallel fan-out on one client needs the 401 refresh serialised; the up-front session read only covers expiry, not server-side invalidation.
+
+## Sprint 42C: CR47 list_tearsheets via /query (patch sprint) - BUILT, awaiting review (v0.0.57)
+
+**Change request:** CR47.md (APPROVED 2026-10-30)
+**PRD requirement:** FR-21 Amendment (CR47)
+**User stories:** US-40
+**Dependency:** none. Ships ahead of CR46 (Sprint 43 moves to v0.0.58) and CR45 (v0.0.59), owner decision 2026-10-30.
+**Risk:** low. One tool, no client change. The tool's interface changes (`query` removed), which agents pick up from the refreshed tool list.
+
+### Problem
+
+`list_tearsheets` has failed on every call since CR32 (v0.0.44) with `400 Unknown search entity Tearsheet.`: Tearsheet is not a `/search` entity on this tenant. The CR32 tests mocked `search_with_meta` and never met the live endpoint. The other four tearsheet tools use `/entity` and association endpoints and work.
+
+### Current state (code search, 2026-10-30)
+
+- `server.py` `list_tearsheets` calls `client.search_with_meta(entity="Tearsheet", query=query or "", ..., sort="-dateAdded")`.
+- `client.query_with_meta` exists and already applies the metadata-driven isDeleted gate; `query_entities` uses it.
+- `tests/test_server.py` `TestTearsheetTools`: `test_list_tearsheets_default`, `test_list_tearsheets_with_query`, `test_list_tearsheets_pagination`, `test_tearsheet_tool_api_error` all assert on `search_with_meta`.
+
+### Tasks
+
+#### T42C.1 Live read-only verification (DONE 2026-10-30)
+Recorded in CR47.md "T47.1 live results": `/search` 400 reproduced; `/query/Tearsheet` with `id>0` and `-dateAdded` returns 1319, 1318, 1317; `name LIKE` is case-insensitive and returns 1317 and 709; paging disjoint; Tearsheet has `isDeleted`; `/query` returns `total: null` (envelope falls back to the full-page rule, as for `query_entities`).
+
+#### T42C.2 Rewrite `list_tearsheets` (src/bullhorn_mcp/server.py) (DONE 2026-10-30)
+New signature `(name, owner_id, where, limit, start, fields)`. Build clauses `name LIKE '%<name>%'`, `owner.id=<owner_id>`, `(<where>)`, joined with ` AND `; `id>0` when none. Call `client.query_with_meta(entity="Tearsheet", where=..., fields=fields, count=limit, start=start, order_by="-dateAdded")` and wrap in `_paginate_envelope`. Reject a `name` containing `'` with `invalid_name` before any client call. Docstring guidance before `Args:` (FastMCP drops later sections).
+
+Tests (TestTearsheetTools): rewrite `test_list_tearsheets_default`, `test_list_tearsheets_with_name` (replaces `_with_query`), `test_list_tearsheets_pagination`, `test_tearsheet_tool_api_error`; add `test_list_tearsheets_owner_id`, `test_list_tearsheets_raw_where`, `test_list_tearsheets_filters_combined`, `test_list_tearsheets_name_with_quote_rejected`, `test_list_tearsheets_fields_forwarded`.
+
+#### T42C.3 Live check of the built tool (read-only) (DONE 2026-10-30)
+Call `server.list_tearsheets` directly against the tenant: no filter, `name="beaus test"`, `owner_id=142235`, page 2. Result: no filter 1319, 1318, 1317 (has_more, next_start 3); page 2 (start=3) 1316, 1315, 1314; `name="beaus test"` 7 rows incl. 1317 and 709, has_more false; `owner_id=142235` 1319, 1317, 1311; `name="O'x"` gives `invalid_name`. `pagination.total` is null (from /query).
+
+#### T42C.4 Deploy and one live MCP call (owner approval required)
+After the review cycle and tag: owner approves deploy and restart of `bullhorn-mcp.service`; then one `list_tearsheets` call through the live MCP.
+
+### Verification
+- [x] Full suite green (1,299)
+- [x] T42C.3 live results match T42C.1
+- [ ] Review cycle clean; tag v0.0.57
+- [ ] T42C.4 after owner approval
+
+### Expected test count after Sprint 42C
+Previous: 1,294. Added 5 (4 rewritten in place). Expected 1,299. **Actual: 1,299 passing, 0 failing.**

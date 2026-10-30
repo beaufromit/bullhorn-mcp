@@ -9484,48 +9484,101 @@ class TestTearsheetTools:
     """Tests for tearsheet (hotlist) tools."""
 
     def test_list_tearsheets_default(self, mock_client):
-        """list_tearsheets calls search_with_meta with entity=Tearsheet and empty query."""
-        mock_client.search.return_value = [{"id": 1, "name": "CFO Pipeline"}]
+        """list_tearsheets queries /query/Tearsheet with id>0, newest first, never /search."""
+        mock_client.query.return_value = [{"id": 1, "name": "CFO Pipeline"}]
 
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.list_tearsheets()
 
         data = json.loads(result)
-        assert "data" in data
+        assert data["data"] == [{"id": 1, "name": "CFO Pipeline"}]
         assert "pagination" in data
-        call_kwargs = mock_client.search_with_meta.call_args.kwargs
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
         assert call_kwargs["entity"] == "Tearsheet"
-        assert call_kwargs["query"] == ""
+        assert call_kwargs["where"] == "id>0"
+        assert call_kwargs["order_by"] == "-dateAdded"
+        mock_client.search_with_meta.assert_not_called()
 
-    def test_list_tearsheets_with_query(self, mock_client):
-        """list_tearsheets passes query string to search_with_meta."""
-        mock_client.search.return_value = [{"id": 1, "name": "CFO Pipeline"}]
+    def test_list_tearsheets_with_name(self, mock_client):
+        """name becomes a LIKE substring clause."""
+        mock_client.query.return_value = [{"id": 1, "name": "CFO Pipeline"}]
 
         with patch.object(server, "get_client", return_value=mock_client):
-            server.list_tearsheets(query="name:CFO*")
+            server.list_tearsheets(name="CFO")
 
-        call_kwargs = mock_client.search_with_meta.call_args.kwargs
-        assert call_kwargs["query"] == "name:CFO*"
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
+        assert call_kwargs["where"] == "name LIKE '%CFO%'"
+
+    def test_list_tearsheets_owner_id(self, mock_client):
+        """owner_id becomes an owner.id clause."""
+        mock_client.query.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_tearsheets(owner_id=99)
+
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
+        assert call_kwargs["where"] == "owner.id=99"
+
+    def test_list_tearsheets_raw_where(self, mock_client):
+        """A raw where clause is passed through in parentheses."""
+        mock_client.query.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_tearsheets(where="isPrivate=false OR id=5")
+
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
+        assert call_kwargs["where"] == "(isPrivate=false OR id=5)"
+
+    def test_list_tearsheets_filters_combined(self, mock_client):
+        """All filters combine with AND, and id>0 is dropped."""
+        mock_client.query.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_tearsheets(name="beaus test", owner_id=142235, where="isPrivate=false")
+
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
+        assert call_kwargs["where"] == (
+            "name LIKE '%beaus test%' AND owner.id=142235 AND (isPrivate=false)"
+        )
+
+    def test_list_tearsheets_name_with_quote_rejected(self, mock_client):
+        """A name with a single quote is rejected before any client call."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_tearsheets(name="O'Brien list")
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_name"
+        mock_client.query_with_meta.assert_not_called()
+
+    def test_list_tearsheets_fields_forwarded(self, mock_client):
+        """Custom fields reach query_with_meta."""
+        mock_client.query.return_value = []
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_tearsheets(fields="id,name,isPrivate")
+
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
+        assert call_kwargs["fields"] == "id,name,isPrivate"
 
     def test_list_tearsheets_pagination(self, mock_client):
-        """list_tearsheets forwards limit/start; next_start is populated when there are more results."""
-        # Override side_effect to return a real meta dict with total > count so has_more is True.
-        mock_client.search_with_meta.side_effect = None
-        mock_client.search_with_meta.return_value = {
+        """list_tearsheets forwards limit/start; with total null (as /query returns), a full page means more."""
+        mock_client.query_with_meta.side_effect = None
+        mock_client.query_with_meta.return_value = {
             "data": [{"id": i} for i in range(20)],
-            "total": 100,
-            "start": 0,
+            "total": None,
+            "start": 20,
             "count": 20,
         }
 
         with patch.object(server, "get_client", return_value=mock_client):
-            result = server.list_tearsheets(limit=20, start=0)
+            result = server.list_tearsheets(limit=20, start=20)
 
-        call_kwargs = mock_client.search_with_meta.call_args.kwargs
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
         assert call_kwargs["count"] == 20
-        assert call_kwargs["start"] == 0
+        assert call_kwargs["start"] == 20
         data = json.loads(result)
-        assert data["pagination"]["next_start"] == 20
+        assert data["pagination"]["has_more"] is True
+        assert data["pagination"]["next_start"] == 40
 
     def test_get_tearsheet_returns_metadata_and_members(self, mock_client):
         """get_tearsheet fetches tearsheet header then candidates via association."""
@@ -9672,8 +9725,8 @@ class TestTearsheetTools:
         assert data["count"] == 2
 
     def test_tearsheet_tool_api_error(self, mock_client):
-        """list_tearsheets returns ERROR prefix when search_with_meta raises BullhornAPIError."""
-        mock_client.search_with_meta.side_effect = BullhornAPIError("API Error")
+        """list_tearsheets returns ERROR prefix when query_with_meta raises BullhornAPIError."""
+        mock_client.query_with_meta.side_effect = BullhornAPIError("API Error")
 
         with patch.object(server, "get_client", return_value=mock_client):
             result = server.list_tearsheets()

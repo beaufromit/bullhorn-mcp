@@ -286,7 +286,7 @@ The `update_record` tool shall support `"Candidate"` as a valid entity type, in 
 
 The MCP shall provide tools for managing Tearsheet (Hotlist) records in Bullhorn. Tearsheets are named candidate lists consultants build for client briefs and passive talent pools.
 
-- `list_tearsheets(query, limit, start, fields)` shall search and list Tearsheet records using Lucene query syntax, returning the standard pagination envelope (FR-19).
+- `list_tearsheets(name, owner_id, where, limit, start, fields)` shall list Tearsheet records through Bullhorn's `/query/Tearsheet` endpoint (Tearsheet is not a `/search` entity). `name` matches a case-insensitive substring of the tearsheet name, `owner_id` matches the owning CorporateUser, and `where` accepts a raw SQL-style WHERE clause; filters combine with AND. With no filter the tool lists all tearsheets. Results are newest first and use the standard pagination envelope (FR-19). (FR-21 Amendment, CR47: the original Lucene `query` parameter never worked, because `/search/Tearsheet` does not exist.)
 - `get_tearsheet(tearsheet_id, candidate_limit, candidate_fields)` shall return a single Tearsheet record by ID together with its candidate members, fetched via the Bullhorn association endpoint. The candidate list is wrapped in the standard pagination envelope.
 - `create_tearsheet(name, description, owner)` shall create a new Tearsheet entity. If `owner` is omitted, the authenticated user is resolved automatically via the identity-resolution flow (FR-12). If identity resolution fails and no explicit owner is provided, the tool returns an `identity_resolution_failed` error and does not create the record.
 - `add_to_tearsheet(tearsheet_id, candidate_ids)` shall add one or more Candidate records to a Tearsheet using the Bullhorn association `PUT` endpoint (`/entity/Tearsheet/{id}/candidates/{ids}`). Multiple candidate IDs resolve to a single API call.
@@ -596,7 +596,7 @@ As a consultant or automated agent, I want to update fields on an existing Candi
 
 **US-40: List tearsheets**
 As a consultant, I want to list tearsheets from Bullhorn with optional filtering, so that I can quickly find existing candidate lists from the chat agent.
-- **Acceptance**: `list_tearsheets()` returns a paginated envelope of Tearsheet records. `list_tearsheets(query="name:CFO*")` returns only matching tearsheets.
+- **Acceptance**: `list_tearsheets()` returns a paginated envelope of Tearsheet records, newest first. `list_tearsheets(name="CFO")` returns only tearsheets whose name contains CFO (CR47).
 
 **US-41: Get a tearsheet and its candidates**
 As a consultant, I want to retrieve a single tearsheet by ID including its candidate members, so that I can review who is on a shortlist without opening the Bullhorn UI.
