@@ -219,6 +219,7 @@ CV files shall reach the server out of band, never as file contents in a tool ar
 - `create_candidate` shall accept optional work history, education and skills.
 - Candidate duplicate detection shall be one shared function used by `find_duplicate_candidates` and all create paths.
 - After a Candidate has been created, a later failure shall never hide its id.
+- A CV file attached by the MCP shall carry the same attachment type as one a consultant uploads (`Original CV`) (CR46).
 
 ### FR-16: Note Reading and Search
 
