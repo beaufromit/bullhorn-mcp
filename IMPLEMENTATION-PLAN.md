@@ -140,7 +140,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 41 | **COMPLETE** (reviewed, 3 cycles) | CR43: reviewed CV flow. The parse is stored on the upload; Claude's corrected fields, work history, education and skills are written; `skillSet` plus `primarySkills` by association PUT; `attach_cv` writes additions at once and overwrites only on `confirm=True` (`include_*` and `force_all` removed); `create_candidate` takes child lists; one shared duplicate function; a created id is never hidden. FR-15 Amendment 2, US-50, US-51. Tagged v0.0.54, **not deployed alone**. Built 2026-10-02: 918 tests (843 + 75), 42 tools. **931 tests passing** after review (918 + 13 from review fixes). T41.7 live association check passed. |
 | Sprint 42 | **COMPLETE** (reviewed, 2 cycles) | CR44 part 1: pure match-check scorer (log2(m/u) points, guards, names, employers, education), normalisers, versioned `match_config.json`, synthetic fixtures. Not wired in. FR-23, US-52. Tagged v0.0.55, **not deployed**. Built 2026-10-02: 1,175 tests (931 + 244). **1,198 tests passing** after review (1,175 + 23 from review fixes). |
 | Sprint 42B | **REVIEWED, pushed, tagged v0.0.56** (1,294 tests; 3 review cycles, owner asked for minors fixed too); awaiting owner deploy and T42B.8 | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
-| Sprint 42C | **COMPLETE, reviewed (2 cycles; owner asked for all minors fixed), pushed, tagged v0.0.57** (1,306 tests, 2026-11-11); awaiting owner deploy (T42C.4) | CR47 (patch): `list_tearsheets` moves from `/search/Tearsheet` (does not exist) to `/query/Tearsheet`; `query` replaced by `name`, `owner_id`, `where`. FR-21 Amendment, US-40. Ships ahead of CR46. Target v0.0.57. |
+| Sprint 42C | **COMPLETE, reviewed (2 cycles; owner asked for all minors fixed), pushed, tagged v0.0.57** (1,306 tests, 2026-11-11); deployed 2026-11-11 | CR47 (patch): `list_tearsheets` moves from `/search/Tearsheet` (does not exist) to `/query/Tearsheet`; `query` replaced by `name`, `owner_id`, `where`. FR-21 Amendment, US-40. Ships ahead of CR46. Target v0.0.57. |
 
 ### Sprint 15 post-tag regression note
 
@@ -4068,7 +4068,7 @@ Why these choices were made, for the reviewer and for T42B.8:
 - **Cycle 3 (review of `f1179c4`):** clean.
 - **Learnings:** (1) a count used as an exact-agreement u must come from an exact search. Calibration measured exact and fuzzy separately; the runtime must use the same basis as the calibration. (2) Two config values that interact (a rerun threshold and a cap) need a cross-field check in the validator, not only per-value checks. (3) A broad `except Exception` around a protective check turns a bug into silently disabled protection. Catch the API and network errors only. (4) Parallel fan-out on one client needs the 401 refresh serialised; the up-front session read only covers expiry, not server-side invalidation.
 
-## Sprint 42C: CR47 list_tearsheets via /query (patch sprint) - COMPLETE, tagged v0.0.57 (deploy pending)
+## Sprint 42C: CR47 list_tearsheets via /query (patch sprint) - COMPLETE, tagged v0.0.57, deployed
 
 **Change request:** CR47.md (APPROVED 2026-10-30)
 **PRD requirement:** FR-21 Amendment (CR47)
@@ -4106,7 +4106,7 @@ After the review cycle and tag: owner approves deploy and restart of `bullhorn-m
 - [x] Full suite green (1,299)
 - [x] T42C.3 live results match T42C.1
 - [x] Review cycle clean (2 cycles); tagged v0.0.57 (2026-11-11), 1,306 tests
-- [ ] T42C.4 after owner approval
+- [x] T42C.4 deployed 2026-11-11 (box at ce50682); live `list_tearsheets` via MCP returned tearsheets newest first, `total: null`, `has_more: true`
 
 ### Expected test count after Sprint 42C
 Previous: 1,294. Added 5 (4 rewritten in place). Expected 1,299. **Actual after build: 1,299 passing, 0 failing. After review fixes: 1,306 passing, 0 failing** (7 tests added in `1e97acf`).
