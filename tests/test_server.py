@@ -9580,6 +9580,77 @@ class TestTearsheetTools:
         assert data["pagination"]["has_more"] is True
         assert data["pagination"]["next_start"] == 40
 
+    def test_list_tearsheets_last_short_page(self, mock_client):
+        """With total null, a short page ends the list."""
+        mock_client.query_with_meta.side_effect = None
+        mock_client.query_with_meta.return_value = {
+            "data": [{"id": i} for i in range(7)],
+            "total": None,
+            "start": 40,
+            "count": 7,
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_tearsheets(limit=20, start=40)
+
+        data = json.loads(result)
+        assert data["pagination"]["has_more"] is False
+        assert data["pagination"]["next_start"] is None
+
+    def test_list_tearsheets_limit_above_500_capped(self, mock_client):
+        """limit above 500 is capped, so a full 500-row page still reports more."""
+        mock_client.query_with_meta.side_effect = None
+        mock_client.query_with_meta.return_value = {
+            "data": [{"id": i} for i in range(500)],
+            "total": None,
+            "start": 0,
+            "count": 500,
+        }
+
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_tearsheets(limit=600)
+
+        assert mock_client.query_with_meta.call_args.kwargs["count"] == 500
+        data = json.loads(result)
+        assert data["pagination"]["has_more"] is True
+        assert data["pagination"]["next_start"] == 500
+
+    @pytest.mark.parametrize("limit", [0, -5])
+    def test_list_tearsheets_limit_below_1_rejected(self, mock_client, limit):
+        """limit below 1 is rejected before any client call (no next_start loop)."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            result = server.list_tearsheets(limit=limit)
+
+        data = json.loads(result)
+        assert data["error"] == "invalid_limit"
+        mock_client.query_with_meta.assert_not_called()
+
+    def test_list_tearsheets_name_wildcards_literal(self, mock_client):
+        """[, % and _ in name are bracket-escaped so they match literally."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_tearsheets(name="SK_GC 50% [A]")
+
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
+        assert call_kwargs["where"] == "name LIKE '%SK[_]GC 50[%] [[]A]%'"
+
+    def test_list_tearsheets_blank_where_ignored(self, mock_client):
+        """A whitespace-only where is treated as no filter."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_tearsheets(where="   ")
+
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
+        assert call_kwargs["where"] == "id>0"
+
+    def test_list_tearsheets_or_where_parenthesised_with_filters(self, mock_client):
+        """An OR where stays parenthesised when combined with name and owner_id."""
+        with patch.object(server, "get_client", return_value=mock_client):
+            server.list_tearsheets(name="CFO", owner_id=7, where="isPrivate=false OR id=5")
+
+        call_kwargs = mock_client.query_with_meta.call_args.kwargs
+        assert call_kwargs["where"] == (
+            "name LIKE '%CFO%' AND owner.id=7 AND (isPrivate=false OR id=5)"
+        )
+
     def test_get_tearsheet_returns_metadata_and_members(self, mock_client):
         """get_tearsheet fetches tearsheet header then candidates via association."""
         mock_client.get.return_value = {"id": 55, "name": "Pipeline"}

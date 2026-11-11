@@ -1076,4 +1076,4 @@ get_job_submissions(job_id=12345, status="Shortlisted", limit=10, start=0)
 | Note action string doesn't match a valid Bullhorn action | Return Bullhorn's error response clearly so the caller can correct the action |
 | Intermittent Bullhorn API errors on entity creation | Implement retry logic for known transient errors (e.g. "error persisting an entity" which Bullhorn support acknowledges as intermittent) |
 | Bullhorn association DELETE returns 204 (not 200/201) | `_request()` currently accepts only 200/201 as success. Verify the actual response code for association DELETE during integration testing; add 204 to the accepted codes in `_request()` if needed. |
-| Tearsheet entity may lack `isDeleted` field | If `list_tearsheets` queries fail with a Bullhorn API error, add `"Tearsheet"` to `_ENTITIES_WITHOUT_ISDELETED` (same fix applied previously for `ClientCorporation` and `UserMessage`). |
+| Tearsheet entity may lack `isDeleted` field | Resolved (CR47 T47.1): `/meta/Tearsheet` has `isDeleted`, so `list_tearsheets` keeps the standard `isDeleted` handling. |

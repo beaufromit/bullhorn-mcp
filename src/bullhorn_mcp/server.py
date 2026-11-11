@@ -982,7 +982,7 @@ def list_tearsheets(
         name: Case-insensitive substring of the tearsheet name
         owner_id: CorporateUser ID of the tearsheet owner
         where: Extra SQL-style WHERE clause, e.g. "isPrivate=false"
-        limit: Maximum number of results (1-500, default 20)
+        limit: Maximum number of results (1-500, default 20; above 500 is capped)
         start: Pagination offset (default 0)
         fields: Comma-separated fields to return
                 (default: id,name,description,owner,dateAdded)
@@ -995,14 +995,24 @@ def list_tearsheets(
             "error": "invalid_name",
             "message": f"name must not contain single quotes. Got: {name!r}",
         })
+    if limit < 1:
+        return format_response({
+            "error": "invalid_limit",
+            "message": f"limit must be between 1 and 500. Got: {limit}",
+        })
+    # The client caps count at 500 and /query returns total: null, so has_more
+    # must be judged against the capped page size or a larger limit looks final.
+    limit = min(limit, 500)
 
     clauses = []
     if name:
-        clauses.append(f"name LIKE '%{name}%'")
+        # /query has no LIKE ESCAPE; brackets make [, % and _ literal (checked live).
+        literal = name.replace("[", "[[]").replace("%", "[%]").replace("_", "[_]")
+        clauses.append(f"name LIKE '%{literal}%'")
     if owner_id is not None:
         clauses.append(f"owner.id={owner_id}")
-    if where:
-        clauses.append(f"({where})")
+    if where and where.strip():
+        clauses.append(f"({where.strip()})")
 
     try:
         client = get_client()
