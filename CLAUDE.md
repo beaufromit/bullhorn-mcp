@@ -22,6 +22,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 For non-trivial tasks, emit a brief plan and your assumptions. Wait for confirmation before proceeding.
 
+## Using the advisor
+
+Call the advisor:
+
+- **Before a build starts**: at replan or while drafting a CR, to challenge the plan, its assumptions, and any Bullhorn API behavior not yet verified live.
+- **Before the build commit**: as a quick pre-check so review cycle 1 has less to find.
+- **When stuck in the iterate loop**: the same finding keeps coming back, a fix is not converging, or you are about to dismiss a finding as a false positive.
+
+Skip it for short reactive tasks (lookups, read-only queries, one-line fixes).
+
 ## After You Finish
 
 Summarise what changed, what you intentionally left alone, and any concerns or risks to verify.
