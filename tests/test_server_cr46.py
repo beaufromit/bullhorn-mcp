@@ -136,7 +136,7 @@ def stack(mock_session):
     client = BullhornClient(auth)
     metadata = BullhornMetadata(client)
 
-    def run(bullhorn, fn, **kwargs):
+    def run(bullhorn, fn, _defaults=None, **kwargs):
         with respx.mock(assert_all_called=False) as router:
             router.route(host="rest99.bullhornstaffing.com").mock(side_effect=bullhorn)
             with _http_as(), \
@@ -144,7 +144,7 @@ def stack(mock_session):
                  patch.object(server, "get_metadata", return_value=metadata), \
                  patch.object(server, "resolve_caller", return_value={"id": 1}), \
                  patch.object(server, "get_candidate_required", return_value=[]), \
-                 patch.object(server, "get_candidate_defaults", return_value={}), \
+                 patch.object(server, "get_candidate_defaults", return_value=dict(_defaults or {})), \
                  patch.object(server, "get_mcp_source", return_value="Claude"):
                 return json.loads(fn(**kwargs))
 
@@ -346,7 +346,7 @@ class TestTitleOverride:
         body = bh.body("PUT", "/entity/Candidate")
         assert "namePrefix" not in body and "title" not in body
         assert body["occupation"] == "Finance Manager"
-        assert any(f"'{key}' was ignored" in w and "occupation" in w for w in data["warnings"])
+        assert any(f"'{key}' was stripped" in w and "occupation" in w for w in data["warnings"])
 
     @pytest.mark.parametrize("key", ["title", "Title"])
     def test_attach_cv_title_override_dropped(self, stack, clean_upload_store, key):
@@ -355,7 +355,7 @@ class TestTitleOverride:
         body = _merged_post(bh)
         assert "namePrefix" not in body and "title" not in body
         assert not [c for c in data.get("pending_overwrites", []) if c["field"] == "namePrefix"]
-        assert any(f"'{key}' was ignored" in w for w in data["warnings"])
+        assert any(f"'{key}' was stripped" in w for w in data["warnings"])
 
     def test_explicit_name_prefix_still_written(self, stack, clean_upload_store):
         bh = _Bullhorn(meta_fields=self.META)
@@ -386,6 +386,36 @@ class TestTitleOverride:
         bh = _Bullhorn(meta_fields=self.META)
         stack(bh, server.update_record, entity="Candidate", entity_id=CID, fields={"namePrefix": "Ms"})
         assert bh.body("POST", f"/entity/Candidate/{CID}") == {"namePrefix": "Ms"}
+
+    def test_attach_cv_title_in_overwrite_does_not_select_name_prefix(self, stack, clean_upload_store):
+        """Cycle 3 m2: overwrite=["title"] must not overwrite the salutation."""
+        parse = {**PARSE, "candidate": {**PARSE["candidate"], "namePrefix": "Mr"}}
+        existing = {"firstName": "Jane", "lastName": "Doe", "namePrefix": "Ms", "occupation": "Old Title"}
+        bh = _Bullhorn(meta_fields=self.META, existing=existing)
+        data, _ = _attach(stack, bh, parse=parse, overwrite=["title"])
+        assert "namePrefix" not in _merged_post(bh)
+        assert data["overwritten"] == []
+        assert any("not pending" in w and "title" in w for w in data["warnings"])
+
+    def test_attach_cv_title_in_fields_to_update_does_not_select_name_prefix(self, stack, clean_upload_store):
+        parse = {**PARSE, "candidate": {**PARSE["candidate"], "namePrefix": "Mr"}}
+        bh = _Bullhorn(meta_fields=self.META, existing={"firstName": "Jane", "lastName": "Doe"})
+        data, _ = _attach(stack, bh, parse=parse, fields_to_update=["title"])
+        assert "namePrefix" not in _merged_post(bh)
+        assert any("fields_to_update" in w and "title" in w for w in data["warnings"])
+
+    @pytest.mark.parametrize("tool", ["create_candidate", "create_candidate_from_cv"])
+    def test_title_in_tenant_defaults_dropped(self, stack, clean_upload_store, tool):
+        """Cycle 3 m4: a tenant default keyed Title does not reach namePrefix."""
+        bh = _Bullhorn(meta_fields=self.META)
+        defaults = {"Title": "Mx"}
+        if tool == "create_candidate":
+            data = stack(bh, server.create_candidate, _defaults=defaults,
+                         fields={"firstName": "Jane", "lastName": "Doe"}, force=True)
+        else:
+            data = _create(stack, bh, _defaults=defaults, force=True)
+        assert "namePrefix" not in bh.body("PUT", "/entity/Candidate")
+        assert any("'Title' was stripped" in w for w in data["warnings"])
 
     def test_title_alias_to_occupation_kept(self, stack, clean_upload_store):
         """A tenant alias that maps title to occupation keeps working."""

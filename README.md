@@ -310,7 +310,7 @@ CV files never travel through a tool argument. The server issues a single-use up
 
 **CV file label.** The CV attaches with `externalID=Portfolio` and `type=Original CV`, so it shows as "Original CV" in the Bullhorn "File Type" column, the same as a consultant upload. This applies to `create_candidate_from_cv`, `attach_cv` and the file-only path of `attach_cv` for a candidate the upload created.
 
-**What is sent.** The CV paths send only real, writable Candidate fields. Unknown keys and read-only system keys are dropped, and a dropped `fields_override` key comes back as a warning. A `title` key is dropped with a warning (Candidate has no title field and the label "Title" is `namePrefix`, the salutation): use `occupation` for job title. `written.fields` lists only what was sent. The parse's own `name` is dropped silently; a `name` Claude sends is replaced with the name computed from `firstName` and `lastName`, with a warning. Work history and education rows are reported as written once they read back. A `skillSet` held as a list in Bullhorn is merged by `attach_cv`, not overwritten.
+**What is sent.** The CV paths send only real, writable Candidate fields. Unknown keys and read-only system keys are dropped, and a dropped `fields_override` key comes back as a warning. A `title` key is dropped with a warning (Candidate has no title field and the label "Title" is `namePrefix`, the salutation) unless a tenant alias maps it to `occupation`: use `occupation` for job title. `written.fields` lists only what was sent. The parse's own `name` is dropped silently; a `name` Claude sends is replaced with the name computed from `firstName` and `lastName`, with a warning. Work history and education rows are reported as written once they read back. A `skillSet` held as a list in Bullhorn is merged by `attach_cv`, not overwritten.
 
 **Current company.** When the parse has no `companyName`, the CV paths propose the `companyName` of the work history entry with the latest `startDate`. On `attach_cv`, a different existing value is a pending overwrite, like `occupation`, and is written only when `overwrite` names it (or is `["all"]`). If no work history entry has a numeric `startDate` (epoch milliseconds), no company is proposed and a warning says so. On `create_candidate_from_cv`, work history entries that repeat (same `companyName`, `title` and `startDate`) are written once, with a warning giving the counts.
 
@@ -663,7 +663,7 @@ tests/
 - Metadata is cached within a session
 - Hosted identity resolution is cached per authenticated user
 - `ClientContact.title` is intentionally stripped from write payloads to avoid confusion with `occupation`
-- A `title` key on a Candidate write (`create_candidate`, `update_record`, and `fields_override` on the CV paths) is dropped with a warning, even though the label "Title" resolves to `namePrefix` (the salutation): use `occupation` for job title and `namePrefix` for salutation
+- A `title` key on a Candidate write (`create_candidate`, `update_record`, tenant defaults, and `fields_override` on the CV paths) is dropped with a warning, because the label "Title" resolves to `namePrefix` (the salutation), unless a tenant alias maps `title` to `occupation`. In `attach_cv`, `title` in `overwrite` or `fields_to_update` never selects `namePrefix`. Use `occupation` for job title and `namePrefix` for salutation
 
 ## Limitations
 

@@ -2326,8 +2326,9 @@ def create_candidate(
             return format_response({"error": "lastName_required", "message": "lastName is required to create a Candidate."})
 
         metadata = get_metadata()
-        defaults = get_candidate_defaults()
+        defaults, defaults_title = _drop_title_to_salutation(metadata, get_candidate_defaults())
         fields, title_dropped = _drop_title_to_salutation(metadata, fields)
+        title_dropped += defaults_title
         resolved_input = metadata.resolve_fields("Candidate", fields)
         merged = {**metadata.resolve_fields("Candidate", defaults), **resolved_input}
 
@@ -3335,16 +3336,20 @@ def _drop_title_to_salutation(metadata: BullhornMetadata, fields: dict) -> tuple
 
     Candidate has no title field and on the live tenant the label "Title" is
     namePrefix (the salutation), so a job title sent as title would be resolved into
-    namePrefix before _strip_contact_title could see it. A key that stays an unknown
-    "title" is left for _strip_contact_title; a tenant alias to occupation is kept.
-    Returns (fields without the dropped keys, the dropped key names).
+    namePrefix before _strip_contact_title could see it. Only a tenant alias that maps
+    title to occupation is kept. Used by every Candidate write path, so they share one
+    rule and one warning. Returns (fields without the dropped keys, the dropped key names).
     """
-    dropped = [
-        k for k in fields
-        if isinstance(k, str) and k.strip().lower() == "title"
-        and next(iter(metadata.resolve_fields("Candidate", {k: None}))) not in ("occupation", "title")
-    ]
+    dropped = [k for k in fields if _is_title_not_occupation(metadata, k)]
     return {k: v for k, v in fields.items() if k not in dropped}, dropped
+
+
+def _is_title_not_occupation(metadata: BullhornMetadata, key: object) -> bool:
+    """True for a key spelled title that does not resolve to occupation on Candidate."""
+    return (
+        isinstance(key, str) and key.strip().lower() == "title"
+        and next(iter(metadata.resolve_fields("Candidate", {key: None}))) != "occupation"
+    )
 
 
 def _title_dropped_warning(key: str) -> str:
@@ -3404,17 +3409,8 @@ def _filtered_cv_override(metadata: BullhornMetadata, fields_override: dict, war
     ``description`` and ``name`` never come from Claude (CR43, CR26) and are handled
     before the filter so each gets exactly one message.
     """
-    raw = dict(fields_override)
-    for key in [k for k in raw if isinstance(k, str) and k.strip().lower() == "title"]:
-        # Candidate has no job title field called title, and the label "Title" is
-        # namePrefix (the salutation), so a job title sent as title would land there.
-        # Only a tenant alias that maps title to occupation is kept (pattern 1).
-        if next(iter(metadata.resolve_fields("Candidate", {key: None}))) != "occupation":
-            raw.pop(key)
-            warnings.append(
-                f"fields_override '{key}' was ignored: Candidate has no title field. "
-                "Use 'occupation' for job title or 'namePrefix' for salutation."
-            )
+    raw, title_dropped = _drop_title_to_salutation(metadata, dict(fields_override))
+    warnings.extend(_title_dropped_warning(k) for k in title_dropped)
     override = metadata.resolve_fields("Candidate", raw)
     if "description" in override:
         # CR43 goal 2: the description is the parser's rendering of the CV itself.
@@ -3560,7 +3556,8 @@ def _create_candidate_from_cv(
                 })
 
         # Apply tenant defaults
-        defaults = get_candidate_defaults()
+        defaults, defaults_title = _drop_title_to_salutation(metadata, get_candidate_defaults())
+        warnings.extend(_title_dropped_warning(k) for k in defaults_title)
         candidate_data = {**metadata.resolve_fields("Candidate", defaults), **candidate_data}
 
         # Stamp source with configured MCP value if not already set
@@ -3797,7 +3794,12 @@ def _attach_cv(
         proposed_fields = _truncate_against_meta(metadata, "Candidate", proposed_fields)
         if fields_to_update is not None:
             # Labels resolve as in fields_override ("Job Title" -> occupation).
-            api_names = {f: next(iter(metadata.resolve_fields("Candidate", {f: None}))) for f in fields_to_update}
+            # A name spelled title never selects namePrefix (the salutation); it matches nothing.
+            api_names = {
+                f: "title" if _is_title_not_occupation(metadata, f)
+                else next(iter(metadata.resolve_fields("Candidate", {f: None})))
+                for f in fields_to_update
+            }
             fields_to_update = list(dict.fromkeys(api_names.values()))
             # The warning names fields as the caller sent them.
             unknown = [f for f, api in api_names.items() if api not in proposed_fields]
@@ -3868,7 +3870,11 @@ def _attach_cv(
         else:
             pending = {c["field"] for c in overwrites}
             try:
-                api_names = {n: next(iter(metadata.resolve_fields("Candidate", {n: None}))) for n in names}
+                api_names = {
+                    n: "title" if _is_title_not_occupation(metadata, n)
+                    else next(iter(metadata.resolve_fields("Candidate", {n: None})))
+                    for n in names
+                }
             except (AuthenticationError, BullhornAPIError) as e:
                 return f"ERROR: {e}"
             chosen = {api for api in api_names.values() if api in pending}
