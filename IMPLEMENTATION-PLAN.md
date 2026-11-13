@@ -152,7 +152,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 42 | **COMPLETE** (reviewed, 2 cycles) | CR44 part 1: pure match-check scorer (log2(m/u) points, guards, names, employers, education), normalisers, versioned `match_config.json`, synthetic fixtures. Not wired in. FR-23, US-52. Tagged v0.0.55, **not deployed**. Built 2026-10-02: 1,175 tests (931 + 244). **1,198 tests passing** after review (1,175 + 23 from review fixes). |
 | Sprint 42B | **REVIEWED, pushed, tagged v0.0.56** (1,294 tests; 3 review cycles, owner asked for minors fixed too); deployed 2026-10-06, acceptance failed on the CV write path (CR46); T42B.8 replaced by T43.15 | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
 | Sprint 42C | **COMPLETE, reviewed (2 cycles; owner asked for all minors fixed), pushed, tagged v0.0.57** (1,306 tests, 2026-11-11); deployed 2026-11-11 | CR47 (patch): `list_tearsheets` moves from `/search/Tearsheet` (does not exist) to `/query/Tearsheet`; `query` replaced by `name`, `owner_id`, `where`. FR-21 Amendment, US-40. Ships ahead of CR46. Target v0.0.57. |
-| Sprint 43 | **BUILT, not reviewed** (1,383 tests passing, 2026-11-13; one local commit (CR46 + CR48 squashed), not pushed; T43.13 live check run, T43.15 open) | CR46: v0.0.56 acceptance fixes, plus CR48 (per-field overwrite choice on attach_cv, `overwrite` replaces `confirm`). Writable-field filter on the CV paths, CV attaches as `Original CV` with `externalID=Portfolio`, child rows read back with explicit fields, `skillSet` list handling (B8), current company from work history, outcomes logged under the passed `match_check_id`, `duplicate_check` on every create, percentages only, placeholder employers, upload box fixed, plus B10 (re-attach no longer duplicates the current work history row). FR-15 Amendment 2, FR-23, US-49 to US-52. Target v0.0.58. |
+| Sprint 43 | **REVIEWED (5 cycles, owner asked for all minors fixed; 4 cycle 5 minors logged by owner decision), pushed, tagged v0.0.58** (1,417 tests, 2026-11-13; build 5acdf53 plus review fixes 58b2e14, 008a6c8, 5d70bd6, 717da5a; T43.13 live check run, T43.15 open) | CR46: v0.0.56 acceptance fixes, plus CR48 (per-field overwrite choice on attach_cv, `overwrite` replaces `confirm`). Writable-field filter on the CV paths, CV attaches as `Original CV` with `externalID=Portfolio`, child rows read back with explicit fields, `skillSet` list handling (B8), current company from work history, outcomes logged under the passed `match_check_id`, `duplicate_check` on every create, percentages only, placeholder employers, upload box fixed, plus B10 (re-attach no longer duplicates the current work history row). FR-15 Amendment 2, FR-23, US-49 to US-52. Target v0.0.58. |
 
 ### Sprint 15 post-tag regression note
 
@@ -4138,7 +4138,7 @@ Previous: 1,294. Added 5 (4 rewritten in place). Expected 1,299. **Actual after 
 
 **Next:** CR46 (Sprint 43, v0.0.58, planned below), then CR45 (v0.0.59).
 
-## Sprint 43: CR46 v0.0.56 acceptance-test fixes (CV write path, match log, upload box) - BUILT 2026-11-13, not reviewed (target v0.0.58)
+## Sprint 43: CR46 v0.0.56 acceptance-test fixes (CV write path, match log, upload box) - REVIEWED, tagged v0.0.58 (2026-11-13), T43.15 open
 
 **Change request:** CR46.md (APPROVED 2026-10-06; B1 refinement and B8 added at the 2026-11-11 replan, owner-approved); CR48.md (APPROVED 2026-11-13, T43.16)
 **PRD requirement:** FR-15 Amendment 2 (including the CR46 `Original CV` bullet), FR-15 Amendment (upload box), FR-23
@@ -4306,6 +4306,35 @@ Why these choices were made, for the reviewer and for T43.15:
 - **B10 (found by T43.13; owner chose a quick fix in this sprint).** `_new_cv_children` matched work history on companyName, title, startDate AND endDate. The parser fills the current role's endDate inconsistently (the parse date in the T43.2 run, null today), so re-attaching the same CV duplicated the current role. Fix: new `_WORK_HISTORY_MATCH_KEYS = (companyName, title, startDate)`; endDate is ignored for matching (same reasoning as P3). Tests: `TestWorkHistoryMatchIgnoresEndDate` (2 tests) in `tests/test_server_cr46.py`. Recorded in CR46.md B10.
 - B10 side effect for the reviewer: matching without endDate also treats two rows with the same company and title and no startDate as one role, which endDate used to keep apart. Accepted: a CV listing the same undated role twice is rarer than the parser's endDate drift.
 - **Observation, not changed.** The parse's ongoing-role endDate is written as parsed (a parse date or null). Parser quality is a CR46 non-goal; a candidate for a later CR.
+
+### Review cycles (2026-11-13)
+
+Owner Step 0 decision (cycle 1): fix every MINOR, including MINORs raised by later cycles; dismiss nothing.
+
+| Cycle | Reviewer | Commit reviewed | C | M | m | Fixed in |
+|---|---|---|---|---|---|---|
+| 1 | Fable | 5acdf53 (build) | 0 | 4 | 10 | 58b2e14 |
+| 2 | Opus | 58b2e14 | 0 | 1 | 5 | 008a6c8 |
+| 3 | Opus | 008a6c8 | 0 | 0 | 4 | 5d70bd6 |
+| 4 | Fable | 5d70bd6 | 0 | 0 | 5 | 717da5a |
+| 5 | Fable | 717da5a | 0 | 0 | 4 | logged (owner) |
+
+Cycle 5 had no CRITICAL or MODERATE, but under the owner's all-minors decision its 4 MINORs counted as findings to fix, so PROMPT_iterate constraint 4 stopped the loop. The owner then chose to log the 4 cycle 5 minors (not fix them) and push. Pushed and tagged v0.0.58 at 1,417 tests. Logged findings (full text in `reviews/latest.md` for 717da5a), carried to the next CR as warning and docstring wording cleanup (no data effect):
+
+- m1: `_title_dropped_warning` compares the resolved name with the literal `"title"`; an unresolved `Title`, `TITLE` or padded `" title "` comes back in the caller's spelling, so the warning wrongly says it "resolves to Title (the salutation)". The test sends only lower-case `title`.
+- m2: "(the salutation)" is attached to any resolved target, so an alias `title` -> `customText5` reads "resolves to customText5 (the salutation)".
+- m3: the `attach_cv` `overwrite` Args says "title selects nothing" with no alias exception; the `fields_to_update` Args has no title note at all.
+- m4: the new `overwrite` Args sentence was appended to one ~150-character line in a block wrapped at ~80.
+
+Learning: cycles 2 to 5 all chased the same title-vs-namePrefix rule (failure pattern 1) outward from the CV paths to create_candidate, update_record, tenant defaults, attach_cv names and finally warning wording. Each fix was correct but added surface that the next reviewer could nitpick. With an all-minors decision, a rule like this needs one design pass (where it applies, one helper, one message) before the first fix, not one fix per finding.
+
+Other review learnings:
+
+- The CR46 test harness (`_Bullhorn` in tests/test_server_cr46.py) did not answer the child row read-back GET, so every non-E2E work history write silently "failed" and assertions on empty `written.work_history` were vacuous (cycle 1 M2). Harness gaps can make assertions trivially true; each new test was mutation-checked (fix reverted, test must fail).
+- `create_candidate`, `update_record`, the CV paths and tenant defaults now all route a Candidate `title` key through `_drop_title_to_salutation` before `resolve_fields`, because `resolve_fields` turns the label "Title" into `namePrefix` before `_strip_contact_title` runs.
+- `BullhornClient.attach_file`'s keyword is now `file_type` (the wire query param is still `type`).
+
+Next: owner deploys v0.0.58 and runs T43.15. At deploy, check Cowork skills and prompts for attach_cv confirm=True (now overwrite) and for a top-level match_check_id read after a successful create (now passed_match_check_id, review m7). Fold the 4 cycle 5 minors into the next CR.
 
 ### Not planned (recorded)
 
