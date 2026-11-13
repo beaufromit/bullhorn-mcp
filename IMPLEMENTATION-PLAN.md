@@ -2,7 +2,18 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29), deployed 2026-09-29; T40.8 live acceptance found CV parsing broken since CR19 and is blocked on CR42. **Sprint 40B (CR42 resume parser parameters) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.53 at 843 tests passing** (2026-09-29). T40B.3 live smoke check passed. v0.0.53 is deployed; the T40B.4 (T40.8) re-run created test Candidate 173063 and then crashed on skills, which led to CR43. **Sprint 41 (CR43) is COMPLETE, reviewed (3 cycles; owner asked for minors fixed too), and tagged v0.0.54 at 931 tests passing** (2026-10-02), not deployed (only v0.0.56 is deployed). **Sprint 42 (CR44 part 1, pure scorer) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.55 at 1,198 tests passing** (2026-10-02), not deployed. **Sprint 42B (CR44 part 2) is REVIEWED (3 cycles) and tagged v0.0.56 at 1,294 tests (2026-10-06), awaiting owner deploy and T42B.8**; only v0.0.56 is deployed, carrying all three.
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29), deployed 2026-09-29; T40.8 live acceptance found CV parsing broken since CR19 and is blocked on CR42. **Sprint 40B (CR42 resume parser parameters) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.53 at 843 tests passing** (2026-09-29). T40B.3 live smoke check passed. v0.0.53 is deployed; the T40B.4 (T40.8) re-run created test Candidate 173063 and then crashed on skills, which led to CR43. **Sprint 41 (CR43) is COMPLETE, reviewed (3 cycles; owner asked for minors fixed too), and tagged v0.0.54 at 931 tests passing** (2026-10-02), not deployed (only v0.0.56 is deployed). **Sprint 42 (CR44 part 1, pure scorer) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.55 at 1,198 tests passing** (2026-10-02), not deployed. **Sprint 42B (CR44 part 2) is REVIEWED (3 cycles) and tagged v0.0.56 at 1,294 tests (2026-10-06)**, deployed 2026-10-06; its acceptance test failed on the CV write path, which became CR46. **Sprint 42C (CR47 list_tearsheets) is COMPLETE, reviewed (2 cycles), tagged v0.0.57 at 1,306 tests and deployed** (2026-11-11). **Sprint 43 (CR46 acceptance fixes) is PLANNED, target v0.0.58**; CR45 follows as Sprint 44, v0.0.59.
+
+**Replan validation (2026-11-11, post-CR47; CR46):** Re-reconciled PRD, user stories, CRs, and source code. **1,306 tests passing, tagged v0.0.57** (`.venv/bin/pytest -q`: 1306 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
+- **CR46** (v0.0.56 acceptance fixes, owner-APPROVED 2026-10-06) is planned as **Sprint 43** (v0.0.58; CR47 took v0.0.57 on 2026-10-30). Its only PRD amendment (the FR-15 Amendment 2 `Original CV` bullet) is already applied. Code search confirms nothing is implemented (see Sprint 43 Current state). T43.0 to T43.2 were done before the replan.
+- Coverage: 32 FRs/NFRs (FR-1 to FR-23, NFR-1 to NFR-9) plus amendments, 54 user stories (US-1 to US-52, plus US-7A and US-15A). Every CR46 item traces to FR-15 Amendment 2, the FR-15 Amendment or FR-23 (US-49 to US-52); the acceptance wording agrees with Q4 (percentages only), B5, D1 and Q5. No user stories without a requirement.
+- **Discrepancy 1 (resolved with the owner, advisor recommendation):** CR46 B1 filtered on `/meta` `readOnly`, but a live `/meta/Candidate` read found it on 229 of 276 fields, including `skillSet` (which the MCP writes successfully), `middleName`, `gender`, `dateOfBirth`. Decided: drop keys not in `/meta` and keys that are `readOnly` with `dataSpecialization == "SYSTEM"`; the only overlap with MCP-injected fields is `name`, which is recomputed after the filter. Written back to CR46.md (B1 refinement).
+- **Discrepancy 2 (resolved with the owner, advisor recommendation):** Bullhorn returns `Candidate.skillSet` as a JSON list on every record sampled, but the CR43 skills helpers handle only a string, so `attach_cv` would overwrite a candidate's existing skills (never seen live because `attach_cv` always failed first on B1). Added to Sprint 43 as **B8** (CR46.md updated). No live data repair needed. (An earlier replan reading that the stored value was a Python list repr was a printing artefact and is withdrawn.)
+- CR46.md renumbered (v0.0.58, baseline 1,306, `COWORK_TEST_v0.0.58.md`). Sprint 42B's T42B.8 is replaced by the Sprint 43 retest (T43.15); its open Lucene-escape reviewer check is carried into the Sprint 43 checklist.
+- **CR45** (generic upload, `attach_file`) is owner-APPROVED (2026-11-11) with FR-24, the NFR-9 Amendment, US-53 and US-54, which are **not yet applied to PRD.md**. Per CR45's own lifecycle they are applied, and Sprint 44 planned, at the replan after CR46 is deployed and retested. Only a pointer is recorded here.
+- Not planned: the Sprint 42C learning that `query_entities` truncates over 500 on `/query`; `_attach_cv` swallowing child-row query errors (flagged for the reviewer).
+- **Discrepancy 3 (resolved with the owner, advisor finding):** `metadata.get_fields` drops `/meta` `maxLength`, so `_truncate_against_meta` has never clipped in production (only test mocks supply `maxLength`). Added to Sprint 43 as **B9** (T43.3; CR46.md updated).
+- CR35 still reserved and unspecced. `bha-expired-list-ids.md` still has no PRD requirement.
 
 **Replan validation (2026-10-02, post-CR42; CR43 and CR44):** Re-reconciled PRD, user stories, CRs, and source code. **843 tests passing, tagged v0.0.53** (`.venv/bin/pytest -q`: 843 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **CR43** (reviewed CV flow) is planned as **Sprint 41** (v0.0.54) and **CR44** (weighted duplicate match check) as **Sprints 42 and 42B** (v0.0.55, v0.0.56). Both were owner-APPROVED 2026-10-02, with PRD amendments already applied (uncommitted at replan): FR-15 Amendment 2, FR-23, US-50, US-51, US-52, and the §1 scope line. Code search confirms nothing is implemented (see each sprint's Current state).
@@ -139,8 +150,9 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 40B | **COMPLETE** | CR42 (patch): fix Bullhorn resume parser parameters. `parse_resume_file` sends `populateDescription=html`; `parse_resume_text` sends `format` and `populateDescription` as query params (`text` or `html`, from `content_type`). FR-15, US-31. Target v0.0.53. Built 2026-09-29 at 841 tests (3 rewritten in place, 3 added). T40B.3 live smoke check passed 2026-09-29. Reviewed (2 cycles; owner asked for minors fixed too), tagged v0.0.53, **843 tests passing**. Deployed. The T40B.4 re-run created test Candidate 173063, then crashed on skills (CR43); carried over to T42B.8. Ends with the carried-over Sprint 40 T40.8 live acceptance. |
 | Sprint 41 | **COMPLETE** (reviewed, 3 cycles) | CR43: reviewed CV flow. The parse is stored on the upload; Claude's corrected fields, work history, education and skills are written; `skillSet` plus `primarySkills` by association PUT; `attach_cv` writes additions at once and overwrites only on `confirm=True` (`include_*` and `force_all` removed); `create_candidate` takes child lists; one shared duplicate function; a created id is never hidden. FR-15 Amendment 2, US-50, US-51. Tagged v0.0.54, **not deployed alone**. Built 2026-10-02: 918 tests (843 + 75), 42 tools. **931 tests passing** after review (918 + 13 from review fixes). T41.7 live association check passed. |
 | Sprint 42 | **COMPLETE** (reviewed, 2 cycles) | CR44 part 1: pure match-check scorer (log2(m/u) points, guards, names, employers, education), normalisers, versioned `match_config.json`, synthetic fixtures. Not wired in. FR-23, US-52. Tagged v0.0.55, **not deployed**. Built 2026-10-02: 1,175 tests (931 + 244). **1,198 tests passing** after review (1,175 + 23 from review fixes). |
-| Sprint 42B | **REVIEWED, pushed, tagged v0.0.56** (1,294 tests; 3 review cycles, owner asked for minors fixed too); awaiting owner deploy and T42B.8 | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
+| Sprint 42B | **REVIEWED, pushed, tagged v0.0.56** (1,294 tests; 3 review cycles, owner asked for minors fixed too); deployed 2026-10-06, acceptance failed on the CV write path (CR46); T42B.8 replaced by T43.15 | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
 | Sprint 42C | **COMPLETE, reviewed (2 cycles; owner asked for all minors fixed), pushed, tagged v0.0.57** (1,306 tests, 2026-11-11); deployed 2026-11-11 | CR47 (patch): `list_tearsheets` moves from `/search/Tearsheet` (does not exist) to `/query/Tearsheet`; `query` replaced by `name`, `owner_id`, `where`. FR-21 Amendment, US-40. Ships ahead of CR46. Target v0.0.57. |
+| Sprint 43 | **PLANNED** (replanned 2026-11-11) | CR46: v0.0.56 acceptance fixes. Writable-field filter on the CV paths, CV attaches as `Original CV` with `externalID=Portfolio`, child rows read back with explicit fields, `skillSet` list handling (B8), current company from work history, outcomes logged under the passed `match_check_id`, `duplicate_check` on every create, percentages only, placeholder employers, upload box fixed. FR-15 Amendment 2, FR-23, US-49 to US-52. Target v0.0.58. |
 
 ### Sprint 15 post-tag regression note
 
@@ -3927,7 +3939,7 @@ Why these choices were made, for the reviewer and for 42B:
 
 ---
 
-## Sprint 42B: CR44 part 2, retrieval, wiring, create policy, match log, calibration - REVIEWED, tagged v0.0.56 (deploy and T42B.8 pending)
+## Sprint 42B: CR44 part 2, retrieval, wiring, create policy, match log, calibration - REVIEWED, tagged v0.0.56, deployed (T42B.8 replaced by Sprint 43 T43.15)
 
 **Change request:** CR44.md (APPROVED, owner, 2026-10-02; D12 and D13 added at this replan)
 **PRD requirement:** FR-23 (all bullets), FR-15 Amendment 2 (the one shared duplicate function)
@@ -4124,4 +4136,148 @@ Previous: 1,294. Added 5 (4 rewritten in place). Expected 1,299. **Actual after 
 - **Cycle 2 (Opus, review of `1e97acf`):** clean.
 - **Learnings:** (1) Bullhorn `/query` rejects `LIKE ... ESCAPE` (400 "mismatched input 'ESCAPE'"); SQL Server style bracket escaping works (`name LIKE '%[_]%'` matched exactly the 2 of 920 tearsheets with an underscore, case-insensitive). `[[]` and `[%]` are unverified live (no names contain them). (2) `query_entities` on `/query` has the same over-500 truncation with `total` null; not changed, out of scope. (3) Any list tool backed by `/query` needs `limit` clamped or validated because `total` is null.
 
-**Next:** owner-approved deploy of v0.0.57 (T42C.4), then CR46 (Sprint 43, v0.0.58), then CR45 (v0.0.59).
+**Next:** CR46 (Sprint 43, v0.0.58, planned below), then CR45 (v0.0.59).
+
+## Sprint 43: CR46 v0.0.56 acceptance-test fixes (CV write path, match log, upload box) - PLANNED (target v0.0.58)
+
+**Change request:** CR46.md (APPROVED 2026-10-06; B1 refinement and B8 added at the 2026-11-11 replan, owner-approved)
+**PRD requirement:** FR-15 Amendment 2 (including the CR46 `Original CV` bullet), FR-15 Amendment (upload box), FR-23
+**User stories:** US-49 (upload box), US-50 and US-51 (write report matches the record, additions vs confirmed overwrites), US-52 (outcome logged under its `match_check_id`)
+**Dependency:** Sprint 42C complete (v0.0.57, 1,306 tests). Carries over the unfinished Sprint 42B T42B.8 (deploy and live acceptance): v0.0.56 was deployed 2026-10-06 and its acceptance test failed on the CV write path, which is this CR. The retest (T43.15) replaces T42B.8.
+**Risk:** High. It changes all three CV write paths, the file attach call, the duplicate responses and the upload box, and it is the first release in which `attach_cv` can get past its first read on a live record (so B8 must ship with B1). CR45 (Sprint 44, v0.0.59) builds on what this sprint ships and waits for its retest.
+
+### Current state (verified by code search and read-only live checks, 2026-11-11)
+
+Nothing in CR46 is implemented. Evidence:
+- `client.attach_file` (`client.py:274`) still takes `file_type` and sends `fileType`; no `type` parameter. All three call sites pass `file_type="CV"` and no `external_id`: `server.py:3402` (`_create_candidate_from_cv`), `:3644` (`_attach_cv`), `:3713` (`_attach_created_cv_file`, the file-only path).
+- `DEFAULT_FIELDS` (`client.py:27`) has no `CandidateWorkHistory` or `CandidateEducation`, so `client.create()`'s read-back asks for `fields=*` (B3).
+- `_attach_cv` (`server.py:3511`) builds `proposed_fields` from every scalar parse key and GETs them; no `_writable_candidate_fields` exists. `metadata.get_fields` (`metadata.py:53`) keeps only `name, label, type, required, options`, not `readOnly` or `dataSpecialization`.
+- `_skill_set_names` / `_merge_skill_set` (`server.py:2656-2668`) handle only a string `skillSet` (B8).
+- `create_candidate` (`server.py:2213`) returns no `duplicate_check`, and logs `created_new` only under the fresh id; `_create_candidate_from_cv` the same (`:3382-3384`) (B4, B5).
+- `duplicates.py:799` and `:915` have no singular form; `duplicates.py:1028` puts `points` in every match and each breakdown entry carries `points` (`:697`); no response strips them (`server.py` passes match results through). The match log (`match_log.py:121-125`) reads `points`, so stripping must happen after logging, at the response boundary.
+- No `placeholder_employers` in `match_config.json` (version `"1"`) or `duplicates.py`. Retrieval takes `profile.to_echo(config)["employers"][:max_employers]` (`duplicate_retrieval.py:276`), so placeholders must be removed in the profile's employer list before that cap. `tests/fixtures/match_cases.json` has a `"Freelance"` employer case whose expectation changes.
+- `upload_box.html:114-121` sends `ui/initialize` with `clientInfo` and `capabilities` (not `appInfo`) and swallows a rejection; `:157-160` sends `ui/message` `content` as a single object. `show_cv_upload_box` (`server.py:3065`) returns no `_meta.ui.resourceUri` and no `expires_in_seconds`.
+- `tests/fixtures/cv_parse_sample.json` (tracked) holds the real T43.2 parse; its `candidate` keys are `address, description, editHistoryValue, email, firstName, lastName, mobile, name, occupation, onboardingReceivedSent`.
+- No TODO, FIXME, skip or xfail in `src/` or `tests/`. Suite: **1,306 passed**.
+
+**Read-only live checks at replan (2026-11-11, Candidate 173063):**
+- The reads `attach_cv` makes after its first GET all succeed: the Candidate GET with `_ATTACH_BASE_FIELDS` plus the fixture's scalar keys minus `editHistoryValue` (so `onboardingReceivedSent` is fetchable), the `CandidateWorkHistory` and `CandidateEducation` queries with `_WORK_HISTORY_KEYS` / `_EDUCATION_KEYS`, the `primarySkills` association, and both child queries with the planned `DEFAULT_FIELDS` lists. So `editHistoryValue` is the only 400 on that path. Note: those two child queries swallow every exception (`existing_wh = []`), which would turn a read failure into duplicate child writes; recorded for the reviewer, not changed (not in CR46).
+- `/meta/Candidate` (`meta=full`): 229 of 276 fields are `readOnly`, including `skillSet`, `middleName`, `gender`, `nickName`, `dateOfBirth`, `dateAvailable`; 62 are `readOnly` with `dataSpecialization == "SYSTEM"` (`name`, `dateAdded`, `onboardingReceivedSent`, `category`, ...). `editHistoryValue` is absent. Intersection of the 62 with everything the MCP or tenant config injects: `name` only, computed with the **local `.env`** (no `BULLHORN_CANDIDATE_DEFAULTS` set there; the box's values were not checked). Low risk: the filter runs before defaults are injected. Hence the B1 refinement.
+- `GET /entity/CandidateWorkHistory/{id}` and `GET /entity/CandidateEducation/{id}` on 173063's rows with the planned `DEFAULT_FIELDS` lists return exactly those fields (the B3 read-back path).
+- `skillSet` comes back from GET and `/search` as a JSON list on every filled record sampled (469 added since 2026-10-06, 300 from early 2025). Hence B8.
+
+### Decisions and assumptions
+
+- CR46 owner answers Q1 to Q6, D1 to D4, the B1 refinement and B8 (all in CR46.md).
+- **P1 (planning choice).** B1 filter: drop keys not in `/meta/Candidate`, and keys that are `readOnly` with `dataSpecialization == "SYSTEM"`. It runs on the parse's `candidate` block and on `fields_override` (after label resolution) only, before tenant defaults, `source`, `owner`, the skills merge and the computed `name` are added. If `/meta` can't be read, it drops `editHistoryValue` and `onboardingReceivedSent` by name and passes the rest. Dropped parse keys are silent; a dropped `fields_override` key is a warning. `create_candidate` and `update_record` are not filtered (accepted gap).
+- **P2 (reverses a recorded Sprint 42B build note).** 42B said "`create_candidate` has no `duplicate_check` key on success". B5 adds it on every create (null with `force=True`), matching the CV path. Reviewers should not flag this as a contract change.
+- **P3.** D1 uses the T43.2-amended rule: the "current" work history entry is the one with the latest `startDate`, ignoring `endDate` (the parser sets `endDate` to the parse date on ongoing roles). Its `companyName` is proposed only when filled. Claude's corrected `work_history` wins over the parse.
+- **P4.** Q4: one helper strips `points` (the total and each breakdown entry's) at every response boundary, after `match_candidates` has logged: `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`, both create stops (`_duplicate_policy`), and `duplicate_check` on both create successes. Sorting stays on points inside `duplicates.py`.
+- **P5.** Q5 bumps `match_config.json` `version` to `"2"`; the validator accepts `placeholder_employers` (a list of strings) and rejects anything else. Tests that pin version `"1"` are updated.
+- **P6.** B6: the build re-reads the current MCP Apps spec types (`ext-apps` `spec.types.ts`) for the `ui/initialize` and `ui/message` shapes rather than pinning CR46's 2026-10-07 reading. The "never blank" fallback is its own tested behaviour.
+- **P7.** One sprint (owner's single v0.0.58 release). Task order is the CV write path first, then the match changes, then the upload box, then the end-to-end, live and docs tasks, so a context overrun leaves a clean cut.
+
+### Tasks
+
+#### T43.0 Upload box diagnosis with the owner (DONE 2026-10-07)
+Result in CR46.md B6: the host mounts the app on web, Desktop and Cowork; the box is blank because `ui/initialize` sends `clientInfo` instead of `appInfo` and swallows the rejection. Cause 3 (domain hash) ruled out.
+
+#### T43.1 Live attach probes on 173063 (DONE 2026-10-06, owner-approved)
+`externalID` missing gives 500 DUPLICATE_VALUE; `externalID=Portfolio` plus `type=Original CV` as query parameters attaches exactly like a consultant upload; `fileType` is ignored. Files 326613 and 326614 stay as test data.
+
+#### T43.2 Real parse fixture (DONE 2026-10-06, owner-approved)
+`tests/fixtures/cv_parse_sample.json` saved from a real parse of `tests/fixtures/sample_cv/cr41_test_candidate.docx` (no `companyName`; work history employer merged into `title`; ongoing `endDate` set to the parse date).
+
+#### T43.3 Writable-field filter, `maxLength`, and the parse's `name` (B1, B9, B7 name item)
+**Files:** `src/bullhorn_mcp/metadata.py`, `src/bullhorn_mcp/server.py`
+- `get_fields` also keeps `readOnly`, `dataSpecialization` and `maxLength` from `/meta` (B9: without `maxLength`, `_truncate_against_meta` has never clipped in production; only test mocks supply it).
+- `_writable_candidate_fields(metadata, fields) -> (kept, dropped)` per P1. `_create_candidate_from_cv` and `_attach_cv` run the parse block through it before anything else, and `fields_override` after label resolution (dropped override keys become a warning). The parse's `name` is removed silently before the filter; a `name` Claude sends gets the reworded warning ("replaced with the name computed from firstName and lastName").
+- `written.fields` lists only keys that were sent.
+- **Tests** (`tests/test_metadata.py`, `tests/test_server.py`): `test_get_fields_keeps_readonly_and_specialization`, `test_get_fields_keeps_max_length`, `test_truncate_clips_with_real_meta_shape` (metadata built from a raw `/meta` response, not a hand-made projection), `test_writable_fields_drops_unknown_and_system_readonly`, `test_writable_fields_keeps_non_system_readonly` (skillSet, middleName), `test_writable_fields_meta_unavailable_drops_known_parser_keys`, `test_attach_cv_fetch_excludes_non_meta_parse_keys` (respx: the GET `fields` has no `editHistoryValue`), `test_create_from_cv_payload_excludes_readonly_and_unknown` (raw PUT body: no `editHistoryValue`, no `onboardingReceivedSent`, `address` kept), `test_written_fields_match_sent_payload`, `test_override_unknown_field_is_warned`, `test_cv_path_parse_name_not_warned`, `test_claude_name_warning_reworded`.
+
+#### T43.4 Attach the file like a consultant upload (B2, Q1)
+**Files:** `src/bullhorn_mcp/client.py`, `src/bullhorn_mcp/server.py`
+- `attach_file(entity, entity_id, file_bytes, filename, content_type, external_id=None, type=None)`: sends `externalID` and `type` as query parameters; `fileType` is removed. CR45 reuses it with other `type` values.
+- All three CV call sites (`_create_candidate_from_cv`, `_attach_cv`, `_attach_created_cv_file`) pass `external_id="Portfolio"`, `type="Original CV"`.
+- **Tests:** `test_attach_file_sends_external_id_and_type` (respx: exact query string, no `fileType`), and one per call site asserting the request, `written.file` and `mark_attached`: `test_create_from_cv_attaches_original_cv`, `test_attach_cv_attaches_original_cv`, `test_attach_created_cv_file_attaches_original_cv`.
+
+#### T43.5 Child rows read back with explicit fields (B3)
+**File:** `src/bullhorn_mcp/client.py`
+- `DEFAULT_FIELDS` gains `CandidateWorkHistory: id,candidate,companyName,title,startDate,endDate,isLastJob` and `CandidateEducation: id,candidate,school,degree,major,certification,graduationDate,startDate,endDate` (both verified live 2026-10-06 and again 2026-11-11), with a comment marking them load-bearing for the CV write path, as `Note` is.
+- **Tests:** `test_default_fields_pin_candidate_children`, `test_write_children_reports_rows_when_readback_uses_default_fields` (respx: the GET for the new row carries explicit `fields`, never `*`; `written.work_history` and `written.education` list the rows).
+
+#### T43.6 skillSet returned as a list (B8)
+**File:** `src/bullhorn_mcp/server.py`
+- `_skill_set_names` and `_merge_skill_set` accept a list or a comma-separated string; a list `skillSet` in `fields` / `fields_override` is joined with `, ` before any write.
+- **Tests:** `test_skill_set_names_accepts_list`, `test_merge_skill_set_list_existing_keeps_names`, `test_attach_cv_keeps_existing_list_skillset` (existing `skillSet` returned as a list: the update carries old and new names, `written.skill_set` lists only the new ones), `test_create_candidate_list_skillset_joined` (with and without `skills`).
+
+#### T43.7 Current company from the CV (D1)
+**File:** `src/bullhorn_mcp/server.py`
+- When the candidate block has no `companyName`, both CV paths propose the `companyName` of the current work history entry (P3). On `attach_cv`, a different existing `companyName` goes into `pending_overwrites` like `occupation` and is written on `confirm=True`. On create it also satisfies the tenant's required `companyName`.
+- **Tests:** `test_attach_cv_company_change_is_pending_overwrite`, `test_attach_cv_company_from_current_work_history`, `test_current_entry_is_latest_start_date_ignoring_end_date`, `test_no_company_proposed_when_current_entry_has_none`, `test_create_from_cv_company_from_corrected_work_history`.
+
+#### T43.8 Outcomes under the passed id; `duplicate_check` on every create (B4, B5, Q3)
+**File:** `src/bullhorn_mcp/server.py`
+- Without `force`, the fresh check still runs; the outcome is logged under the fresh id **and** under a passed `match_check_id` (when different). The response keeps `duplicate_check` (fresh id) and adds `match_check_id` = the passed id. With `force=True`, behaviour per 42B A1 (logs `created_with_force` under the passed id).
+- `create_candidate` returns `duplicate_check` on every create (null with `force=True`) (P2).
+- **Tests:** `test_create_from_cv_logs_outcome_under_passed_id`, `test_create_candidate_logs_outcome_under_passed_id`, the same two `_with_force`, `test_create_candidate_returns_duplicate_check`, `test_create_candidate_force_duplicate_check_null`.
+
+#### T43.9 Percentages only in responses (Q4)
+**Files:** `src/bullhorn_mcp/server.py` (and `duplicates.py` if the helper sits there)
+- One `_public_match_result` helper per P4, applied at every listed response site. The log keeps all points.
+- **Tests:** `test_find_duplicates_response_has_no_points`, `test_parse_cv_duplicate_check_has_no_points`, `test_stop_response_has_no_points`, `test_create_success_duplicate_check_has_no_points`, `test_match_log_keeps_points`, `test_ranking_unchanged_without_points`.
+
+#### T43.10 Placeholder employers and plurals (Q5, B7)
+**Files:** `src/bullhorn_mcp/duplicates.py`, `src/bullhorn_mcp/match_config.json`, `tests/fixtures/match_cases.json`
+- `placeholder_employers` in the config (the Q5 list: career break, self employed, self-employed, freelance, freelancer, contract, contractor, various, unemployed, sabbatical, travelling, maternity leave, n/a, confidential), matched after `normalize_employer`. Placeholders are removed from the profile's employer list before the `max_employers` cap (so retrieval never searches them) and are never scored as a shared employer. Records keep them as parsed. `version` becomes `"2"`, validator per P5.
+- Singular reasons when the count is 1 ("shared by 1 candidate", "1 candidate lists this employer").
+- **Tests** (`tests/test_duplicates.py`, `tests/test_duplicate_retrieval.py`): `test_placeholder_employer_not_scored`, `test_placeholder_employer_not_searched`, `test_placeholder_removed_before_employer_cap`, `test_placeholder_matched_after_normalisation`, `test_config_rejects_bad_placeholder_list`, `test_surname_reason_singular`, `test_employer_reason_singular`; the `Freelance` case in `match_cases.json` updated; version-pinning tests updated.
+
+#### T43.11 Upload box shown and never blank (B6)
+**Files:** `src/bullhorn_mcp/upload_box.html`, `src/bullhorn_mcp/server.py`
+- Re-read the spec types (P6). `ui/initialize` sends `appInfo`, `appCapabilities` and `protocolVersion`. On an initialize failure the box shows a visible error and still reports a size; it reports a size on load. `ui/message` sends `content` as an array of blocks.
+- `show_cv_upload_box` result adds `_meta.ui.resourceUri` and `expires_in_seconds`; `request_cv_upload` adds `expires_in_seconds`; the box's message and `request_cv_upload`'s fallback step say that showing the box replaces the earlier upload URL. `resources/read` of the box URI is logged at INFO.
+- How "never blank" is tested: the repo has only pytest (no browser), so these tests are static assertions on `upload_box.html`'s source (the `ui/initialize` params, the rejection handler showing an error and calling `reportSize`, the `ui/message` array). The live retest (T43.15) is the real proof.
+- **Tests:** `test_upload_box_initialize_uses_app_info`, `test_upload_box_message_content_is_array`, `test_upload_box_init_failure_shows_error_and_size`, `test_show_upload_box_result_has_resource_uri`, `test_upload_responses_have_expires_in_seconds`, `test_upload_box_resource_read_logged`.
+
+#### T43.12 End-to-end at the HTTP boundary
+**File:** `tests/test_server.py` (or a new `tests/test_cv_write_e2e.py`, LF)
+- With respx and `cv_parse_sample.json` (names and contacts already the test persons'): `create_candidate_from_cv` and `attach_cv` end to end, asserting the GET `fields`, the Candidate PUT body, the child create bodies and their read-back `fields`, the skills writes, the file query string, `written` matching what was sent, and the outcome log lines. Plus the prior-sprint E2E: the full suite stays green (1,306 baseline).
+- **Tests:** `test_e2e_create_from_cv_real_parse`, `test_e2e_attach_cv_real_parse_additions_then_confirm`, `test_e2e_attach_cv_file_only_path`.
+
+#### T43.13 Build-time live write check (owner approval required)
+- After the suite is green and before the commit, with the owner's approval: first seed `skillSet` on test Candidate 173063 (it is null today, so a B8 check without seeding proves nothing) with two names, then `attach_cv` on 173063 with a small test CV upload and `skills` holding one of the seeded names and one new name (direct server call, as T41.7). Read back: no 400; the file attached with `type=Original CV`; `skillSet` holds both seeded names plus the new one, once each (this also proves a `skillSet` write replaces rather than appends, which B8 assumes); child rows reported as written match `/query`. Results recorded here. Skipped if the owner declines; then T43.15 is the first live proof.
+
+#### T43.14 Docs
+- `COWORK_TEST_v0.0.56.md` becomes `COWORK_TEST_v0.0.58.md`: 1.3 per B6; 3.2 expects `type=Original CV` (not "type CV"); the Part 4 `attach_cv` on the existing Person A (who has skills from 3.1) passes one existing and one new skill and checks the read-back keeps all of them (B8); 3.3 expectation corrected (B7); 4.2 expects occupation and companyName (D1); 7.1 passes 90308's work history and education and reports the band (D4); match responses show percentages, not points.
+- README (CV attach label, percentages only, placeholder employers), the tool descriptions touched (text before `Args:` only, FastMCP drops the rest), NFR-8: measure the description delta.
+- CR46.md Status at the post-tag doc sync.
+
+#### T43.15 Deploy and full retest (owner; replaces T42B.8)
+- Owner deploys v0.0.58; before the retest soft-deletes 173152 and 173153 so Person A and B are new again.
+- Run `COWORK_TEST_v0.0.58.md`: every step PASS; the CV file attached on create and on `attach_cv` with `type=Original CV`; `get_cv_upload` shows `attached`; each write report matches a read-back (including skills as a list and primarySkills by association); the match log shows each outcome under the passed id (checked on the server).
+- Upload box retest with the owner in Cowork (and Desktop/web): the box appears and a dropped file shows `received`. If still blank, Desktop Developer Mode DevTools next.
+- Carried from T42B.8: record any new test Candidate id in the approved live test records; CR43, CR44 and CR46 Status set to COMPLETE; then remind the owner to start CR45 (apply its PRD amendment, replan Sprint 44).
+
+### Verification
+
+- [ ] `.venv/bin/pytest` green; measured count recorded below.
+- [ ] `grep -n "fileType" src/bullhorn_mcp/client.py src/bullhorn_mcp/server.py` shows no attach use.
+- [ ] No response path returns `points` (reviewer check of every site in P4); the match log still has them.
+- [ ] Every Lucene value in `duplicate_retrieval.py` passes through an escape helper (carried open from the Sprint 42B checklist; reviewer check).
+- [ ] Line endings: new test files LF; `tests/test_server.py`, `tests/test_client.py`, `client.py` and this file CRLF; `server.py`, `duplicates.py`, `metadata.py` as they are (check `git show HEAD:<file> | grep -c $'\r'` first).
+- [ ] T43.13 run (or declined) and recorded.
+- [ ] Local commit `fix: CR46 ...`. No push. Then `PROMPT_iterate.md` (its Step 0 runs the first review), push, tag **v0.0.58**.
+- [ ] T43.15 after the owner's deploy; results recorded.
+
+### Expected test count after Sprint 43
+
+Previous: 1,306 (v0.0.57). Planned: about 12 (T43.3) + 4 (T43.4) + 2 (T43.5) + 4 (T43.6) + 5 (T43.7) + 6 (T43.8) + 6 (T43.9) + 7 (T43.10) + 6 (T43.11) + 3 (T43.12), about 53, plus rewritten tests on the old `fileType`, `points` and config-version shapes. **To be measured, not predicted.**
+
+### Not planned (recorded)
+
+- Sprint 42C learning: `query_entities` on `/query` truncates over 500 with `total` null. Out of scope; no PRD gap raised.
+- `_attach_cv` swallows exceptions on the existing child-row queries (see Current state). Not in CR46; flagged for the reviewer.
+- Parser name split ("Alpha" surname, "Crfortythree" middle name): parser quality, CR46 non-goal.
+
+**Next after Sprint 43:** CR45 (Sprint 44, v0.0.59). Its PRD amendment (FR-24, NFR-9 Amendment, US-53, US-54) is owner-approved but **not yet applied to PRD.md**; per CR45's lifecycle it is applied, and Sprint 44 planned, at the replan after CR46 is deployed and retested, from the code CR46 ships.
