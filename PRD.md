@@ -4,7 +4,7 @@
 
 The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, field metadata resolution, hosted HTTP access, authenticated-user owner stamping, first-class JobOrder create/update workflows, and JobSubmission (shortlist) write tools.
 
-Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15, with CV files delivered through single-use upload tickets rather than base64 per the FR-15 Amendment), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), tearsheet (hotlist) management tools (FR-21), a read-only external people search via Perplexity for sourcing candidates not yet in Bullhorn (FR-22), reviewed CV parsing that writes work history, education and skills (FR-15 Amendment 2), and candidate duplicate detection by weighted evidence (FR-23).
+Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15, with CV files delivered through single-use upload tickets rather than base64 per the FR-15 Amendment), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), tearsheet (hotlist) management tools (FR-21), a read-only external people search via Perplexity for sourcing candidates not yet in Bullhorn (FR-22), reviewed CV parsing that writes work history, education and skills (FR-15 Amendment 2), candidate duplicate detection by weighted evidence (FR-23), and attaching uploaded files that are not CVs to records (FR-24).
 
 The MCP serves two classes of consumer:
 
@@ -312,6 +312,13 @@ The MCP shall provide a `people_search_perplexity` tool for finding people (cand
 - One implementation shall serve the duplicate tool and every candidate create and update path, and its weights and thresholds shall be versioned configuration.
 - Each check shall be logged (without CV contents) with its outcome, for calibration.
 
+### FR-24: Attach Files to Records (CR45)
+
+- Files of the allowed types shall be uploaded through the same single-use ticket flow as CVs (FR-15 Amendment), renamed for any file, and never passed as file contents in a tool argument.
+- `attach_file(entity, entity_id, upload_id, type?, description?)` shall attach an uploaded file, without parsing it, to a Candidate, ClientContact, ClientCorporation, JobOrder, Placement or Opportunity, under the file's original name.
+- A `type` label is optional. If given, it shall be one of the values Bullhorn allows for that entity's attachments, read from the tenant's file type settings; any other value shall be refused with the allowed list.
+- The CV tools shall accept only CV file types and shall point to `attach_file` for anything else.
+
 ## 7. Non-Functional Requirements
 
 ### NFR-1: No Destructive Operations
@@ -368,6 +375,10 @@ The startup tool-description enrichment (the `## Field reference` block appended
 - An upload shall be at most 10 MB (Bullhorn's own cap on record file attachments) and of an allowed CV file type (`pdf, doc, docx, rtf, odt, txt, html, htm`), with an extension matching the ticket's filename.
 - Received files shall be held in memory only, never on disk, and be readable only by the issuing user.
 - A file shall be deleted as soon as it is attached in Bullhorn. It is kept between calls that need it (after `parse_cv`, between `attach_cv` preview and commit, and after a failure, so the user can retry), and is purged 30 minutes after upload otherwise.
+
+### NFR-9 Amendment: Non-CV File Types (CR45)
+
+The allowed file types for uploads become `pdf, doc, docx, rtf, odt, txt, html, htm, png, jpg, jpeg, msg, eml`; the CV tools keep the CV subset. All other NFR-9 rules (single use, 15-minute ticket, hashed token, owner binding, memory only, 10 MB, deleted on attach, 30-minute purge) apply to every file.
 
 ## 8. Constraints and Exclusions
 
@@ -555,6 +566,16 @@ As a consultant, I want a candidate found through LinkedIn or a Perplexity searc
 **US-52: Spot a returning candidate even without contact details**
 As a consultant, I want Bullhorn to recognise a candidate who is already on file from their name, employers and education, even when the new CV has no email or phone, so that I update their record instead of creating a duplicate.
 - **Acceptance**: a profile matching an existing candidate on name, employers and school but with no email or phone is returned as a high match with its reasons, and the consultant is shown them; two different people sharing a common name are not; a match against a soft-deleted candidate is flagged. Each check is logged without CV contents, with its `match_check_id`, the configuration version that scored it and, once a create or attach call reports it, the outcome, so the weights can be recalibrated. (Live check uses the Kevin Cassidy 90308 pattern, dry-run only.)
+
+### File Attachments (CR45)
+
+**US-53: Attach a job's JD to the job**
+As a consultant, after Claude builds the letterheaded JD for a new job, I want Claude to attach it to the JobOrder, so the JD is on the job in Bullhorn without me uploading it by hand.
+- **Acceptance**: Claude uploads the JD with the ticket flow and calls `attach_file(entity="JobOrder", entity_id=<job>, upload_id=...)`. The file shows on the job under its original name. `get_file_upload` reports `attached`. No base64 appears in the conversation.
+
+**US-54: Attach a document that isn't a CV**
+As a consultant, I want to attach a cover letter, reference, contract, fee agreement or similar document to the right candidate, contact, company or placement, so that it's on the record without being run through the CV parser.
+- **Acceptance**: `attach_file` attaches the file with the `type` I ask for when it's valid for that record (for example `Cover Letter` on a Candidate, `Fee Agreement` on a ClientCorporation). An invalid label is refused with the allowed list. A Lead is refused with a clear message. Nothing is parsed, and no Candidate fields change.
 
 ### Note Reading and Search
 
