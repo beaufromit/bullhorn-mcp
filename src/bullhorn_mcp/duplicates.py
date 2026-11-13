@@ -17,6 +17,7 @@ evidence of a new person (the 90308 false negative that motivated CR44).
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
@@ -76,6 +77,7 @@ _REQUIRED_KEYS = (
     "generic_employer_words",
     "generic_degrees",
     "forename_equivalents",
+    "placeholder_employers",
 )
 
 # Keys whose value is a probability, beyond the m/u pairs found by walking the file.
@@ -193,6 +195,11 @@ def validate_match_config(config: dict) -> dict:
         raise MatchConfigError(f"match config 'population.pi_numerator' must be above 0 and below fallback_n, got {pi!r}")
     if not isinstance(_lookup(config, "version"), str):
         raise MatchConfigError("match config 'version' must be a string")
+    placeholders = _lookup(config, "placeholder_employers")
+    if not isinstance(placeholders, list) or not all(isinstance(p, str) for p in placeholders):
+        raise MatchConfigError(
+            f"match config 'placeholder_employers' must be a list of strings, got {placeholders!r}"
+        )
     return config
 
 
@@ -796,7 +803,7 @@ def _score_names(a, b, context, n, config, breakdown, flags) -> str:
         points = _level_points(config["surname"], sur, u)
         count = max((context.surname_counts.get(k, 0) for k in (ka_last, kb_last) if k), default=0)
         reasons = {
-            "exact": f"Same surname ({a_last})" + (f", shared by {count} candidates" if sur == "exact" and count else ""),
+            "exact": f"Same surname ({a_last})" + (f", shared by {count} {'candidate' if count == 1 else 'candidates'}" if sur == "exact" and count else ""),
             "fuzzy": f"Similar surnames ({a_last} / {b_last})",
             "different": f"Different surnames ({a_last} / {b_last}); can happen after marriage",
         }
@@ -812,8 +819,18 @@ class _Employer:
     titles: list = field(default_factory=list)
 
 
+def _placeholder_keys(config: dict) -> frozenset:
+    """Placeholder employers in normalised form, so "Self-Employed Ltd" matches "self employed"."""
+    return frozenset(k for k in (normalize_employer(p, config) for p in config["placeholder_employers"]) if k)
+
+
 def _employers(profile: CandidateProfile, config: dict) -> dict[str, _Employer]:
     """Distinct employers by normalised key (rows are never counted twice).
+
+    Placeholder rows ("Career Break", "Freelance"; CR46 Q5) are left out here, the
+    single place both retrieval (via ``to_echo``) and scoring read employers from,
+    so they are never searched, never scored and never use up a ``max_employers`` slot.
+    The profile itself keeps them as parsed.
 
     Two keys in one record that match each other (for example "abbey capital"
     and the parser's "corporate with abbey capital") are one employer, kept
@@ -821,10 +838,11 @@ def _employers(profile: CandidateProfile, config: dict) -> dict[str, _Employer]:
     employer with no dates.
     """
     out: dict[str, _Employer] = {}
+    placeholders = _placeholder_keys(config)
 
     def merge(name, span, title):
         key = normalize_employer(name, config)
-        if not key:
+        if not key or key in placeholders:
             return
         same = next((k for k in out if _employers_match(k, key, config)), None)
         if same is None:
@@ -912,7 +930,7 @@ def _score_employers(a, b, context, n, config, breakdown) -> None:
         if via_title:
             reason += ", found in a job title"
         if count:
-            reason += f"; {count} candidates list this employer"
+            reason += f"; {count} candidate lists this employer" if count == 1 else f"; {count} candidates list this employer"
         if _spans_overlap(spans_a, spans_b):
             points += spec["overlap_bonus"]
             reason += "; the dates overlap"
@@ -1031,6 +1049,26 @@ def score_pair(profile: CandidateProfile, existing: CandidateProfile, context: M
         "breakdown": breakdown,
         "flags": flags,
     }
+
+
+def public_match_result(result: dict) -> dict:
+    """A copy of a match result safe to show a consultant: no ``points`` anywhere.
+
+    ``points`` is summed log2 evidence that legitimately exceeds 100 and confuses
+    readers (CR46 Q4); they see the percentage. A deep copy, because the match log
+    reads ``points`` from the same result object. Ranking is done before this on
+    points, so list order is kept as is.
+    """
+    out = copy.deepcopy(result)
+    for key in ("matches", "deleted_matches"):
+        for m in out.get(key) or []:
+            if not isinstance(m, dict):
+                continue
+            m.pop("points", None)
+            for entry in m.get("breakdown") or []:
+                if isinstance(entry, dict):
+                    entry.pop("points", None)
+    return out
 
 
 def rank(profile: CandidateProfile, pool: list[CandidateProfile], context: MatchContext | None, config: dict) -> dict:

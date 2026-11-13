@@ -47,6 +47,7 @@ class TestGetFields:
             "label": "Consultant",
             "type": "TO_ONE",
             "required": True,
+            "readOnly": False,
         }
 
     def test_get_fields_caches_result(self, metadata, mock_client):
@@ -319,3 +320,64 @@ class TestSprint2E2E:
 
         label = metadata.resolve_api_to_label("ClientContact", api_name)
         assert label == "Consultant"
+
+
+RAW_META_REAL_SHAPE = {
+    "entity": "Candidate",
+    "fields": [
+        {"name": "occupation", "type": "SCALAR", "dataType": "String",
+         "maxLength": 100, "readOnly": False, "label": "Job Title"},
+        {"name": "description", "type": "SCALAR", "dataType": "String",
+         "maxLength": 2147483647, "dataSpecialization": "HTML", "label": "Description"},
+        {"name": "dateAdded", "type": "SCALAR", "dataType": "Timestamp",
+         "readOnly": True, "dataSpecialization": "SYSTEM", "label": "Date Added"},
+    ],
+}
+
+
+class TestCR46MetaProjection:
+    def test_get_fields_keeps_readonly_and_specialization(self):
+        """readOnly defaults False; dataSpecialization only present when supplied."""
+        client = Mock()
+        client.get_meta.return_value = RAW_META_REAL_SHAPE
+        fields = {f["name"]: f for f in BullhornMetadata(client).get_fields("Candidate")}
+
+        assert fields["occupation"]["readOnly"] is False
+        assert "dataSpecialization" not in fields["occupation"]
+        assert fields["description"]["readOnly"] is False
+        assert fields["description"]["dataSpecialization"] == "HTML"
+        assert fields["dateAdded"]["readOnly"] is True
+        assert fields["dateAdded"]["dataSpecialization"] == "SYSTEM"
+
+    def test_get_fields_keeps_max_length(self):
+        """maxLength is kept only when it is an int."""
+        client = Mock()
+        client.get_meta.return_value = {
+            "fields": [
+                {"name": "a", "label": "A", "maxLength": 100},
+                {"name": "b", "label": "B"},
+                {"name": "c", "label": "C", "maxLength": "100"},
+                {"name": "d", "label": "D", "maxLength": None},
+            ]
+        }
+        fields = {f["name"]: f for f in BullhornMetadata(client).get_fields("Candidate")}
+
+        assert fields["a"]["maxLength"] == 100
+        for name in ("b", "c", "d"):
+            assert "maxLength" not in fields[name]
+
+    def test_truncate_clips_with_real_meta_shape(self):
+        """server._truncate_against_meta works off the real /meta projection."""
+        from bullhorn_mcp.server import _truncate_against_meta
+
+        client = Mock()
+        client.get_meta.return_value = RAW_META_REAL_SHAPE
+        meta = BullhornMetadata(client)
+        long_desc = "x" * 5000
+
+        result = _truncate_against_meta(
+            meta, "Candidate", {"occupation": "o" * 150, "description": long_desc}
+        )
+
+        assert result["occupation"] == "o" * 100
+        assert result["description"] == long_desc

@@ -55,7 +55,7 @@ def _match(candidate_id=50, name="Jane Doe", percentage=97, band="high", flags=N
 def _match_result(matches=None, deleted_matches=None, flags=None, check_id="chk-new"):
     """A match_candidates result; no matches by default."""
     return {
-        "match_check_id": check_id, "config_version": "1", "profile": {},
+        "match_check_id": check_id, "config_version": "2", "profile": {},
         "matches": list(matches or []), "flags": list(flags or []),
         "deleted_matches": list(deleted_matches or []),
     }
@@ -5958,7 +5958,7 @@ class TestCreateCandidate:
         """With no child lists the response keeps its old keys and has no written block."""
         data = self._run_with_children(mock_client, mock_metadata, dict(self._CHILD_FIELDS))
 
-        assert set(data.keys()) == {"changedEntityId", "changeType", "data"}
+        assert set(data.keys()) == {"changedEntityId", "changeType", "data", "duplicate_check"}
         assert data["changedEntityId"] == 400
         assert [c.args[0] for c in mock_client.create.call_args_list] == ["Candidate"]
         mock_client.add_association.assert_not_called()
@@ -6004,7 +6004,7 @@ class TestFindDuplicateCandidates:
         with patch.object(server, "get_client", return_value=mock_client):
             data = json.loads(server.find_duplicate_candidates("Jane", "Doe", email="jane@example.com"))
 
-        assert data == result_in
+        assert data == server.public_match_result(result_in)
         profile = match_stub.match.call_args.args[1]
         assert (profile.first_name, profile.last_name, profile.emails) == ("Jane", "Doe", ["jane@example.com"])
 
@@ -7057,7 +7057,7 @@ class TestCreateCandidateFromCv:
 
         assert data["created"] is True
         mock_client.attach_file.assert_called_once_with(
-            "Candidate", data["candidate_id"], _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", file_type="CV"
+            "Candidate", data["candidate_id"], _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", type="Original CV"
         )
         mock_client.parse_resume_file.assert_called_once_with(_CV_BYTES, "Jane_Doe_CV.pdf", "pdf")
 
@@ -7181,7 +7181,7 @@ class TestCreateCandidateFromCv:
         mock_client.add_association.assert_not_called()
         mock_client.get.assert_not_called()
         mock_client.attach_file.assert_called_once_with(
-            "Candidate", candidate_id, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", file_type="CV"
+            "Candidate", candidate_id, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", type="Original CV"
         )
         assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
 
@@ -7702,7 +7702,7 @@ class TestCreateCandidateFromCv:
 
 @pytest.mark.usefixtures("clean_upload_store")
 class TestAttachCv:
-    """Tests for attach_cv (CR43: additions written on every call, overwrites need confirm=True)."""
+    """Tests for attach_cv (CR43: additions written on every call, overwrites need overwrite=[...])."""
 
     CID = 67890
     DESC = "<html><body><p>Jane Doe</p><p>Financial Accountant with 8 years in group reporting.</p></body></html>"
@@ -7888,7 +7888,7 @@ class TestAttachCv:
 
         data = self._attach(mock_client, mock_metadata, upload_id=upload_id, match_check_id="chk-9")
 
-        mock_client.update.assert_not_called()  # the overwrite waits for confirm
+        mock_client.update.assert_not_called()  # the overwrite waits for overwrite
         assert data["written"]["file"]["already_attached"] is True
         match_stub.log.assert_not_called()
 
@@ -7925,7 +7925,7 @@ class TestAttachCv:
         match_stub.match.assert_not_called()
 
     def test_attach_without_confirm_writes_additions_only(self, mock_client, mock_metadata, sample_parsed_resume):
-        """No confirm: the update payload has only the empty-field additions, never the overwrite field."""
+        """No overwrite: the update payload has only the empty-field additions, never the overwrite field."""
         self._prep(mock_client, sample_parsed_resume)
         upload_id = _seed_upload()
 
@@ -7946,7 +7946,7 @@ class TestAttachCv:
         assert data["written"]["file"] == {"file_id": 80, "name": "Jane_Doe_CV.pdf"}
         mock_client.add_association.assert_called_once_with("Candidate", self.CID, "primarySkills", [1000125, 1000200])
         mock_client.attach_file.assert_called_once_with(
-            "Candidate", self.CID, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", file_type="CV"
+            "Candidate", self.CID, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", type="Original CV"
         )
         assert "overwritten" not in data
 
@@ -7959,7 +7959,7 @@ class TestAttachCv:
         assert data["pending_overwrites"] == [
             {"field": "occupation", "current": "Junior Developer", "proposed": "Financial Accountant"}
         ]
-        assert "confirm=True" in data["hint"]
+        assert "overwrite=" in data["hint"]
 
     def test_attach_fields_to_update_resolves_labels(self, mock_client, mock_metadata, sample_parsed_resume):
         """CR43 review m2: fields_to_update labels resolve like fields_override ("Job Title" -> occupation)."""
@@ -7987,8 +7987,8 @@ class TestAttachCv:
         assert data["warnings"] == ["fields_to_update not in the parse or fields_override, ignored: ['Notice Period']"]
 
     def test_attach_truncated_addition_not_offered_as_overwrite(self, mock_client, mock_metadata, sample_parsed_resume):
-        """CR43 review m4: a field written clipped by the additions call is equal on the confirm call."""
-        mock_metadata.get_fields.return_value = [{"name": "phone", "maxLength": 4}]
+        """CR43 review m4: a field written clipped by the additions call is equal on the overwrite call."""
+        mock_metadata.get_fields.return_value = [{"name": "phone", "maxLength": 4}, {"name": "description"}, {"name": "occupation"}]
         self._prep(mock_client, sample_parsed_resume)
         upload_id = _seed_upload()
         first = self._attach(mock_client, mock_metadata, upload_id=upload_id)
@@ -8029,7 +8029,7 @@ class TestAttachCv:
         existing, wh, edu, linked = self._written_state(sample_parsed_resume)
         self._prep(mock_client, sample_parsed_resume, existing, wh, edu, linked)
         mock_client.update.reset_mock()
-        second = self._attach(mock_client, mock_metadata, upload_id=upload_id, confirm=True)
+        second = self._attach(mock_client, mock_metadata, upload_id=upload_id, overwrite=previewed)
 
         assert previewed == ["occupation"]
         mock_client.update.assert_called_once_with("Candidate", self.CID, {"occupation": "Financial Accountant"})
@@ -8047,7 +8047,7 @@ class TestAttachCv:
         mock_client.create.reset_mock()
         mock_client.add_association.reset_mock()
         mock_client.update.reset_mock()
-        second = self._attach(mock_client, mock_metadata, upload_id=upload_id, confirm=True)
+        second = self._attach(mock_client, mock_metadata, upload_id=upload_id, overwrite=["occupation"])
 
         mock_client.create.assert_not_called()
         mock_client.add_association.assert_not_called()
@@ -8072,7 +8072,7 @@ class TestAttachCv:
         assert rec["data"] is None
         assert rec["attached_candidate_id"] == self.CID
 
-        second = self._attach(mock_client, mock_metadata, upload_id=upload_id, confirm=True)
+        second = self._attach(mock_client, mock_metadata, upload_id=upload_id, overwrite=["all"])
 
         assert second["committed"] is True
         assert "error" not in second
@@ -8087,7 +8087,7 @@ class TestAttachCv:
         mock_client.create.reset_mock()
         mock_client.attach_file.reset_mock()
 
-        data = self._attach(mock_client, mock_metadata, upload_id=upload_id, candidate_id=999, confirm=True)
+        data = self._attach(mock_client, mock_metadata, upload_id=upload_id, candidate_id=999, overwrite=["all"])
 
         assert data["error"] == "upload_already_attached"
         mock_client.update.assert_not_called()
@@ -8177,18 +8177,19 @@ class TestAttachCv:
         for removed in ("include_work_history", "include_education", "include_skills", "force_all"):
             assert removed not in props
         for present in ("fields_to_update", "fields_override", "work_history", "education",
-                        "skills", "primary_skills", "confirm"):
+                        "skills", "primary_skills", "overwrite"):
             assert present in props
+        assert "confirm" not in props
 
     # --- Kept from the earlier flow, adapted -------------------------------------
 
     def test_attach_cv_commit_applies_selected_fields(self, mock_client, mock_metadata, sample_parsed_resume):
-        """fields_to_update limits the fields considered, with confirm=True writing the overwrite."""
+        """fields_to_update limits the fields considered, with overwrite=[...] writing the overwrite."""
         self._prep(mock_client, sample_parsed_resume)
         upload_id = _seed_upload()
 
         data = self._attach(mock_client, mock_metadata, upload_id=upload_id,
-                            fields_to_update=["occupation"], confirm=True)
+                            fields_to_update=["occupation"], overwrite=["occupation"])
 
         assert data["committed"] is True
         assert data["overwritten"] == ["occupation"]
@@ -8217,7 +8218,7 @@ class TestAttachCv:
         """An upload started for Candidate 111 cannot be attached to Candidate 222."""
         upload_id = _seed_upload(candidate_id=111)
 
-        data = self._attach(mock_client, mock_metadata, candidate_id=222, upload_id=upload_id, confirm=True)
+        data = self._attach(mock_client, mock_metadata, candidate_id=222, upload_id=upload_id, overwrite=["all"])
 
         assert data["error"] == "upload_candidate_mismatch"
         assert "attach_cv(candidate_id=111" in data["hint"]
@@ -8248,7 +8249,7 @@ class TestAttachCv:
         upload_id = _seed_upload(sub="user-a")
         server.upload_store.claim(upload_id, "user-a")
 
-        data = self._attach(mock_client, mock_metadata, sub="user-b", upload_id=upload_id, confirm=True)
+        data = self._attach(mock_client, mock_metadata, sub="user-b", upload_id=upload_id, overwrite=["all"])
 
         assert data["error"] == "upload_not_found"
         with pytest.raises(UploadInUse):
@@ -8284,7 +8285,7 @@ class TestAttachCv:
         upload_id = _seed_upload()
 
         data = self._attach(mock_client, mock_metadata, upload_id=upload_id,
-                            fields_to_update=["firstName", "lastName"], confirm=True)
+                            fields_to_update=["firstName", "lastName"], overwrite=["firstName", "lastName"])
 
         assert data["committed"] is True
         assert mock_client.update.call_args_list[0] == call(
@@ -8298,7 +8299,7 @@ class TestAttachCv:
         upload_id = _seed_upload()
 
         data = self._attach(mock_client, mock_metadata, upload_id=upload_id,
-                            fields_to_update=["firstName"], confirm=True)
+                            fields_to_update=["firstName"], overwrite=["firstName"])
 
         assert data["committed"] is True
         assert mock_client.update.call_args_list[0] == call(
@@ -8314,7 +8315,7 @@ class TestAttachCv:
         mock_client.attach_file.assert_not_called()
 
     def test_attach_cv_drops_bytes_and_keeps_parse(self, mock_client, mock_metadata, sample_parsed_resume):
-        """The attach drops the bytes (NFR-9) and keeps the parse on the tombstone for a confirm call."""
+        """The attach drops the bytes (NFR-9) and keeps the parse on the tombstone for an overwrite call."""
         self._prep(mock_client, sample_parsed_resume)
         mock_client.attach_file.return_value = {"fileId": 82, "name": "Jane_Doe_CV.pdf"}
         upload_id = _seed_upload()
@@ -9274,7 +9275,9 @@ class TestShowCvUploadBox:
 
     def _show(self, upload_id, sub="user-a"):
         with _http_as(sub), patch.dict(os.environ, {"MCP_BASE_URL": "https://mcp.example.com"}):
-            return json.loads(server.show_cv_upload_box(upload_id))
+            result = server.show_cv_upload_box(upload_id)
+        # The success path is a ToolResult (it carries _meta.ui); errors stay plain JSON text.
+        return json.loads(result if isinstance(result, str) else result.content[0].text)
 
     def test_upload_box_tool_registered_with_ui_meta(self):
         """show_cv_upload_box links to the ui:// resource through its tool meta."""

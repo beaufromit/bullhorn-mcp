@@ -152,7 +152,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 42 | **COMPLETE** (reviewed, 2 cycles) | CR44 part 1: pure match-check scorer (log2(m/u) points, guards, names, employers, education), normalisers, versioned `match_config.json`, synthetic fixtures. Not wired in. FR-23, US-52. Tagged v0.0.55, **not deployed**. Built 2026-10-02: 1,175 tests (931 + 244). **1,198 tests passing** after review (1,175 + 23 from review fixes). |
 | Sprint 42B | **REVIEWED, pushed, tagged v0.0.56** (1,294 tests; 3 review cycles, owner asked for minors fixed too); deployed 2026-10-06, acceptance failed on the CV write path (CR46); T42B.8 replaced by T43.15 | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
 | Sprint 42C | **COMPLETE, reviewed (2 cycles; owner asked for all minors fixed), pushed, tagged v0.0.57** (1,306 tests, 2026-11-11); deployed 2026-11-11 | CR47 (patch): `list_tearsheets` moves from `/search/Tearsheet` (does not exist) to `/query/Tearsheet`; `query` replaced by `name`, `owner_id`, `where`. FR-21 Amendment, US-40. Ships ahead of CR46. Target v0.0.57. |
-| Sprint 43 | **PLANNED** (replanned 2026-11-11) | CR46: v0.0.56 acceptance fixes. Writable-field filter on the CV paths, CV attaches as `Original CV` with `externalID=Portfolio`, child rows read back with explicit fields, `skillSet` list handling (B8), current company from work history, outcomes logged under the passed `match_check_id`, `duplicate_check` on every create, percentages only, placeholder employers, upload box fixed. FR-15 Amendment 2, FR-23, US-49 to US-52. Target v0.0.58. |
+| Sprint 43 | **BUILT, not reviewed** (1,383 tests passing, 2026-11-13; one local commit (CR46 + CR48 squashed), not pushed; T43.13 live check run, T43.15 open) | CR46: v0.0.56 acceptance fixes, plus CR48 (per-field overwrite choice on attach_cv, `overwrite` replaces `confirm`). Writable-field filter on the CV paths, CV attaches as `Original CV` with `externalID=Portfolio`, child rows read back with explicit fields, `skillSet` list handling (B8), current company from work history, outcomes logged under the passed `match_check_id`, `duplicate_check` on every create, percentages only, placeholder employers, upload box fixed, plus B10 (re-attach no longer duplicates the current work history row). FR-15 Amendment 2, FR-23, US-49 to US-52. Target v0.0.58. |
 
 ### Sprint 15 post-tag regression note
 
@@ -4138,9 +4138,9 @@ Previous: 1,294. Added 5 (4 rewritten in place). Expected 1,299. **Actual after 
 
 **Next:** CR46 (Sprint 43, v0.0.58, planned below), then CR45 (v0.0.59).
 
-## Sprint 43: CR46 v0.0.56 acceptance-test fixes (CV write path, match log, upload box) - PLANNED (target v0.0.58)
+## Sprint 43: CR46 v0.0.56 acceptance-test fixes (CV write path, match log, upload box) - BUILT 2026-11-13, not reviewed (target v0.0.58)
 
-**Change request:** CR46.md (APPROVED 2026-10-06; B1 refinement and B8 added at the 2026-11-11 replan, owner-approved)
+**Change request:** CR46.md (APPROVED 2026-10-06; B1 refinement and B8 added at the 2026-11-11 replan, owner-approved); CR48.md (APPROVED 2026-11-13, T43.16)
 **PRD requirement:** FR-15 Amendment 2 (including the CR46 `Original CV` bullet), FR-15 Amendment (upload box), FR-23
 **User stories:** US-49 (upload box), US-50 and US-51 (write report matches the record, additions vs confirmed overwrites), US-52 (outcome logged under its `match_check_id`)
 **Dependency:** Sprint 42C complete (v0.0.57, 1,306 tests). Carries over the unfinished Sprint 42B T42B.8 (deploy and live acceptance): v0.0.56 was deployed 2026-10-06 and its acceptance test failed on the CV write path, which is this CR. The retest (T43.15) replaces T42B.8.
@@ -4188,67 +4188,67 @@ Result in CR46.md B6: the host mounts the app on web, Desktop and Cowork; the bo
 #### T43.2 Real parse fixture (DONE 2026-10-06, owner-approved)
 `tests/fixtures/cv_parse_sample.json` saved from a real parse of `tests/fixtures/sample_cv/cr41_test_candidate.docx` (no `companyName`; work history employer merged into `title`; ongoing `endDate` set to the parse date).
 
-#### T43.3 Writable-field filter, `maxLength`, and the parse's `name` (B1, B9, B7 name item)
+#### T43.3 Writable-field filter, `maxLength`, and the parse's `name` (B1, B9, B7 name item) (DONE 2026-11-13)
 **Files:** `src/bullhorn_mcp/metadata.py`, `src/bullhorn_mcp/server.py`
 - `get_fields` also keeps `readOnly`, `dataSpecialization` and `maxLength` from `/meta` (B9: without `maxLength`, `_truncate_against_meta` has never clipped in production; only test mocks supply it).
 - `_writable_candidate_fields(metadata, fields) -> (kept, dropped)` per P1. `_create_candidate_from_cv` and `_attach_cv` run the parse block through it before anything else, and `fields_override` after label resolution (dropped override keys become a warning). The parse's `name` is removed silently before the filter; a `name` Claude sends gets the reworded warning ("replaced with the name computed from firstName and lastName").
 - `written.fields` lists only keys that were sent.
 - **Tests** (`tests/test_metadata.py`, `tests/test_server.py`): `test_get_fields_keeps_readonly_and_specialization`, `test_get_fields_keeps_max_length`, `test_truncate_clips_with_real_meta_shape` (metadata built from a raw `/meta` response, not a hand-made projection), `test_writable_fields_drops_unknown_and_system_readonly`, `test_writable_fields_keeps_non_system_readonly` (skillSet, middleName), `test_writable_fields_meta_unavailable_drops_known_parser_keys`, `test_attach_cv_fetch_excludes_non_meta_parse_keys` (respx: the GET `fields` has no `editHistoryValue`), `test_create_from_cv_payload_excludes_readonly_and_unknown` (raw PUT body: no `editHistoryValue`, no `onboardingReceivedSent`, `address` kept), `test_written_fields_match_sent_payload`, `test_override_unknown_field_is_warned`, `test_cv_path_parse_name_not_warned`, `test_claude_name_warning_reworded`.
 
-#### T43.4 Attach the file like a consultant upload (B2, Q1)
+#### T43.4 Attach the file like a consultant upload (B2, Q1) (DONE 2026-11-13)
 **Files:** `src/bullhorn_mcp/client.py`, `src/bullhorn_mcp/server.py`
 - `attach_file(entity, entity_id, file_bytes, filename, content_type, external_id=None, type=None)`: sends `externalID` and `type` as query parameters; `fileType` is removed. CR45 reuses it with other `type` values.
 - All three CV call sites (`_create_candidate_from_cv`, `_attach_cv`, `_attach_created_cv_file`) pass `external_id="Portfolio"`, `type="Original CV"`.
 - **Tests:** `test_attach_file_sends_external_id_and_type` (respx: exact query string, no `fileType`), and one per call site asserting the request, `written.file` and `mark_attached`: `test_create_from_cv_attaches_original_cv`, `test_attach_cv_attaches_original_cv`, `test_attach_created_cv_file_attaches_original_cv`.
 
-#### T43.5 Child rows read back with explicit fields (B3)
+#### T43.5 Child rows read back with explicit fields (B3) (DONE 2026-11-13)
 **File:** `src/bullhorn_mcp/client.py`
 - `DEFAULT_FIELDS` gains `CandidateWorkHistory: id,candidate,companyName,title,startDate,endDate,isLastJob` and `CandidateEducation: id,candidate,school,degree,major,certification,graduationDate,startDate,endDate` (both verified live 2026-10-06 and again 2026-11-11), with a comment marking them load-bearing for the CV write path, as `Note` is.
 - **Tests:** `test_default_fields_pin_candidate_children`, `test_write_children_reports_rows_when_readback_uses_default_fields` (respx: the GET for the new row carries explicit `fields`, never `*`; `written.work_history` and `written.education` list the rows).
 
-#### T43.6 skillSet returned as a list (B8)
+#### T43.6 skillSet returned as a list (B8) (DONE 2026-11-13)
 **File:** `src/bullhorn_mcp/server.py`
 - `_skill_set_names` and `_merge_skill_set` accept a list or a comma-separated string; a list `skillSet` in `fields` / `fields_override` is joined with `, ` before any write.
 - **Tests:** `test_skill_set_names_accepts_list`, `test_merge_skill_set_list_existing_keeps_names`, `test_attach_cv_keeps_existing_list_skillset` (existing `skillSet` returned as a list: the update carries old and new names, `written.skill_set` lists only the new ones), `test_create_candidate_list_skillset_joined` (with and without `skills`).
 
-#### T43.7 Current company from the CV (D1)
+#### T43.7 Current company from the CV (D1) (DONE 2026-11-13)
 **File:** `src/bullhorn_mcp/server.py`
 - When the candidate block has no `companyName`, both CV paths propose the `companyName` of the current work history entry (P3). On `attach_cv`, a different existing `companyName` goes into `pending_overwrites` like `occupation` and is written on `confirm=True`. On create it also satisfies the tenant's required `companyName`.
 - **Tests:** `test_attach_cv_company_change_is_pending_overwrite`, `test_attach_cv_company_from_current_work_history`, `test_current_entry_is_latest_start_date_ignoring_end_date`, `test_no_company_proposed_when_current_entry_has_none`, `test_create_from_cv_company_from_corrected_work_history`.
 
-#### T43.8 Outcomes under the passed id; `duplicate_check` on every create (B4, B5, Q3)
+#### T43.8 Outcomes under the passed id; `duplicate_check` on every create (B4, B5, Q3) (DONE 2026-11-13)
 **File:** `src/bullhorn_mcp/server.py`
 - Without `force`, the fresh check still runs; the outcome is logged under the fresh id **and** under a passed `match_check_id` (when different). The response keeps `duplicate_check` (fresh id) and adds `match_check_id` = the passed id. With `force=True`, behaviour per 42B A1 (logs `created_with_force` under the passed id).
 - `create_candidate` returns `duplicate_check` on every create (null with `force=True`) (P2).
 - **Tests:** `test_create_from_cv_logs_outcome_under_passed_id`, `test_create_candidate_logs_outcome_under_passed_id`, the same two `_with_force`, `test_create_candidate_returns_duplicate_check`, `test_create_candidate_force_duplicate_check_null`.
 
-#### T43.9 Percentages only in responses (Q4)
+#### T43.9 Percentages only in responses (Q4) (DONE 2026-11-13)
 **Files:** `src/bullhorn_mcp/server.py` (and `duplicates.py` if the helper sits there)
 - One `_public_match_result` helper per P4, applied at every listed response site. The log keeps all points.
 - **Tests:** `test_find_duplicates_response_has_no_points`, `test_parse_cv_duplicate_check_has_no_points`, `test_stop_response_has_no_points`, `test_create_success_duplicate_check_has_no_points`, `test_match_log_keeps_points`, `test_ranking_unchanged_without_points`.
 
-#### T43.10 Placeholder employers and plurals (Q5, B7)
+#### T43.10 Placeholder employers and plurals (Q5, B7) (DONE 2026-11-13)
 **Files:** `src/bullhorn_mcp/duplicates.py`, `src/bullhorn_mcp/match_config.json`, `tests/fixtures/match_cases.json`
 - `placeholder_employers` in the config (the Q5 list: career break, self employed, self-employed, freelance, freelancer, contract, contractor, various, unemployed, sabbatical, travelling, maternity leave, n/a, confidential), matched after `normalize_employer`. Placeholders are removed from the profile's employer list before the `max_employers` cap (so retrieval never searches them) and are never scored as a shared employer. Records keep them as parsed. `version` becomes `"2"`, validator per P5.
 - Singular reasons when the count is 1 ("shared by 1 candidate", "1 candidate lists this employer").
 - **Tests** (`tests/test_duplicates.py`, `tests/test_duplicate_retrieval.py`): `test_placeholder_employer_not_scored`, `test_placeholder_employer_not_searched`, `test_placeholder_removed_before_employer_cap`, `test_placeholder_matched_after_normalisation`, `test_config_rejects_bad_placeholder_list`, `test_surname_reason_singular`, `test_employer_reason_singular`; the `Freelance` case in `match_cases.json` updated; version-pinning tests updated.
 
-#### T43.11 Upload box shown and never blank (B6)
+#### T43.11 Upload box shown and never blank (B6) (DONE 2026-11-13)
 **Files:** `src/bullhorn_mcp/upload_box.html`, `src/bullhorn_mcp/server.py`
 - Re-read the spec types (P6). `ui/initialize` sends `appInfo`, `appCapabilities` and `protocolVersion`. On an initialize failure the box shows a visible error and still reports a size; it reports a size on load. `ui/message` sends `content` as an array of blocks.
 - `show_cv_upload_box` result adds `_meta.ui.resourceUri` and `expires_in_seconds`; `request_cv_upload` adds `expires_in_seconds`; the box's message and `request_cv_upload`'s fallback step say that showing the box replaces the earlier upload URL. `resources/read` of the box URI is logged at INFO.
 - How "never blank" is tested: the repo has only pytest (no browser), so these tests are static assertions on `upload_box.html`'s source (the `ui/initialize` params, the rejection handler showing an error and calling `reportSize`, the `ui/message` array). The live retest (T43.15) is the real proof.
 - **Tests:** `test_upload_box_initialize_uses_app_info`, `test_upload_box_message_content_is_array`, `test_upload_box_init_failure_shows_error_and_size`, `test_show_upload_box_result_has_resource_uri`, `test_upload_responses_have_expires_in_seconds`, `test_upload_box_resource_read_logged`.
 
-#### T43.12 End-to-end at the HTTP boundary
+#### T43.12 End-to-end at the HTTP boundary (DONE 2026-11-13)
 **File:** `tests/test_server.py` (or a new `tests/test_cv_write_e2e.py`, LF)
 - With respx and `cv_parse_sample.json` (names and contacts already the test persons'): `create_candidate_from_cv` and `attach_cv` end to end, asserting the GET `fields`, the Candidate PUT body, the child create bodies and their read-back `fields`, the skills writes, the file query string, `written` matching what was sent, and the outcome log lines. Plus the prior-sprint E2E: the full suite stays green (1,306 baseline).
 - **Tests:** `test_e2e_create_from_cv_real_parse`, `test_e2e_attach_cv_real_parse_additions_then_confirm`, `test_e2e_attach_cv_file_only_path`.
 
-#### T43.13 Build-time live write check (owner approval required)
+#### T43.13 Build-time live write check (owner approval required) (DONE 2026-11-13)
 - After the suite is green and before the commit, with the owner's approval: first seed `skillSet` on test Candidate 173063 (it is null today, so a B8 check without seeding proves nothing) with two names, then `attach_cv` on 173063 with a small test CV upload and `skills` holding one of the seeded names and one new name (direct server call, as T41.7). Read back: no 400; the file attached with `type=Original CV`; `skillSet` holds both seeded names plus the new one, once each (this also proves a `skillSet` write replaces rather than appends, which B8 assumes); child rows reported as written match `/query`. Results recorded here. Skipped if the owner declines; then T43.15 is the first live proof.
 
-#### T43.14 Docs
+#### T43.14 Docs (DONE 2026-11-13)
 - `COWORK_TEST_v0.0.56.md` becomes `COWORK_TEST_v0.0.58.md`: 1.3 per B6; 3.2 expects `type=Original CV` (not "type CV"); the Part 4 `attach_cv` on the existing Person A (who has skills from 3.1) passes one existing and one new skill and checks the read-back keeps all of them (B8); 3.3 expectation corrected (B7); 4.2 expects occupation and companyName (D1); 7.1 passes 90308's work history and education and reports the band (D4); match responses show percentages, not points.
 - README (CV attach label, percentages only, placeholder employers), the tool descriptions touched (text before `Args:` only, FastMCP drops the rest), NFR-8: measure the description delta.
 - CR46.md Status at the post-tag doc sync.
@@ -4259,20 +4259,52 @@ Result in CR46.md B6: the host mounts the app on web, Desktop and Cowork; the bo
 - Upload box retest with the owner in Cowork (and Desktop/web): the box appears and a dropped file shows `received`. If still blank, Desktop Developer Mode DevTools next.
 - Carried from T42B.8: record any new test Candidate id in the approved live test records; CR43, CR44 and CR46 Status set to COMPLETE; then remind the owner to start CR45 (apply its PRD amendment, replan Sprint 44).
 
+#### T43.16 Consultant chooses each overwrite on attach_cv (CR48, added 2026-11-13, owner-approved) (DONE 2026-11-13)
+**Files:** `src/bullhorn_mcp/server.py`, tests, `COWORK_TEST_v0.0.58.md`, `README.md`; `PRD.md` amended (FR-15 Amendment 2 bullet 4, US-50 acceptance).
+- Why: `confirm=True` wrote every pending overwrite, so a consultant who wanted some changes and not others could not be served. The choice happens in the chat; the code now writes only fields the caller names, so a field the consultant did not approve cannot be written by accident.
+- `attach_cv`'s `confirm` is replaced by `overwrite: list | None` (CR48 D1 (a)): omitted writes no overwrites (additions as before); a list of names or labels writes only those pending overwrites and returns the rest under `kept`; `["all"]` is the automation path; a name that is not pending is warned. Tool text and hint ask Claude to show each overwrite (current vs proposed) and get accept or reject per field.
+- Additions stay automatic (owner confirmed 2026-11-13).
+- Deploy step (CR48 Q2): the owner searches Cowork skills and saved prompts for `confirm=True` on `attach_cv`; none in this repo.
+- **Tests:** `TestOverwriteChoice` in `tests/test_server_cr46.py` (8 tests per CR48), rewritten `confirm` tests, E2E second call with `overwrite=["occupation"]`.
+- **Built:** overwrite names resolve like `fields_to_update` (label or API name) before any write; `kept` entries carry `field` and the current value (description: `current_length`), not the proposed one (already shown in `pending_overwrites`). `cv_attach_retry` never passed `confirm`. NFR-8: `attach_cv` description 3,134 chars (~783 tokens); total 71,792 chars (~17,948 tokens), +114 chars over the CR46 build. Suite 1,383 (1,375 + 8).
+
 ### Verification
 
-- [ ] `.venv/bin/pytest` green; measured count recorded below.
-- [ ] `grep -n "fileType" src/bullhorn_mcp/client.py src/bullhorn_mcp/server.py` shows no attach use.
+- [x] `.venv/bin/pytest` green; measured count recorded below (1,375).
+- [x] `grep -n "fileType" src/bullhorn_mcp/client.py src/bullhorn_mcp/server.py` shows no attach use. Done 2026-11-13: only two explanatory comments mention it.
 - [ ] No response path returns `points` (reviewer check of every site in P4); the match log still has them.
 - [ ] Every Lucene value in `duplicate_retrieval.py` passes through an escape helper (carried open from the Sprint 42B checklist; reviewer check).
-- [ ] Line endings: new test files LF; `tests/test_server.py`, `tests/test_client.py`, `client.py` and this file CRLF; `server.py`, `duplicates.py`, `metadata.py` as they are (check `git show HEAD:<file> | grep -c $'\r'` first).
-- [ ] T43.13 run (or declined) and recorded.
+- [x] Line endings: new test files LF; `tests/test_server.py`, `tests/test_client.py`, `client.py` and this file CRLF; `server.py`, `duplicates.py`, `metadata.py` as they are (check `git show HEAD:<file> | grep -c $'\r'` first).
+- [x] T43.13 run (or declined) and recorded. Result in the build notes.
 - [ ] Local commit `fix: CR46 ...`. No push. Then `PROMPT_iterate.md` (its Step 0 runs the first review), push, tag **v0.0.58**.
 - [ ] T43.15 after the owner's deploy; results recorded.
 
 ### Expected test count after Sprint 43
 
 Previous: 1,306 (v0.0.57). Planned: about 12 (T43.3) + 4 (T43.4) + 2 (T43.5) + 4 (T43.6) + 5 (T43.7) + 6 (T43.8) + 6 (T43.9) + 7 (T43.10) + 6 (T43.11) + 3 (T43.12), about 53, plus rewritten tests on the old `fileType`, `points` and config-version shapes. **To be measured, not predicted.**
+
+**Actual: 1,375 passing, 0 failing** (1,306 + 69) after the CR46 build; **1,383** after T43.16 / CR48 (+8).
+
+### Build notes (2026-11-13)
+
+Why these choices were made, for the reviewer and for T43.15:
+
+- **How it was built.** Wave 1 ran in parallel (client and metadata; duplicates and config; `upload_box.html`). Then the `server.py` tasks ran one agent at a time, because they share one file. Then the E2E tests. New test files (all LF): `tests/test_server_cr46.py` (CV write path, outcomes, points, upload box result), `tests/test_cv_write_e2e.py` (3 E2E on the real parse fixture), `tests/test_upload_box.py` (static HTML spec checks; they fail against the v0.0.56 HTML).
+- **Pre-build checks.** `get_fields` consumers: `descriptions.py` only reads name, label, type, required and options. `get_entity_fields` returned `get_fields` directly, so it now strips `readOnly`, `dataSpecialization` and `maxLength` to keep its output and token cost unchanged. `_truncate_against_meta` goes live for the first time. Live `/meta` (2026-11-13) has `maxLength` on 120 of 276 Candidate fields, all positive ints (`description` and `comments` 2147483647; `occupation`, `companyName`, `email` 100; `firstName`, `lastName`, `mobile` 50), none 0 or null, so nothing is clipped to empty. Live check of `_writable_candidate_fields` on the real parse: keeps address, description, email, firstName, lastName, mobile, occupation; drops name, onboardingReceivedSent, editHistoryValue. All 276 fields are present in `/meta` (`get_meta` asks `fields=*`, `meta=full`). No other `attach_file` callers (`uploads.py`, `bulk.py`, `scripts/` checked).
+- **Spec re-read (P6).** ext-apps `src/spec.types.ts` (LATEST_PROTOCOL_VERSION 2026-01-26): `McpUiInitializeRequest` params are `appInfo` (Implementation), `appCapabilities`, `protocolVersion`; `McpUiMessageRequest` content is `ContentBlock[]`; the size notification is `ui/notifications/size-changed`. The box now reports a size on load, sends `appInfo`, shows a visible error and reports a size if initialize is rejected, and sends `ui/message` content as an array.
+- **Design points for the reviewer.**
+  - (a) The placeholder filter lives in `duplicates._employers()`, the one source for both `to_echo` (retrieval) and scoring. Matching is exact on the `normalize_employer` key, so a real employer that normalises to a placeholder word would also be skipped (edge, not seen). `placeholder_employers` is a required config key.
+  - (b) `public_match_result` is a deep copy. `_public_check` is applied after the log at: `_duplicate_policy` stops, `create_candidate` success, `_create_candidate_from_cv` success, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`.
+  - (c) `_log_create_outcome`: `force` logs `created_with_force` under the passed id only (42B A1). Otherwise `created_new` under the fresh id, and also under the passed id when different. If the check could not run, the passed id only. Responses add `match_check_id` (the passed id) when given. `create_candidate` now always returns `duplicate_check` (P2).
+  - (d) The name warning was reworded in the shared `_strip_contact_title`, so the new text ("replaced with the name computed from firstName and lastName") also applies to ClientContact and `create_candidate`, not only the CV paths.
+  - (e) `show_cv_upload_box` success returns a FastMCP `ToolResult` with meta `{ui: {resourceUri}}`. Its annotation is now `str | ToolResult`, which removed the tool's output schema, so no `structuredContent` is sent. The box reads the JSON text block, which is unchanged. Check at the T43.15 box retest.
+  - (f) The current company is proposed before the duplicate check on the create path, so the match profile now sees it.
+  - (g) `_current_company_name` ignores entries without a numeric `startDate` (epoch ms, the documented work_history format).
+  - (h) NFR-8: tool descriptions measured live with `scripts/measure_descriptions.py`. HEAD 71,619 chars (~17,904 tokens) vs build 71,678 chars (~17,919), +59 chars, all in `show_cv_upload_box`.
+- **T43.13 result (owner-approved 2026-11-13, Candidate 173063).** Seeded `skillSet` "Excel, IFRS" (read back as a list `['Excel','IFRS']`). `attach_cv` with `cr41_test_candidate.docx` and skills `["IFRS","Power BI"]`: no 400; file 327585 attached with type `Original CV`, externalID `Portfolio`; `skillSet` read back `['Excel','IFRS','Power BI']` (a `skillSet` write replaces, so B8 is confirmed). `written.skill_set` was `["Power BI"]`, `already_present` IFRS; `written.fields` was empty (the record already held the CV's values); education 2 already present; `description` was listed as a pending overwrite (4557 vs 5028 chars, not confirmed). It also wrote work history row 477375, a duplicate of 473104: see B10. The owner had 477375 soft-deleted (isDeleted true, read back); 173063 is back to rows 473104 and 473105. Files on 173063 now: 326613, 326614, 327585 (test data).
+- **B10 (found by T43.13; owner chose a quick fix in this sprint).** `_new_cv_children` matched work history on companyName, title, startDate AND endDate. The parser fills the current role's endDate inconsistently (the parse date in the T43.2 run, null today), so re-attaching the same CV duplicated the current role. Fix: new `_WORK_HISTORY_MATCH_KEYS = (companyName, title, startDate)`; endDate is ignored for matching (same reasoning as P3). Tests: `TestWorkHistoryMatchIgnoresEndDate` (2 tests) in `tests/test_server_cr46.py`. Recorded in CR46.md B10.
+- B10 side effect for the reviewer: matching without endDate also treats two rows with the same company and title and no startDate as one role, which endDate used to keep apart. Accepted: a CV listing the same undated role twice is rarer than the parser's endDate drift.
+- **Observation, not changed.** The parse's ongoing-role endDate is written as parsed (a parse date or null). Parser quality is a CR46 non-goal; a candidate for a later CR.
 
 ### Not planned (recorded)
 

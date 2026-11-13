@@ -63,6 +63,16 @@ DEFAULT_FIELDS = {
         "candidates,clientContacts,jobOrders,placements"
     ),
     "CorporateUser": "id,firstName,lastName,name,email,phone,occupation,status,username",
+    # CandidateWorkHistory and CandidateEducation are LOAD-BEARING for the CV
+    # write path, like "Note" above: client.create() reads the new row back with
+    # get(), and without an entry here that asks for fields=*, which this tenant
+    # rejects (errors.allFieldsNotAllowed). A successful child write would then be
+    # reported as a failure. Both lists verified live 2026-10-06 and 2026-11-11.
+    # Pinned by test_default_fields_pin_candidate_children.
+    "CandidateWorkHistory": "id,candidate,companyName,title,startDate,endDate,isLastJob",
+    "CandidateEducation": (
+        "id,candidate,school,degree,major,certification,graduationDate,startDate,endDate"
+    ),
 }
 
 
@@ -279,7 +289,7 @@ class BullhornClient:
         filename: str,
         content_type: str,
         external_id: str | None = None,
-        file_type: str | None = None,
+        type: str | None = None,
     ) -> dict[str, Any]:
         """Attach a file to an entity record via Bullhorn's raw file upload.
 
@@ -289,8 +299,12 @@ class BullhornClient:
             file_bytes: Raw file bytes
             filename: Filename used in Bullhorn
             content_type: MIME type of the file
-            external_id: Optional externalID for the file attachment
-            file_type: Optional fileType (e.g. "CV")
+            external_id: externalID query param. Effectively required: live
+                (2026-10-06) Bullhorn returns 500 DUPLICATE_VALUE without it.
+                "Portfolio" attaches exactly like a consultant upload.
+            type: File type query param shown as "File Type" in the UI (e.g.
+                "Original CV"). Replaces the old fileType param, which Bullhorn
+                ignores.
 
         Returns:
             File attachment metadata from Bullhorn
@@ -299,8 +313,8 @@ class BullhornClient:
         params: dict[str, Any] = {}
         if external_id is not None:
             params["externalID"] = external_id
-        if file_type is not None:
-            params["fileType"] = file_type
+        if type is not None:
+            params["type"] = type
         return self._request_multipart(
             "PUT",
             f"/file/{entity}/{entity_id}/raw",

@@ -57,10 +57,16 @@ class BullhornMetadata:
             entity: Entity type (e.g. ClientContact, ClientCorporation)
 
         Returns:
-            List of dicts with keys: name, label, type, required, and
-            optionally options (list of {value, label} dicts for picklist
+            List of dicts with keys: name, label, type, required, readOnly,
+            and optionally: options (list of {value, label} dicts for picklist
             fields, present only when the Bullhorn /meta response includes
-            options for that field).
+            options for that field), dataSpecialization (raw value, present
+            only when /meta supplies one) and maxLength (int, present only
+            when /meta supplies one). maxLength feeds server length clipping
+            (it was missing before, so clipping never ran live). readOnly plus
+            dataSpecialization == "SYSTEM" identifies system-managed fields;
+            readOnly alone is too broad (it is set on most Candidate fields,
+            including ones that are writable in practice such as skillSet).
         """
         if entity not in self._cache:
             meta = self._client.get_meta(entity)
@@ -74,7 +80,14 @@ class BullhornMetadata:
                     "label": f.get("label", ""),
                     "type": f.get("type", ""),
                     "required": bool(f.get("required", False)),
+                    "readOnly": bool(f.get("readOnly", False)),
                 }
+                if f.get("dataSpecialization") is not None:
+                    entry["dataSpecialization"] = f["dataSpecialization"]
+                max_length = f.get("maxLength")
+                # bool is an int subclass; exclude it so a stray True is not a limit
+                if isinstance(max_length, int) and not isinstance(max_length, bool):
+                    entry["maxLength"] = max_length
                 options = f.get("options")
                 if options:
                     entry["options"] = options

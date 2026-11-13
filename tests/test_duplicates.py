@@ -32,6 +32,7 @@ from bullhorn_mcp.duplicates import (
     profile_from_fields,
     profile_from_parse,
     profile_from_record,
+    public_match_result,
     surname_relation,
 )
 
@@ -65,7 +66,7 @@ class TestMatchConfig:
         assert default_match_config() == load_match_config()
 
     def test_config_has_version(self):
-        assert load_match_config()["version"] == "1"
+        assert load_match_config()["version"] == "2"
 
     def test_valid_copy_loads_from_path(self, tmp_path, config):
         path = _write(tmp_path, config)
@@ -864,3 +865,80 @@ class TestProfile:
         profile = profile_from_fields({}, work)
         assert profile.to_echo(config)["employers"] == ["acme"]
         assert _employers(profile, config)["acme"].titles == ["Analyst", "Senior Analyst"]
+
+
+class TestPlaceholderEmployers:
+    def test_config_rejects_bad_placeholder_list(self, tmp_path, config):
+        for bad_value in ("career break", ["career break", 5], None, {"a": 1}):
+            bad = copy.deepcopy(config)
+            bad["placeholder_employers"] = bad_value
+            with pytest.raises(MatchConfigError, match="placeholder_employers"):
+                load_match_config(_write(tmp_path, bad))
+        missing = copy.deepcopy(config)
+        del missing["placeholder_employers"]
+        with pytest.raises(MatchConfigError, match="placeholder_employers"):
+            load_match_config(_write(tmp_path, missing))
+
+    def test_placeholder_matched_after_normalisation(self, config):
+        work = [
+            {"companyName": "Self-Employed Ltd"},   # suffix and hyphen fold to "self employed"
+            {"companyName": "CAREER  BREAK"},
+            {"companyName": "Freelance Group"},
+            {"companyName": "Contract Research Ltd"},  # a real name that merely starts with a placeholder
+        ]
+        profile = profile_from_fields({}, work)
+        assert profile.to_echo(config)["employers"] == ["contract research"]
+
+    def test_placeholder_removed_before_employer_cap(self, config):
+        work = [{"companyName": c} for c in ("Career Break", "Freelance", "Sabbatical", "Alpha One")]
+        echo = profile_from_fields({}, work).to_echo(config)
+        assert echo["employers"][: config["caps"]["max_employers"]] == ["alpha one"]
+
+    def test_placeholder_kept_on_the_profile_as_parsed(self, config):
+        profile = profile_from_fields({}, [{"companyName": "Career Break"}])
+        assert [w.company for w in profile.work_history] == ["Career Break"]
+        assert profile.to_echo(config)["employers"] == []
+
+
+class TestPublicMatchResult:
+    @staticmethod
+    def _result():
+        def match(cid, points):
+            return {
+                "candidate_id": cid, "name": "A B", "points": points, "percentage": 99.1, "band": "high",
+                "breakdown": [
+                    {"signal": "email", "points": 31.5, "reason": "Same email"},
+                    {"signal": "surname", "points": 9.0, "reason": "Same surname"},
+                ],
+                "flags": ["guaranteed_match:email"],
+            }
+        return {
+            "config_version": "2",
+            "matches": [match(7, 140.25), match(3, 120.0), match(9, 40.0)],
+            "deleted_matches": [{"candidate_id": 5, "points": 12.0, "breakdown": [{"signal": "name", "points": 12.0}]}],
+            "flags": [],
+        }
+
+    def test_public_match_result_strips_points(self):
+        out = public_match_result(self._result())
+        for m in out["matches"] + out["deleted_matches"]:
+            assert "points" not in m
+            assert all("points" not in b for b in m["breakdown"])
+        first = out["matches"][0]
+        assert first["percentage"] == 99.1 and first["band"] == "high" and first["candidate_id"] == 7
+        assert first["breakdown"][0] == {"signal": "email", "reason": "Same email"}
+        assert first["flags"] == ["guaranteed_match:email"]
+        assert out["config_version"] == "2"
+
+    def test_public_match_result_does_not_mutate_input(self):
+        result = self._result()
+        snapshot = copy.deepcopy(result)
+        out = public_match_result(result)
+        assert result == snapshot
+        assert out["matches"][0] is not result["matches"][0]
+        assert result["matches"][0]["breakdown"][0]["points"] == 31.5
+
+    def test_ranking_unchanged_without_points(self):
+        result = self._result()
+        out = public_match_result(result)
+        assert [m["candidate_id"] for m in out["matches"]] == [m["candidate_id"] for m in result["matches"]] == [7, 3, 9]

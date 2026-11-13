@@ -1,5 +1,5 @@
 {
-  "version": "1",
+  "version": "2",
   "_comment": "CR44 match-check weights. The u values come from the live calibration (Sprint 42B T42B.6, 2026-10-06); match-log outcomes refine them later. employer_rerun_over must not exceed pool_cap, or an employer search between the two is cut at the cap without being narrowed. Each agreeing signal adds log2(m/u) points; 'points' entries are fixed values. Any change here is a reviewed change and should bump version once shipped.",
   "population": {
     "fallback_n": 74000,
@@ -67,6 +67,11 @@
     "company", "associates", "global", "europe", "european", "technologies", "technology",
     "systems", "insurance", "investments", "fund", "funds", "dublin", "cork", "galway",
     "limerick", "national", "university", "college", "school", "institute", "department"
+  ],
+  "placeholder_employers": [
+    "career break", "self employed", "self-employed", "freelance", "freelancer", "contract",
+    "contractor", "various", "unemployed", "sabbatical", "travelling", "maternity leave",
+    "n/a", "confidential"
   ],
   "generic_degrees": [
     "unspecified", "bachelors", "bachelor", "masters", "master", "degree", "diploma",

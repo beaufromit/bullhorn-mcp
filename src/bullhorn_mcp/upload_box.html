@@ -111,15 +111,28 @@
     }
   });
 
+  // CR46 B6: the box was blank in every host because this request sent
+  // clientInfo/capabilities, which the MCP Apps spec (ext-apps spec.types.ts,
+  // McpUiInitializeRequest) does not accept: params are appInfo, appCapabilities
+  // and protocolVersion. The host rejected it and the box swallowed the error,
+  // so it never reported a size and stayed at zero height.
+  // Report a size straight away so the frame is never zero height, even before
+  // (or without) a successful handshake.
+  reportSize();
   request("ui/initialize", {
-    protocolVersion: "2026-01-26",
-    capabilities: {},
-    clientInfo: { name: "bullhorn-cv-upload-box", version: "1.0.0" },
-    appCapabilities: {}
+    appInfo: { name: "bullhorn-cv-upload-box", version: "1.1.0" },
+    appCapabilities: {},
+    protocolVersion: "2026-01-26"
   }).then(function () {
     notify("ui/notifications/initialized", {});
     reportSize();
-  }, function () { /* host without the bridge: nothing else to do */ });
+  }, function (err) {
+    // Never stay blank: show the failure where the user can see it and still
+    // report a size so the host gives the frame some height.
+    var detail = err && err.message ? " (" + err.message + ")" : "";
+    setStatus("The upload box could not connect to Claude" + detail + ". Ask Claude for the upload link instead.", "err");
+    reportSize();
+  });
 
   // --- file handling ---
   function extensionOf(name) {
@@ -156,7 +169,8 @@
         setStatus("Received " + (r.body.filename || file.name) + ". You can tell Claude to continue.", "ok");
         request("ui/message", {
           role: "user",
-          content: { type: "text", text: "I've uploaded the CV in the upload box (upload_id " + ticket.upload_id + "). Please continue." }
+          // The spec (McpUiMessageRequest) requires an array of content blocks.
+          content: [{ type: "text", text: "I've uploaded the CV in the upload box (upload_id " + ticket.upload_id + "). Please continue." }]
         }).catch(function () { /* the on-screen message is enough */ });
       })
       .catch(function () {

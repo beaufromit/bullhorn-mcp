@@ -1578,7 +1578,7 @@ class TestAttachFile:
 
     @respx.mock
     def test_attach_file_sends_query_params(self, mock_auth, mock_session):
-        """attach_file() passes externalID and fileType as query parameters."""
+        """attach_file() passes externalID and type as query parameters."""
         route = respx.put(f"{mock_session.rest_url}/file/Candidate/123/raw").mock(
             return_value=httpx.Response(200, json={"fileId": 66})
         )
@@ -1586,16 +1586,37 @@ class TestAttachFile:
         client = BullhornClient(mock_auth)
         client.attach_file(
             "Candidate", 123, b"%PDF-fake", "cv.pdf", "application/pdf",
-            external_id="EXT-001", file_type="CV",
+            external_id="EXT-001", type="CV",
         )
 
         url = str(route.calls[0].request.url)
         assert "externalID=EXT-001" in url
-        assert "fileType=CV" in url
+        assert "type=CV" in url
+        assert "fileType" not in url
+
+    @respx.mock
+    def test_attach_file_sends_external_id_and_type(self, mock_auth, mock_session):
+        """Live-proven shape: externalID=Portfolio&type=Original CV, never fileType."""
+        route = respx.put(f"{mock_session.rest_url}/file/Candidate/123/raw").mock(
+            return_value=httpx.Response(200, json={"fileId": 66})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.attach_file(
+            "Candidate", 123, b"%PDF-fake", "cv.pdf", "application/pdf",
+            external_id="Portfolio", type="Original CV",
+        )
+
+        params = route.calls[0].request.url.params
+        assert params["externalID"] == "Portfolio"
+        assert params["type"] == "Original CV"
+        assert "type=Original+CV" in str(route.calls[0].request.url) or \
+            "type=Original%20CV" in str(route.calls[0].request.url)
+        assert "fileType" not in params
 
     @respx.mock
     def test_attach_file_no_optional_params(self, mock_auth, mock_session):
-        """attach_file() omits externalID and fileType query params when not provided."""
+        """attach_file() omits externalID and type query params when not provided."""
         route = respx.put(f"{mock_session.rest_url}/file/Candidate/456/raw").mock(
             return_value=httpx.Response(200, json={"fileId": 77})
         )
@@ -1605,6 +1626,7 @@ class TestAttachFile:
 
         url = str(route.calls[0].request.url)
         assert "externalID" not in url
+        assert "type=" not in url
         assert "fileType" not in url
 
     @respx.mock
@@ -1617,6 +1639,39 @@ class TestAttachFile:
         client = BullhornClient(mock_auth)
         with pytest.raises(BullhornAPIError):
             client.attach_file("Candidate", 123, b"data", "cv.pdf", "application/pdf")
+
+
+class TestCandidateChildDefaultFields:
+    """CR46 B3: child entities need DEFAULT_FIELDS so create() read-back avoids fields=*."""
+
+    def test_default_fields_pin_candidate_children(self):
+        assert DEFAULT_FIELDS["CandidateWorkHistory"] == (
+            "id,candidate,companyName,title,startDate,endDate,isLastJob"
+        )
+        assert DEFAULT_FIELDS["CandidateEducation"] == (
+            "id,candidate,school,degree,major,certification,graduationDate,startDate,endDate"
+        )
+
+    @respx.mock
+    @pytest.mark.parametrize("entity,payload", [
+        ("CandidateWorkHistory", {"candidate": {"id": 9}, "companyName": "Acme"}),
+        ("CandidateEducation", {"candidate": {"id": 9}, "school": "TCD"}),
+    ])
+    def test_create_candidate_children_readback_uses_default_fields(
+        self, mock_auth, mock_session, entity, payload
+    ):
+        respx.put(f"{mock_session.rest_url}/entity/{entity}").mock(
+            return_value=httpx.Response(200, json={"changedEntityId": 5, "changeType": "INSERT"})
+        )
+        get_route = respx.get(f"{mock_session.rest_url}/entity/{entity}/5").mock(
+            return_value=httpx.Response(200, json={"data": {"id": 5}})
+        )
+
+        BullhornClient(mock_auth).create(entity, payload)
+
+        fields = get_route.calls[0].request.url.params["fields"]
+        assert fields == DEFAULT_FIELDS[entity]
+        assert fields != "*"
 
 
 class TestGetAssociation:

@@ -220,6 +220,20 @@ class TestSearchShapes:
         dr.retrieve_pool(bh.client, profile(first_name=None, last_name=None, work_history=wh), CONFIG)
         assert len(queries_matching(bh, "workHistories")) == 3
 
+    def test_placeholder_employer_not_searched(self, bh):
+        wh = [WorkEntry(company=c) for c in ("Career Break", "Self-Employed Ltd", "Freelance")]
+        dr.retrieve_pool(bh.client, profile(first_name=None, last_name=None, work_history=wh), CONFIG)
+        assert queries_matching(bh, "workHistories") == []
+        assert not any("career" in s["query"] or "freelance" in s["query"] for s in bh.searches)
+
+    def test_placeholder_removed_before_employer_cap(self, bh):
+        placeholders = ["Career Break", "Freelance", "Sabbatical"]
+        assert len(placeholders) >= CONFIG["caps"]["max_employers"]
+        wh = [WorkEntry(company=c) for c in placeholders + ["Alpha One"]]
+        dr.retrieve_pool(bh.client, profile(first_name=None, last_name=None, work_history=wh), CONFIG)
+        found = queries_matching(bh, "workHistories")
+        assert len(found) == 1 and "alpha AND one" in found[0]
+
     def test_absent_inputs_skip_searches(self, bh):
         pool, ctx, flags = dr.retrieve_pool(bh.client, CandidateProfile(), CONFIG)
         assert pool == [] and flags == []

@@ -215,7 +215,7 @@ CV files shall reach the server out of band, never as file contents in a tool ar
 - `parse_cv` shall keep the parse with the upload for its lifetime, so the write uses exactly the parse Claude reviewed.
 - `create_candidate_from_cv` and `attach_cv` shall accept corrected Candidate fields, work history, education, free-text skills and matched skill ids, which replace the parsed values; the description comes from the parse.
 - Creating a new Candidate (from a CV or from supplied details) shall write immediately and return a full account of what was written.
-- Updating an existing Candidate from a CV shall apply additions (the file, new work history, education and skills, empty fields) immediately, and shall replace an existing value only on an explicit confirmation, which a caller with no consultant present may give up front.
+- Updating an existing Candidate from a CV shall apply additions (the file, new work history, education and skills, empty fields) immediately, and shall replace an existing value only when the caller names that field as confirmed. The consultant accepts or rejects each proposed overwrite separately; a rejected field is left as it is and reported as kept. A caller with no consultant present may confirm every overwrite up front (CR48).
 - `create_candidate` shall accept optional work history, education and skills.
 - Candidate duplicate detection shall be one shared function used by `find_duplicate_candidates` and all create paths.
 - After a Candidate has been created, a later failure shall never hide its id.
@@ -546,7 +546,7 @@ As a consultant, if Claude cannot send the file itself, I want an upload box to 
 
 **US-50: Claude checks a parsed CV before it is written**
 As a consultant, I want Claude to check what Bullhorn's parser read from a CV against the CV itself and fix mistakes before anything is saved, so that the record, its work history, education and skills are right first time.
-- **Acceptance**: for a new candidate, one write creates the Candidate with Claude's corrected fields, work history, education and both skill lists, attaches the CV, and Claude tells the consultant exactly what was written. For an existing candidate, the CV and any new information are added straight away, and Claude shows any value that would be replaced and replaces it only after the consultant confirms. A failure after the create still returns the new Candidate id.
+- **Acceptance**: for a new candidate, one write creates the Candidate with Claude's corrected fields, work history, education and both skill lists, attaches the CV, and Claude tells the consultant exactly what was written. For an existing candidate, the CV and any new information are added straight away, and Claude shows each value that would be replaced, with the current and proposed value, and replaces only the ones the consultant accepts; the others are left as they are (CR48). A failure after the create still returns the new Candidate id.
 
 **US-51: Add a candidate from sourced details with their history**
 As a consultant, I want a candidate found through LinkedIn or a Perplexity search added with their work history, education and skills, not just their name and current role.

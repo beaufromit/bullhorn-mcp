@@ -506,3 +506,37 @@ def test_match_case(cfg, case):
         assert res["band"] != case["expected_band_not"], res
     for flag in case.get("expected_flags", []):
         assert flag in res["flags"], res
+
+
+class TestPlaceholderScoring:
+    def test_placeholder_employer_not_scored(self, cfg):
+        a = prof(wh=[work("Career Break", "Break", 2015, 2017), work("Freelance")])
+        b = prof(wh=[work("Career Break", "Break", 2015, 2017), work("Freelance")])
+        res = run(a, b, cfg, employer_counts={"career break": 823})
+        assert entries(res, "employer") == []
+
+    def test_placeholder_matched_after_normalisation(self, cfg):
+        a = prof(wh=[work("Self-Employed Ltd")])
+        b = prof(wh=[work("Self Employed")])
+        assert entries(run(a, b, cfg), "employer") == []
+
+    def test_placeholder_on_one_side_only_does_not_hide_real_employer(self, cfg):
+        a = prof(wh=[work("Career Break"), work("Quillon Brewer")])
+        b = prof(wh=[work("Quillon Brewer")])
+        assert len(entries(run(a, b, cfg), "employer")) == 1
+
+
+class TestReasonWording:
+    def test_surname_reason_singular(self, cfg):
+        a, b = prof({"firstName": "Ciaran", "lastName": "Dunmore"}), prof({"firstName": "Ciaran", "lastName": "Dunmore"})
+        one = entries(run(a, b, cfg, surname_counts={"dunmore": 1}), "surname")[0]["reason"]
+        two = entries(run(a, b, cfg, surname_counts={"dunmore": 2}), "surname")[0]["reason"]
+        assert one.endswith("shared by 1 candidate")
+        assert two.endswith("shared by 2 candidates")
+
+    def test_employer_reason_singular(self, cfg):
+        a, b = prof(wh=[work("Quillon Brewer")]), prof(wh=[work("Quillon Brewer")])
+        one = entries(run(a, b, cfg, employer_counts={"quillon brewer": 1}), "employer")[0]["reason"]
+        two = entries(run(a, b, cfg, employer_counts={"quillon brewer": 2}), "employer")[0]["reason"]
+        assert "; 1 candidate lists this employer" in one
+        assert "; 2 candidates list this employer" in two
