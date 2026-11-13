@@ -203,9 +203,9 @@ The MCP shall provide tools for creating Candidate records and processing CVs:
 
 CV files shall reach the server out of band, never as file contents in a tool argument:
 
-- `request_cv_upload(filename, candidate_id?)` shall issue a single-use upload ticket for the logged-in user and return an `upload_id`, an upload URL on the server's public base URL, an expiry time, and ordered next steps for the agent. `filename` is the name the user attached the file under; the file is stored in Bullhorn under that name, whatever name the upload itself carries.
+- `request_file_upload(filename, entity?, entity_id?)` (named `request_cv_upload(filename, candidate_id?)` before CR45) shall issue a single-use upload ticket for the logged-in user and return an `upload_id`, an upload URL on the server's public base URL, an expiry time, and ordered next steps for the agent. `filename` is the name the user attached the file under; the file is stored in Bullhorn under that name, whatever name the upload itself carries.
 - `POST /upload/{token}` shall accept the file bytes (multipart) against a valid ticket. It shall only store the file; it shall never write to Bullhorn. All Bullhorn writes stay in MCP tools, where the caller's identity is known.
-- `get_cv_upload(upload_id)` shall report the upload's status: `pending`, `received`, `attached` or `expired`.
+- `get_file_upload(upload_id)` (named `get_cv_upload` before CR45) shall report the upload's status: `pending`, `received`, `attached` or `expired`.
 - `parse_cv`, `create_candidate_from_cv` and `attach_cv` shall take an `upload_id` in place of base64 content. The `file_b64` parameter is removed. `create_candidate_from_cv` keeps its text mode (`content`).
 - The primary route is the agent sending an attached file itself (for example `curl` from a Cowork session). Where the client supports MCP Apps, an upload box shown in the same chat shall be the fallback when the agent cannot send the file. There is no separate browser upload page and no paste-the-text fallback in this flow.
 - The `POST /upload-cv` endpoint (CR27) and the `UPLOAD_SECRET` variable are withdrawn.
@@ -549,11 +549,11 @@ As a recruiter, I want to upload or paste a CV and have the MCP extract candidat
 
 **US-48: Attach a CV once in Cowork**
 As a consultant, I want to attach a CV to a Cowork chat and ask Claude to add the candidate (or attach the CV to an existing one), so that the file is parsed and attached in Bullhorn without me selecting it again.
-- **Acceptance**: Claude calls `request_cv_upload` with the file's original name, sends the attached file to the returned URL itself (`curl`), and completes `create_candidate_from_cv` or `attach_cv` with the `upload_id`. The CV appears on the Candidate in Bullhorn under its original name, not the prefixed name the Cowork VM uses. No base64 appears in the conversation. `get_cv_upload` then reports `attached`, and the server no longer holds the file.
+- **Acceptance**: Claude calls `request_file_upload` with the file's original name, sends the attached file to the returned URL itself (`curl`), and completes `create_candidate_from_cv` or `attach_cv` with the `upload_id`. The CV appears on the Candidate in Bullhorn under its original name, not the prefixed name the Cowork VM uses. No base64 appears in the conversation. `get_file_upload` then reports `attached`, and the server no longer holds the file.
 
 **US-49: Upload box fallback in the same chat**
 As a consultant, if Claude cannot send the file itself, I want an upload box to appear in the same chat, so that I can drop the CV there and Claude carries on without sending me to another page.
-- **Acceptance**: when the upload fails (for example the network blocks it) and the client supports MCP Apps, Claude calls `show_cv_upload_box`, an upload box renders in the chat, the dropped file is received against the same ticket, and the create or attach flow completes. When the client does not support MCP Apps, Claude reports that the file could not be sent and stops.
+- **Acceptance**: when the upload fails (for example the network blocks it) and the client supports MCP Apps, Claude calls `show_upload_box` (named `show_cv_upload_box` before CR45), an upload box renders in the chat, the dropped file is received against the same ticket, and the create or attach flow completes. When the client does not support MCP Apps, Claude reports that the file could not be sent and stops.
 
 **US-50: Claude checks a parsed CV before it is written**
 As a consultant, I want Claude to check what Bullhorn's parser read from a CV against the CV itself and fix mistakes before anything is saved, so that the record, its work history, education and skills are right first time.

@@ -2,7 +2,19 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29), deployed 2026-09-29; T40.8 live acceptance found CV parsing broken since CR19 and is blocked on CR42. **Sprint 40B (CR42 resume parser parameters) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.53 at 843 tests passing** (2026-09-29). T40B.3 live smoke check passed. v0.0.53 is deployed; the T40B.4 (T40.8) re-run created test Candidate 173063 and then crashed on skills, which led to CR43. **Sprint 41 (CR43) is COMPLETE, reviewed (3 cycles; owner asked for minors fixed too), and tagged v0.0.54 at 931 tests passing** (2026-10-02), not deployed (only v0.0.56 is deployed). **Sprint 42 (CR44 part 1, pure scorer) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.55 at 1,198 tests passing** (2026-10-02), not deployed. **Sprint 42B (CR44 part 2) is REVIEWED (3 cycles) and tagged v0.0.56 at 1,294 tests (2026-10-06)**, deployed 2026-10-06; its acceptance test failed on the CV write path, which became CR46. **Sprint 42C (CR47 list_tearsheets) is COMPLETE, reviewed (2 cycles), tagged v0.0.57 at 1,306 tests and deployed** (2026-11-11). **Sprint 43 (CR46 acceptance fixes) is PLANNED, target v0.0.58**; CR45 follows as Sprint 44, v0.0.59.
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29), deployed 2026-09-29; T40.8 live acceptance found CV parsing broken since CR19 and is blocked on CR42. **Sprint 40B (CR42 resume parser parameters) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.53 at 843 tests passing** (2026-09-29). T40B.3 live smoke check passed. v0.0.53 is deployed; the T40B.4 (T40.8) re-run created test Candidate 173063 and then crashed on skills, which led to CR43. **Sprint 41 (CR43) is COMPLETE, reviewed (3 cycles; owner asked for minors fixed too), and tagged v0.0.54 at 931 tests passing** (2026-10-02), not deployed (only v0.0.56 is deployed). **Sprint 42 (CR44 part 1, pure scorer) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.55 at 1,198 tests passing** (2026-10-02), not deployed. **Sprint 42B (CR44 part 2) is REVIEWED (3 cycles) and tagged v0.0.56 at 1,294 tests (2026-10-06)**, deployed 2026-10-06; its acceptance test failed on the CV write path, which became CR46. **Sprint 42C (CR47 list_tearsheets) is COMPLETE, reviewed (2 cycles), tagged v0.0.57 at 1,306 tests and deployed** (2026-11-11). **Sprint 43 (CR46 acceptance fixes, plus CR48) is COMPLETE, reviewed (5 cycles), tagged v0.0.58 at 1,417 tests, deployed, T43.15 passed** (2026-11-13). 42 MCP tools. **Sprint 44 (CR45 generic file upload and `attach_file`, plus carried fixes F1 to F10) is PLANNED, target v0.0.59** (43 tools after it).
+
+**Replan validation (2026-11-13, post-CR46; CR45):** Re-reconciled PRD, user stories, CRs, and source code. **1,417 tests passing, tagged v0.0.58** (`.venv/bin/pytest -q`: 1417 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
+- **CR45** (generic file upload, `attach_file`, owner-APPROVED 2026-11-11) plus the Sprint 43 carried fixes F1 to F10 are planned as **Sprint 44** (v0.0.59). The CR45 PRD amendment (FR-24, NFR-9 Amendment, US-53, US-54) was applied and pushed before the replan (6b13896). Code search confirms nothing in CR45 or F1 to F10 is implemented (see Sprint 44 Current state).
+- Coverage: 33 FRs/NFRs (FR-1 to FR-24, NFR-1 to NFR-9) plus amendments, 56 user stories (US-1 to US-54, plus US-7A and US-15A). FR-24 maps to US-53 and US-54; the NFR-9 Amendment to US-53/US-54 acceptance. F1, F3, F4 trace to FR-23 / US-52; F2 to the FR-15 Amendment / US-48; F6 to F9 to FR-15 Amendment 2 and FR-20 (title rule); F10 has no exact requirement (NFR-3 covers API error messages, not journal logging): recorded as an owner-approved operational fix; F5 to NFR-6 (acceptance script). No user stories without a requirement.
+- **Discrepancy 1 (resolved with the owner):** the FR-15 Amendment, US-48 and US-49 still named `request_cv_upload`, `get_cv_upload` and `show_cv_upload_box`, which CR45 D1 renames. Reworded at the replan, docs only, each noting its pre-CR45 name (CR45 R1).
+- **Discrepancy 2 (resolved with the owner):** A1 replaces the ticket's `candidate_id` hint with `entity` / `entity_id`, a second breaking change. Confirmed, with `get_file_upload` showing `attached_entity` / `attached_entity_id` (covers F2), no alias (CR45 R2).
+- **Sizing (owner decision):** CR45 plus F1 to F10 is likely over one ~100k sprint. The owner chose one sprint and one release (v0.0.59), with CR45 tasks first so an overrun carries only F fixes forward (CR45 R3).
+- **Live acceptance (owner decision):** no approved test Placement or Opportunity exists; the owner approved Claude creating one of each with an inline script at T44.8 (CR45 R4).
+- Read-only live checks: a soft-deleted Candidate (173779) still returns 200 on `/entityFiles`, so `attach_file` needs its own isDeleted gate (P1). Placement has no `isDeleted`. `/settings/fileTypeList,clientCorporationFileTypeList` and the three unprobed FileAttachment `/meta` shapes match CR45's evidence. Written back to CR45.md.
+- Found drift (planned as docs in T44.15, owner-approved 2026-11-13, as are P5 and the F5/F10 traces): US-31 acceptance still says `attach_cv` writes "on second call with `force_all=true` or `fields_to_update`"; `force_all` went in CR43 D8 and `confirm` in CR48.
+- Sprint 43 leftovers closed: the `points` and Lucene-escape reviewer checks verified by code search (every response goes through `_public_check`; every Lucene value through `_lucene_phrase` / `_lucene_term`); the local commit box ticked (5acdf53).
+- CR35 still reserved and unspecced. `bha-expired-list-ids.md` still has no PRD requirement.
 
 **Replan validation (2026-11-11, post-CR47; CR46):** Re-reconciled PRD, user stories, CRs, and source code. **1,306 tests passing, tagged v0.0.57** (`.venv/bin/pytest -q`: 1306 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **CR46** (v0.0.56 acceptance fixes, owner-APPROVED 2026-10-06) is planned as **Sprint 43** (v0.0.58; CR47 took v0.0.57 on 2026-10-30). Its only PRD amendment (the FR-15 Amendment 2 `Original CV` bullet) is already applied. Code search confirms nothing is implemented (see Sprint 43 Current state). T43.0 to T43.2 were done before the replan.
@@ -153,6 +165,7 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 42B | **REVIEWED, pushed, tagged v0.0.56** (1,294 tests; 3 review cycles, owner asked for minors fixed too); deployed 2026-10-06, acceptance failed on the CV write path (CR46); T42B.8 replaced by T43.15 | CR44 part 2: parallel retrieval and pool fetch, `find_duplicate_candidates` takes a profile, D9 create policy, `match_check_id` outcomes, JSONL match log, calibration script. Then the one deploy (v0.0.56, carrying 41, 42 and 42B) and T42B.8 live acceptance (carried-over T40.8). FR-23, US-52. Target v0.0.56. |
 | Sprint 42C | **COMPLETE, reviewed (2 cycles; owner asked for all minors fixed), pushed, tagged v0.0.57** (1,306 tests, 2026-11-11); deployed 2026-11-11 | CR47 (patch): `list_tearsheets` moves from `/search/Tearsheet` (does not exist) to `/query/Tearsheet`; `query` replaced by `name`, `owner_id`, `where`. FR-21 Amendment, US-40. Ships ahead of CR46. Target v0.0.57. |
 | Sprint 43 | **REVIEWED (5 cycles, owner asked for all minors fixed; 4 cycle 5 minors logged by owner decision), pushed, tagged v0.0.58** (1,417 tests, 2026-11-13; build 5acdf53 plus review fixes 58b2e14, 008a6c8, 5d70bd6, 717da5a; T43.13 live check run; deployed, T43.15 passed 2026-11-13) | CR46: v0.0.56 acceptance fixes, plus CR48 (per-field overwrite choice on attach_cv, `overwrite` replaces `confirm`). Writable-field filter on the CV paths, CV attaches as `Original CV` with `externalID=Portfolio`, child rows read back with explicit fields, `skillSet` list handling (B8), current company from work history, outcomes logged under the passed `match_check_id`, `duplicate_check` on every create, percentages only, placeholder employers, upload box fixed, plus B10 (re-attach no longer duplicates the current work history row). FR-15 Amendment 2, FR-23, US-49 to US-52. Target v0.0.58. |
+| Sprint 44 | **PLANNED** (replan 2026-11-13) | CR45: one upload ticket system for any file (tools renamed to `request_file_upload`, `get_file_upload`, `show_upload_box`; `candidate_id` hint becomes `entity` / `entity_id`), new `attach_file` tool for six entities with the `type` label checked against the tenant's file type settings, CV tools refuse non-CV files; plus Sprint 43 carried fixes F1 to F10. FR-24, NFR-9 Amendment, US-53, US-54. Target v0.0.59. |
 
 ### Sprint 15 post-tag regression note
 
@@ -4275,11 +4288,11 @@ Result in CR46.md B6: the host mounts the app on web, Desktop and Cowork; the bo
 
 - [x] `.venv/bin/pytest` green; measured count recorded below (1,375).
 - [x] `grep -n "fileType" src/bullhorn_mcp/client.py src/bullhorn_mcp/server.py` shows no attach use. Done 2026-11-13: only two explanatory comments mention it.
-- [ ] No response path returns `points` (reviewer check of every site in P4); the match log still has them.
-- [ ] Every Lucene value in `duplicate_retrieval.py` passes through an escape helper (carried open from the Sprint 42B checklist; reviewer check).
+- [x] No response path returns `points` (reviewer check of every site in P4); the match log still has them. Verified at the 2026-11-13 replan: every response goes through `_public_check` / `public_match_result`.
+- [x] Every Lucene value in `duplicate_retrieval.py` passes through an escape helper (carried open from the Sprint 42B checklist; reviewer check). Verified at the 2026-11-13 replan: all query builders use `_lucene_phrase` / `_lucene_term`.
 - [x] Line endings: new test files LF; `tests/test_server.py`, `tests/test_client.py`, `client.py` and this file CRLF; `server.py`, `duplicates.py`, `metadata.py` as they are (check `git show HEAD:<file> | grep -c $'\r'` first).
 - [x] T43.13 run (or declined) and recorded. Result in the build notes.
-- [ ] Local commit `fix: CR46 ...`. No push. Then `PROMPT_iterate.md` (its Step 0 runs the first review), push, tag **v0.0.58**.
+- [x] Local commit `fix: CR46 ...` (5acdf53). No push. Then `PROMPT_iterate.md` (its Step 0 runs the first review), push, tag **v0.0.58**.
 - [x] T43.15 after the owner's deploy; results recorded (2026-11-13, passed).
 
 ### Expected test count after Sprint 43
@@ -4344,4 +4357,147 @@ Next: owner deploys v0.0.58 and runs T43.15. At deploy, check Cowork skills and 
 - `_attach_cv` swallows exceptions on the existing child-row queries (see Current state). Not in CR46; flagged for the reviewer.
 - Parser name split ("Alpha" surname, "Crfortythree" middle name): parser quality, CR46 non-goal.
 
-**Next after Sprint 43:** CR45 (Sprint 44, v0.0.59). Its PRD amendment (FR-24, NFR-9 Amendment, US-53, US-54) is owner-approved but **not yet applied to PRD.md**; per CR45's lifecycle it is applied, and Sprint 44 planned, at the replan after CR46 is deployed and retested, from the code CR46 ships.
+**Next after Sprint 43:** CR45 (Sprint 44, v0.0.59), planned below. Its PRD amendment (FR-24, NFR-9 Amendment, US-53, US-54) was applied to PRD.md on 2026-11-13 (6b13896).
+
+---
+
+## Sprint 44: CR45 generic file upload and `attach_file`, plus Sprint 43 carried fixes F1 to F10 - PLANNED (target v0.0.59)
+
+**Change request:** CR45.md (APPROVED 2026-11-11; D1 to D7, replan decisions R1 to R4 2026-11-13), plus the carried fixes F1 to F10 in CR45.md "Carried fixes from Sprint 43"
+**PRD requirement:** FR-24, NFR-9 Amendment, FR-15 Amendment (renamed tools, R1), FR-15 Amendment 2 and FR-20 (title warning wording, F6 to F9), FR-23 (match reasons, F1, F3, F4), NFR-6 (F5 acceptance script baseline). F10 (diagnostic logging) has no exact requirement; it is an owner-approved operational fix.
+**User stories:** US-53, US-54 (new); US-48, US-49 (renamed tools, F2); US-52 (F1, F3, F4)
+**Dependency:** Sprint 43 complete (v0.0.58, 1,417 tests, deployed, T43.15 passed 2026-11-13). Builds on the code CR46 shipped: `client.attach_file(..., external_id, file_type)` already sends `externalID` and `type` (keyword `file_type`, wire param `type`).
+**Risk:** Medium-high. D1 renames three tools and changes a parameter (R2) with no aliases, so every Cowork skill and prompt that names `request_cv_upload`, `get_cv_upload`, `show_cv_upload_box` or passes `candidate_id` breaks at deploy. `upload_box.html` changes again, and it only started rendering in Cowork at T43.15. `Proof of ID` and `Visa` files carry personal data.
+
+### Current state (verified by code search and read-only live checks, 2026-11-13)
+
+Nothing in CR45 is implemented. Evidence:
+- `uploads.py:50` `ALLOWED_EXTENSIONS` is still the eight CV types; there is no `CV_EXTENSIONS`. `_Upload` (`uploads.py:134`) has `candidate_id`, `attached_candidate_id`, `created_candidate_id`; no `entity`, `entity_id`, `attached_entity`, `attached_entity_id`. Module docstring and errors say "CV" (`:1-10`, `:211-229`).
+- `server.py` still defines `request_cv_upload` (`:3003`), `get_cv_upload` (`:3066`), `show_cv_upload_box` (`:3132`); no `attach_file` tool. 42 tools. The FastMCP instructions string (`:298`) says "call request_cv_upload first". `_upload_error` hints (`:2545-2548`) name `request_cv_upload` and "Allowed CV types". `get_cv_upload` returns `candidate_id` only, never `attached_candidate_id` (F2).
+- `client.py` has no `/settings` read, no `/entityFiles` read, and `_guess_content_type` (`:194`) covers pdf, doc, docx, html, text, txt only. `attach_file` (`:284`) has no `description`.
+- Resource `cv_upload_box` at `_UPLOAD_BOX_URI = "ui://bullhorn/cv-upload-box.html"` (`:2514`). `descriptions.py:95` maps `attach_cv` only.
+- Old names also appear in `README.md` (`:77-79`, `:305-323`), `src/bullhorn_mcp/upload_box.html`, `tests/fixtures/sample_cv/README.md`, `tests/test_server.py`, `tests/test_server_cr46.py`, `COWORK_TEST_v0.0.58.md`.
+- F1: `duplicates.py:730` builds `f"Different {label}s on file"`. F3: the count clause is at `duplicates.py:933`; `employer_counts` is only filled for employers in `profile.to_echo(...)["employers"]` (`duplicate_retrieval.py:273-277`, `:321`). Cause not yet proven (see T44.11). F4: `_score_education` (`duplicates.py:972`). F6/F7: `_title_dropped_warning` (`server.py:3356-3365`) compares with the literal `"title"` and always appends "(the salutation)". F10: no `logging.basicConfig` or `setLevel` anywhere in `src/`; the only logging setup is the `uvicorn.access` token-redaction filter in `main()` (`server.py:4863-4883`). The INFO line is `server.py:3127`.
+- Live (read-only): `/settings/fileTypeList,clientCorporationFileTypeList` returns both lists as JSON arrays (7 and 4 values). `/entityFiles/{entity}/{id}` returns `{"EntityFiles": [...]}` with `isDeleted` per row; 404 on a missing id; 400 on `Lead`; **200 on a soft-deleted Candidate (173779)**. Placement has no `isDeleted`; ClientContact and Opportunity do. ClientContact, Placement and Opportunity FileAttachment `/meta` match Candidate's (`type` String 50, `externalID` 100, `description`).
+- No TODO, FIXME, skip or xfail in `src/` or `tests/`.
+
+### Decisions and assumptions
+
+- CR45 D1 to D7 and replan R1 to R4 (CR45.md).
+- **P1 (record check).** `client.get` has no isDeleted gate (only `search` / `query` filter), and `/query` is refused for Candidate while Lucene can't look up ClientCorporation by id. So `attach_file` calls `client.get(entity, entity_id, fields="id,isDeleted")` when `client._entity_has_isdeleted(entity)` is true, else `fields="id"` (Placement has no `isDeleted`). A 404 or `isDeleted: true` is `record_not_found`. The `/entityFiles` 404 alone is not used, because a soft-deleted record returns 200. (Verified live 2026-11-13: `GET /entity/Candidate/173779?fields=id,isDeleted` returns `isDeleted: true`.)
+- **P2 (same-name warning, D7).** One `GET /entityFiles/{entity}/{id}` before the write. Rows with `isDeleted: true` are ignored. A name match is exact after stripping and ignoring case. The attach goes ahead and the response carries a `warnings` entry naming the existing file id(s). If the read fails, attach anyway with no warning (best effort, logged).
+- **P3 (label rule).** `type` is stripped. An empty string is treated as None. It matches the entity's list ignoring case, and the list's own spelling is what gets written. Anything else is `invalid_file_type_label` with the allowed list. If the settings read fails: no label means attach; a label means refuse with a clear `file_types_unavailable` error. Never write an unchecked label (CR45 Design).
+- **P4 (settings cache).** `client.get_file_types(entity)` reads `/settings/fileTypeList,clientCorporationFileTypeList` once per client, caches both lists, and caches a failure for nothing (it retries next call). ClientCorporation gets the second list and every other allowed entity the first.
+- **P5 (resource URI kept).** `ui://bullhorn/cv-upload-box.html` is not renamed. This is a choice to avoid risk, not a known host requirement: the box only just started rendering in Cowork, and the URI is not user-facing. The resource `name` and `description` and the HTML wording become generic. T44.8 re-checks the box rendering in Cowork and on web.
+- **P6 (NFR-8).** `attach_file` is not added to `TOOL_ENTITY_MAP` enrichment (it takes six entities and needs no field list). Tool descriptions are measured before and after with `scripts/measure_descriptions.py` and the delta recorded. Target: under +2,000 chars net for the new tool and the reworded upload tools.
+- **P7 (CV tools).** `parse_cv`, `create_candidate_from_cv` (upload mode) and `attach_cv` check `rec["extension"] in CV_EXTENSIONS` right after reading the upload and before any claim or Bullhorn call. A miss is `not_a_cv_file` with a hint naming `attach_file`.
+- **P8 (task order, R3).** Build order: T44.2 to T44.7, then T44.14 (CR45 end to end) and T44.15 (docs, README renames), then the F fixes T44.9 to T44.13. Task numbers are not the build order. If the context runs short, unfinished F tasks move to the next sprint and are recorded here; CR45 is never left half built.
+- **P9 (title wording, F6 to F9).** One design pass before code (Sprint 43 learning): T44.13 writes the rule and the exact messages into the build notes first, then implements them in one builder used by every branch.
+
+### Tasks
+
+#### T44.1 Live probe (DONE 2026-11-11, owner-approved)
+Results in CR45.md Live evidence item 5: JobOrder 51437 (files 327510, 327511) and ClientCorporation 10666 (files 896, 897, 898). `description` is stored; Bullhorn does not check `type` against the picklist; same-name duplicates are allowed.
+
+#### T44.2 `uploads.py`: any file, entity hint, attached entity (D2, A1/R2, F2)
+**Files:** `src/bullhorn_mcp/uploads.py`
+- `CV_EXTENSIONS` = the current eight. `ALLOWED_EXTENSIONS` = `CV_EXTENSIONS | {png, jpg, jpeg, msg, eml}`.
+- `create(owner_sub, filename, entity=None, entity_id=None)` replaces `candidate_id`. `_Upload` gets `entity`, `entity_id`, `attached_entity`, `attached_entity_id`. `created_candidate_id` and `attached_candidate_id` stay for the CV paths (Sprint 41 C1 fix). `mark_attached(upload_id, file_id, entity, entity_id)` sets both the new fields and, when `entity == "Candidate"`, `attached_candidate_id`.
+- `get()` returns `entity`, `entity_id`, `attached_entity`, `attached_entity_id` (and keeps the internal candidate keys for the CV paths). `parser_format` is unchanged and only called for CV types.
+- Docstring and messages say "file"; the open-upload cap message says "open uploads".
+- **Tests** (`tests/test_uploads.py`): `test_allowed_extensions_include_images_and_email`, `test_refused_extensions` (xlsx, csv, pptx, zip, exe, heic), `test_cv_extensions_subset`, `test_entity_hint_echoed_not_enforced`, `test_mark_attached_records_entity`, `test_mark_attached_candidate_also_sets_attached_candidate_id`, `test_cap_message_says_uploads`. Existing tests using `candidate_id=` move to `entity="Candidate", entity_id=`.
+
+#### T44.3 `client.py`: description, file types, entity files, content types
+**Files:** `src/bullhorn_mcp/client.py`
+- `attach_file(..., description=None)` sends `description` as a query parameter when given. `fileType` is never sent.
+- `get_file_types(entity) -> list[str]` per P4. `get_entity_files(entity, entity_id) -> list[dict]` reads `/entityFiles` (`EntityFiles` key), raising the usual not-found error on 404.
+- `_guess_content_type` adds rtf, odt, htm, png, jpg/jpeg, msg (`application/vnd.ms-outlook`), eml (`message/rfc822`).
+- **Tests** (`tests/test_client.py`, respx, exact request assertions): `test_attach_file_sends_description_query_param`, `test_attach_file_omits_description_when_none`, `test_attach_file_never_sends_filetype`, `test_get_file_types_company_list`, `test_get_file_types_shared_list_for_other_entities`, `test_get_file_types_cached_one_request`, `test_get_file_types_failure_not_cached`, `test_get_entity_files_parses_entityfiles_key`, `test_get_entity_files_404_raises`, `test_guess_content_type_new_extensions`.
+
+#### T44.4 `server.py` renames (D1, R2)
+**Files:** `src/bullhorn_mcp/server.py`, `src/bullhorn_mcp/upload_box.html`
+- `request_cv_upload` -> `request_file_upload(filename, entity=None, entity_id=None)`. `entity` is validated against the six D3 entities when given, with Lead refused as in T44.5. `get_cv_upload` -> `get_file_upload` (R2 keys). `show_cv_upload_box` -> `show_upload_box`. No aliases.
+- Descriptions, `next_steps`, `_upload_error` hints and the instructions string rewritten for any file. `next_steps` say: a CV going on a Candidate goes to `parse_cv` / `create_candidate_from_cv` / `attach_cv`, and anything else goes to `attach_file`.
+- `upload_box.html` text says "file"; the file picker's `accept` list already comes from the ticket's `allowed_extensions` (`upload_box.html:103`, set from the ticket's own extension at `server.py:3172`), so no type list changes in the HTML. Resource `name` becomes `upload_box`, but the URI is unchanged (P5).
+- **Tests** (`tests/test_server.py`, `tests/test_server_cr46.py`, `tests/test_upload_box.py`): `test_tool_list_has_renamed_upload_tools`, `test_old_upload_tool_names_absent` (tool list, instructions string, every docstring and `next_steps`), `test_request_file_upload_entity_hint`, `test_request_file_upload_rejects_lead_hint`, `test_get_file_upload_reports_attached_entity` (F2), `test_next_steps_point_non_cv_to_attach_file`, `test_upload_box_wording_generic`, `test_upload_box_uri_unchanged`. Existing tests are renamed, not deleted. Tool count 42 -> 43 after T44.5.
+
+#### T44.5 `attach_file` tool (FR-24, D3, D4, D7, P1 to P3)
+**Files:** `src/bullhorn_mcp/server.py`
+- `attach_file(entity, entity_id, upload_id, type=None, description=None)`. Order: identity -> upload read (owner, status `received`) -> entity check (D3 list; Lead gets `unsupported_entity` with the "Bullhorn does not allow files on leads, use the person's contact or candidate record" message) -> label check (P3) -> record check (P1) -> claim -> same-name read (P2) -> `client.attach_file(..., external_id="Portfolio", file_type=label, description=...)` -> `mark_attached` (bytes dropped) -> release in `finally`.
+- Response: `entity`, `entity_id`, `file_id`, `filename`, `type` (as written, or null), `warnings` (D7). Errors in the existing upload-error form: `unsupported_entity`, `invalid_file_type_label`, `file_types_unavailable`, `record_not_found`, plus upload errors (`upload_not_found`, `upload_expired`, not yet received, already attached, claimed).
+- Docstring (before `Args:`; FastMCP drops later sections): tells Claude to pick the label that matches the document from the entity's list and to leave it blank rather than force a wrong one (D4), JDs go on jobs with no label (D6), CVs for parsing use the CV tools. The parameter name `type` shadows the builtin inside the function only; do not call `type()` in its body.
+- **Tests** (`tests/test_server_cr45.py`, new, LF): one attach per D3 entity (parametrised, 6), `test_lead_refused`, `test_unknown_entity_refused`, `test_label_valid_written_in_list_spelling`, `test_label_case_insensitive_match`, `test_label_invalid_returns_allowed_list`, `test_company_label_from_company_list` (Cover Letter refused on ClientCorporation), `test_no_label_attaches_with_no_type`, `test_blank_label_is_none`, `test_settings_unavailable_no_label_attaches`, `test_settings_unavailable_with_label_refused`, `test_record_not_found_404`, `test_soft_deleted_record_refused`, `test_placement_no_isdeleted_field_requested`, `test_upload_not_found`, `test_upload_expired`, `test_upload_not_received`, `test_upload_already_attached`, `test_claim_released_on_bullhorn_error`, `test_marked_attached_and_bytes_dropped`, `test_same_name_warns_and_attaches`, `test_same_name_ignores_deleted_rows`, `test_entity_files_read_failure_still_attaches`, `test_write_payload_exact` (respx: PUT `/file/{entity}/{id}/raw`, query `externalID=Portfolio`, `type`, `description`, multipart filename = the ticket's original name), `test_no_candidate_fields_written` (no `/entity/Candidate` POST or PUT).
+
+#### T44.6 CV tools refuse non-CV files (FR-24, P7)
+**Files:** `src/bullhorn_mcp/server.py`
+- **Tests** (`tests/test_server_cr45.py`): `test_parse_cv_refuses_png`, `test_create_candidate_from_cv_refuses_eml`, `test_attach_cv_refuses_jpg`, `test_cv_refusal_hint_names_attach_file`, `test_cv_refusal_before_claim_and_bullhorn` (no HTTP calls, upload still `received`), `test_create_candidate_from_cv_text_mode_unaffected`.
+
+#### T44.7 Build-time live attach of the new types (owner approval required)
+With approval, attach a tiny png and a tiny eml to job 51437 via `attach_file`'s client path, with `type` empty, and read them back with `/entityFiles`. Gate: if either is refused or stored with the wrong content type, fix `_guess_content_type` or drop the type from D2 with the owner before review. Files stay as test data and are recorded here.
+
+#### T44.8 Deploy and live acceptance (owner)
+After the owner deploys v0.0.59: a `COWORK_TEST_v0.0.59.md` script, using the real baseline (F5). It covers:
+- A JD attached to job 51437 with no label.
+- A cover letter attached to candidate 173063 with `type=Cover Letter`.
+- A contract attached to company 10666 with `type=Contract`.
+- A file attached to contact 145635.
+- A file attached to a new test Placement and a new test Opportunity (R4). Claude creates them at T44.8 with an inline `BullhornClient` script (no MCP tool creates either), approved in advance by the owner on 2026-11-13. A Placement has no `isDeleted`, so it cannot be soft-deleted afterwards and stays as test data. Their ids are recorded here and in the live test records.
+- Refusals: a Lead, `Cover Letter` on a company, an xlsx upload, `parse_cv` on a png.
+- The upload box rendering in Cowork and on web (`show_upload_box`).
+- `get_file_upload` showing `attached_entity`.
+- One CV re-run through the renamed tools.
+- The journal showing the "MCP App resource read" line (F10).
+At deploy, the owner updates Cowork skills and prompts for the renames and for `candidate_id` -> `entity`/`entity_id`, plus the new-job-setup skill so it attaches the JD.
+
+#### T44.9 F1 reason plural
+**Files:** `src/bullhorn_mcp/duplicates.py`. Plural from the config label without doubling a trailing "s" ("email addresses"), or a per-kind plural in config if labels need it. **Tests** (`tests/test_duplicates.py`): `test_differ_reason_email_address_plural`, `test_differ_reason_phone_plural`.
+
+#### T44.10 F4 education reason repeated
+**Files:** `src/bullhorn_mcp/duplicates.py`. Write a failing test first: a record with two rows for the same school yields one education reason. Then fix in `_score_education` (one entry per distinct school pair). Points must be unchanged (it is already capped). **Tests:** `test_education_same_school_two_rows_one_reason`, `test_education_points_unchanged_by_dedupe`.
+
+#### T44.11 F3 employer count missing on `parse_cv` checks
+**Files:** `src/bullhorn_mcp/duplicate_retrieval.py` and/or `duplicates.py`. Cause not proven. Leading hypothesis: the parse fixture has no `companyName` (the employer sits in `title`), so `to_echo` has no employer, no count search runs, and the title-found match has no count. Step 1: reproduce with a failing test on `tests/fixtures/cv_parse_sample.json` through `match_candidates` with respx. Step 2: fix at the cause (count the employer key that matched, whichever side it came from), with no new searches beyond `max_employers`. **Tests:** `test_parse_cv_check_reason_has_employer_count`, `test_employer_found_in_title_has_count`, plus a guard that the search count is unchanged.
+
+#### T44.12 F10 diagnostic INFO reaches a handler
+**Files:** `src/bullhorn_mcp/server.py` (`main()`)
+- In `main()`, through a small helper (`_configure_logging()`) that tests can undo, give the `bullhorn_mcp` logger level INFO, one stderr handler (stdio-safe) and `propagate=False` so lines are not doubled. **Never touch the root logger.** Tests that call it restore the logger's level, handlers and `propagate` afterwards, so caplog tests elsewhere stay order-independent. INFO lines this releases (grep 2026-11-13, all in `server.py`): the resource read (`:3127`), upload rejected with its error code (`:4838`), upload received with `upload_id` and size (`:4841`), and the two startup lines (`:4886`, `:4891`). None carries a credential, token, file name or personal data; the reviewer re-checks any new `.info(` in the diff. `httpx` and `httpcore` stay at WARNING: httpx INFO request lines would put the Bullhorn auth URL (username and password in the query string) and upload URLs (tokens) in the journal.
+- Configured in `main()` only, not at import (import-time safety invariant), so tests and library use are unaffected.
+- **Tests** (`tests/test_server.py`): `test_main_configures_bullhorn_mcp_logger_info`, `test_main_does_not_configure_root_logger`, `test_httpx_logger_not_lowered`, `test_resource_read_line_reaches_handler` (real handler attached the way `main()` does, not caplog), `test_main_logging_idempotent` (no duplicate handlers on a second call).
+
+#### T44.13 F6 to F9 title warning wording (one design pass)
+**Files:** `src/bullhorn_mcp/server.py`
+- First, in the build notes: the rule (when a title key is dropped, what it resolved to, which branch) and the exact message for each case. Cases: unresolved in any spelling (`title`, `Title`, `TITLE`, `" title "`), resolved to `namePrefix`, resolved to another field via alias. Then one builder used by every caller.
+- "(the salutation)" only when the target is `namePrefix` (F7). The unresolved check compares the normalised key, not the literal (F6). The `attach_cv` `overwrite` Args gets the occupation-alias exception and `fields_to_update` gets a title note, both wrapped at ~80 like the rest of the block (F8, F9). Args text does not reach the agent (FastMCP drops it), so the summary above `Args:` carries anything the agent must know.
+- **Tests:** `test_title_warning_unresolved_any_spelling` (parametrised, 4), `test_title_warning_nameprefix_says_salutation`, `test_title_warning_alias_target_no_salutation`, `test_attach_cv_docstring_lines_wrapped` (source check, no line over 100 in the `attach_cv` docstring).
+
+#### T44.14 End to end at the HTTP boundary
+**Files:** `tests/test_server_cr45.py`. Using the real upload route and respx Bullhorn:
+- A docx JD goes `request_file_upload`, then POST `/upload/{token}`, then `attach_file(JobOrder)`, then `get_file_upload` (`attached`, `attached_entity` JobOrder).
+- A png goes through the same flow onto a ClientContact.
+- A png goes to `parse_cv`, which refuses it, and the upload stays `received`.
+- A CV goes through the renamed tools, then `attach_cv`, and its file still carries `Original CV` (regression).
+- Prior sprints' E2E (`tests/test_cv_write_e2e.py`) still pass.
+
+#### T44.15 Docs
+- README: tool table (43 tools, renamed), the upload flow section, `attach_file` usage, the alias exception text where it names upload tools.
+- `tests/fixtures/sample_cv/README.md` names.
+- PRD: the R1 rewording is already applied. Also rewrite US-31's stale acceptance sentence ("on second call with `force_all=true` or `fields_to_update`"; `force_all` was removed by CR43 D8 and `confirm` by CR48) to the current `overwrite` flow. This is docs only and was found at the replan; the owner approved it 2026-11-13.
+- `COWORK_TEST_v0.0.59.md` (T44.8). CR45 Status flips to COMPLETE at the post-tag doc sync.
+
+### Verification
+
+- [ ] `.venv/bin/pytest` green; measured count recorded below.
+- [ ] `grep -rn "request_cv_upload\|get_cv_upload\|show_cv_upload_box" src/ README.md tests/` returns nothing except `test_old_upload_tool_names_absent` itself and any "named ... before CR45" note.
+- [ ] `grep -n "fileType" src/bullhorn_mcp/client.py src/bullhorn_mcp/server.py` shows no attach use.
+- [ ] Tool count 43; `attach_file` not in `TOOL_ENTITY_MAP`; description size delta measured and recorded (P6).
+- [ ] No `logging.basicConfig` and no root logger change; httpx stays at WARNING (T44.12).
+- [ ] Line endings: `tests/test_server.py`, `tests/test_client.py`, `client.py` and this file CRLF; `server.py`, `uploads.py`, `duplicates.py`, `upload_box.html`, `CR45.md`, `PRD.md`, `README.md` LF; new test files LF. Check `git show HEAD:<file> | grep -c $'\r'` before editing.
+- [ ] T44.7 run (or declined) and recorded.
+- [ ] Local commit `feat: CR45 ...`. No push. Then `PROMPT_iterate.md`, push, tag **v0.0.59**.
+- [ ] T44.8 after the owner's deploy; results recorded.
+
+### Expected test count after Sprint 44
+
+Previous: 1,417 (v0.0.58). Planned: about 7 (T44.2) + 10 (T44.3) + 8 (T44.4) + 31 (T44.5) + 6 (T44.6) + 2 (T44.9) + 2 (T44.10) + 3 (T44.11) + 5 (T44.12) + 7 (T44.13) + 4 (T44.14), about 85, plus renamed tests. **To be measured, not predicted.**
+
+**Next after Sprint 44:** owner deploys v0.0.59 and runs T44.8. CR35 is still reserved and unspecced.
