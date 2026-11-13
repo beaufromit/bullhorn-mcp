@@ -1853,6 +1853,9 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
     try:
         # CR10 owner stamping intentionally does not apply here — update_record modifies existing records only.
         client = get_client()
+        title_dropped: list[str] = []
+        if entity == "Candidate":
+            fields, title_dropped = _drop_title_to_salutation(get_metadata(), fields)
         resolved = get_metadata().resolve_fields(entity, fields)
 
         # Guard: reject company reassignment (check after resolution so label bypass is blocked)
@@ -1863,6 +1866,7 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
             })
 
         resolved, warnings = _strip_contact_title(resolved, entity)
+        warnings[:0] = [_title_dropped_warning(k) for k in title_dropped]
 
         # Recompute name when firstName or lastName changes on person entities
         if entity in ("Candidate", "ClientContact") and ("firstName" in resolved or "lastName" in resolved):
@@ -2323,6 +2327,7 @@ def create_candidate(
 
         metadata = get_metadata()
         defaults = get_candidate_defaults()
+        fields, title_dropped = _drop_title_to_salutation(metadata, fields)
         resolved_input = metadata.resolve_fields("Candidate", fields)
         merged = {**metadata.resolve_fields("Candidate", defaults), **resolved_input}
 
@@ -2357,6 +2362,7 @@ def create_candidate(
             })
 
         resolved, warnings = _strip_contact_title(resolved, "Candidate")
+        warnings[:0] = [_title_dropped_warning(k) for k in title_dropped]
 
         computed = _compute_person_name(resolved)
         if computed:
@@ -3324,6 +3330,30 @@ _CV_FILE_TYPE = "Original CV"
 _PARSER_NOISE_FIELDS = ("editHistoryValue", "onboardingReceivedSent")
 
 
+def _drop_title_to_salutation(metadata: BullhornMetadata, fields: dict) -> tuple[dict, list[str]]:
+    """Drop a title key that would resolve to anything but occupation (failure pattern 1).
+
+    Candidate has no title field and on the live tenant the label "Title" is
+    namePrefix (the salutation), so a job title sent as title would be resolved into
+    namePrefix before _strip_contact_title could see it. A key that stays an unknown
+    "title" is left for _strip_contact_title; a tenant alias to occupation is kept.
+    Returns (fields without the dropped keys, the dropped key names).
+    """
+    dropped = [
+        k for k in fields
+        if isinstance(k, str) and k.strip().lower() == "title"
+        and next(iter(metadata.resolve_fields("Candidate", {k: None}))) not in ("occupation", "title")
+    ]
+    return {k: v for k, v in fields.items() if k not in dropped}, dropped
+
+
+def _title_dropped_warning(key: str) -> str:
+    return (
+        f"Field '{key}' was stripped from the Candidate payload: Candidate has no title field and "
+        "'Title' is the salutation (namePrefix). Use 'occupation' for job title or 'namePrefix' for salutation."
+    )
+
+
 def _writable_candidate_fields(metadata: BullhornMetadata, fields: dict) -> tuple[dict, list[str]]:
     """Split ``fields`` into what may be sent to Candidate and the dropped key names.
 
@@ -3335,7 +3365,8 @@ def _writable_candidate_fields(metadata: BullhornMetadata, fields: dict) -> tupl
     """
     try:
         meta = {f["name"]: f for f in metadata.get_fields("Candidate")}
-    except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as exc:
+    except (AuthenticationError, BullhornAPIError, httpx.HTTPError, ValueError) as exc:
+        # ValueError: a /meta body that is not JSON.
         _logger.warning("Candidate /meta unavailable, CV fields filtered by name only: %s", exc)
         meta = {}
     kept: dict = {}
@@ -3428,6 +3459,9 @@ def _company_not_proposed_warning(work_history: list | None) -> str | None:
         return None
     if any(isinstance(e.get("startDate"), (int, float)) and not isinstance(e.get("startDate"), bool) for e in entries):
         return None
+    # Roles with no dates at all are a CV fact, not a format mistake: no warning.
+    if all(e.get("startDate") is None for e in entries):
+        return None
     return (
         "companyName was not proposed from work_history: no entry has a numeric startDate "
         "(epoch milliseconds), so the current employer could not be picked. Pass companyName "
@@ -3485,9 +3519,10 @@ def _create_candidate_from_cv(
         work_history, education = _new_cv_children([], [], work_history, education)
         if len(work_history) < given_wh or len(education) < given_edu:
             warnings.append(
-                f"Repeated entries written once: work history {given_wh} given, {len(work_history)} written; "
-                f"education {given_edu} given, {len(education)} written. Work history entries repeat when "
-                "companyName, title and startDate are all the same."
+                f"Repeated entries written once: work history {given_wh} entries, {len(work_history)} written; "
+                f"education {given_edu} entries, {len(education)} written. Work history entries repeat when "
+                "companyName, title and startDate are all the same; education entries when they share a "
+                "school, major, certification or credential and nothing they both have differs."
             )
 
         # The check runs on the corrected names and email (CR43 P5).
@@ -3732,6 +3767,7 @@ def _attach_cv(
             candidate_id, upload, upload_id, any(c is not None for c in corrections), match_check_id,
         )
     warnings: list[str] = []
+    company_warning: str | None = None
     try:
         client = get_client()
         metadata = get_metadata()
@@ -3750,8 +3786,8 @@ def _attach_cv(
             company = _current_company_name(work_history)
             if company:
                 candidate_fields["companyName"] = company
-            elif (msg := _company_not_proposed_warning(work_history)):
-                warnings.append(msg)
+            else:
+                company_warning = _company_not_proposed_warning(work_history)
         proposed_fields = {
             k: v for k, v in candidate_fields.items()
             if k not in _ATTACH_SKIP_FIELDS and isinstance(v, (str, int, float, bool))
@@ -3777,6 +3813,9 @@ def _attach_cv(
         # look empty and be written as an "addition" over the real value.
         fetch = list(dict.fromkeys(_ATTACH_BASE_FIELDS.split(",") + list(proposed_fields)))
         existing = client.get("Candidate", candidate_id, fields=",".join(fetch))
+        if company_warning and _is_blank(existing.get("companyName")):
+            # Only worth saying when the record has no company either.
+            warnings.append(company_warning)
 
         try:
             existing_wh = client.query(
@@ -3818,7 +3857,7 @@ def _attach_cv(
     chosen: set[str] = set()
     names = [str(n) for n in (overwrite or []) if not _is_blank(n)]
     if names:
-        if len(names) == 1 and names[0].strip().lower() == "all":
+        if all(n.strip().lower() == "all" for n in names):
             chosen = {c["field"] for c in overwrites}
         elif any(n.strip().lower() == "all" for n in names):
             # Fail safe: a mixed list may be a mistake, so nothing is overwritten.

@@ -663,6 +663,7 @@ tests/
 - Metadata is cached within a session
 - Hosted identity resolution is cached per authenticated user
 - `ClientContact.title` is intentionally stripped from write payloads to avoid confusion with `occupation`
+- A `title` key on a Candidate write (`create_candidate`, `update_record`, and `fields_override` on the CV paths) is dropped with a warning, even though the label "Title" resolves to `namePrefix` (the salutation): use `occupation` for job title and `namePrefix` for salutation
 
 ## Limitations
 

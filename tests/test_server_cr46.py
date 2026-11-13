@@ -247,6 +247,15 @@ class TestWritableFields:
         assert dropped == ["editHistoryValue", "onboardingReceivedSent"]
         assert any("meta down" in r.getMessage() for r in caplog.records)
 
+    def test_writable_fields_meta_not_json_falls_back(self):
+        """Cycle 2 m5: a /meta body that is not JSON falls back like an API error."""
+        client = Mock(spec=BullhornClient)
+        client.get_meta.side_effect = json.JSONDecodeError("Expecting value", "<html>", 0)
+        kept, dropped = server._writable_candidate_fields(
+            BullhornMetadata(client), {"firstName": "Jane", "editHistoryValue": {}},
+        )
+        assert kept == {"firstName": "Jane"} and dropped == ["editHistoryValue"]
+
     def test_writable_fields_meta_bug_is_not_swallowed(self):
         """Only API, auth and network errors fall back; a bug in the projection surfaces."""
         client = Mock(spec=BullhornClient)
@@ -354,6 +363,30 @@ class TestTitleOverride:
         assert bh.body("PUT", "/entity/Candidate")["namePrefix"] == "Ms"
         assert not any("was ignored" in w for w in data.get("warnings", []))
 
+    @pytest.mark.parametrize("key", ["title", "Title"])
+    def test_create_candidate_title_not_written_to_name_prefix(self, stack, clean_upload_store, key):
+        """Cycle 2 M1: create_candidate resolved title to namePrefix before stripping it."""
+        bh = _Bullhorn(meta_fields=self.META)
+        data = stack(bh, server.create_candidate,
+                     fields={"firstName": "Jane", "lastName": "Doe", key: "Finance Director"}, force=True)
+        body = bh.body("PUT", "/entity/Candidate")
+        assert "namePrefix" not in body and "title" not in body
+        assert any(f"'{key}' was stripped" in w and "occupation" in w for w in data["warnings"])
+
+    @pytest.mark.parametrize("key", ["title", "Title"])
+    def test_update_record_candidate_title_not_written_to_name_prefix(self, stack, clean_upload_store, key):
+        bh = _Bullhorn(meta_fields=self.META)
+        data = stack(bh, server.update_record, entity="Candidate", entity_id=CID,
+                     fields={"occupation": "Finance Director", key: "Finance Director"})
+        body = bh.body("POST", f"/entity/Candidate/{CID}")
+        assert body == {"occupation": "Finance Director"}
+        assert any(f"'{key}' was stripped" in w for w in data["warnings"])
+
+    def test_update_record_candidate_name_prefix_still_written(self, stack, clean_upload_store):
+        bh = _Bullhorn(meta_fields=self.META)
+        stack(bh, server.update_record, entity="Candidate", entity_id=CID, fields={"namePrefix": "Ms"})
+        assert bh.body("POST", f"/entity/Candidate/{CID}") == {"namePrefix": "Ms"}
+
     def test_title_alias_to_occupation_kept(self, stack, clean_upload_store):
         """A tenant alias that maps title to occupation keeps working."""
         from bullhorn_mcp import metadata as metadata_mod
@@ -431,7 +464,7 @@ class TestCreateRepeatedChildren:
         data = _create(stack, bh, work_history=same, force=True)
         assert len(bh.find("PUT", "/entity/CandidateWorkHistory")) == 2
         _assert_children_written(data, work_history=2)
-        assert any("work history 3 given, 2 written" in w for w in data["warnings"])
+        assert any("work history 3 entries, 2 written" in w for w in data["warnings"])
 
     def test_create_from_cv_no_repeats_no_warning(self, stack, clean_upload_store):
         bh = _Bullhorn()
@@ -507,6 +540,19 @@ class TestCurrentCompany:
         data = _create(stack, bh, work_history=iso, force=True)
         assert "companyName" not in bh.body("PUT", "/entity/Candidate")
         assert any("numeric startDate" in w for w in data["warnings"])
+
+    def test_attach_cv_iso_start_date_no_warning_when_record_has_company(self, stack, clean_upload_store):
+        """Cycle 2 m3: the record already has a company, so nothing is missing."""
+        iso = [{"companyName": "Acme Ltd", "title": "FC", "startDate": "2021-01-01"}]
+        bh = _Bullhorn(existing={"firstName": "Jane", "lastName": "Doe", "companyName": "Previous Plc"})
+        data, _ = _attach(stack, bh, work_history=iso)
+        assert not any("numeric startDate" in w for w in data.get("warnings", []))
+
+    def test_undated_roles_do_not_warn(self, stack, clean_upload_store):
+        """Cycle 2 m3: roles with no dates are a CV fact, not a format mistake."""
+        bh = _Bullhorn()
+        data = _create(stack, bh, work_history=[{"companyName": "Acme Ltd", "title": "FC"}], force=True)
+        assert not any("numeric startDate" in w for w in data.get("warnings", []))
 
     def test_numeric_start_date_without_company_does_not_warn(self, stack, clean_upload_store):
         bh = _Bullhorn()
@@ -868,6 +914,13 @@ class TestOverwriteChoice:
         assert data["overwritten"] == []
         assert {k["field"] for k in data["kept"]} == {"occupation", "companyName", "description"}
         assert any('mixes "all"' in w for w in data["warnings"])
+
+    def test_attach_cv_overwrite_all_repeated_is_all(self, stack, clean_upload_store):
+        """Cycle 2 m2: ["all", "all"] is still all, not a mix with field names."""
+        _, upload_id = self._first(stack)
+        data, bh = self._again(stack, upload_id, overwrite=["all", "ALL"])
+        assert set(data["overwritten"]) == {"occupation", "companyName", "description"}
+        assert not any("mixes" in w for w in data.get("warnings", []))
 
     def test_attach_cv_overwrite_description_chosen(self, stack, clean_upload_store):
         _, upload_id = self._first(stack)

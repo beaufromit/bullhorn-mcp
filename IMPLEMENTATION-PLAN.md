@@ -4218,7 +4218,7 @@ Result in CR46.md B6: the host mounts the app on web, Desktop and Cowork; the bo
 
 #### T43.8 Outcomes under the passed id; `duplicate_check` on every create (B4, B5, Q3) (DONE 2026-11-13)
 **File:** `src/bullhorn_mcp/server.py`
-- Without `force`, the fresh check still runs; the outcome is logged under the fresh id **and** under a passed `match_check_id` (when different). The response keeps `duplicate_check` (fresh id) and adds `match_check_id` = the passed id. With `force=True`, behaviour per 42B A1 (logs `created_with_force` under the passed id).
+- Without `force`, the fresh check still runs; the outcome is logged under the fresh id **and** under a passed `match_check_id` (when different). The response keeps `duplicate_check` (fresh id) and adds `passed_match_check_id` = the passed id (named `match_check_id` until review m7; a stop response's `match_check_id` is the fresh id). With `force=True`, behaviour per 42B A1 (logs `created_with_force` under the passed id).
 - `create_candidate` returns `duplicate_check` on every create (null with `force=True`) (P2).
 - **Tests:** `test_create_from_cv_logs_outcome_under_passed_id`, `test_create_candidate_logs_outcome_under_passed_id`, the same two `_with_force`, `test_create_candidate_returns_duplicate_check`, `test_create_candidate_force_duplicate_check_null`.
 
@@ -4296,7 +4296,7 @@ Why these choices were made, for the reviewer and for T43.15:
 - **Design points for the reviewer.**
   - (a) The placeholder filter lives in `duplicates._employers()`, the one source for both `to_echo` (retrieval) and scoring. Matching is exact on the `normalize_employer` key, so a real employer that normalises to a placeholder word would also be skipped (edge, not seen). `placeholder_employers` is a required config key.
   - (b) `public_match_result` is a deep copy. `_public_check` is applied after the log at: `_duplicate_policy` stops, `create_candidate` success, `_create_candidate_from_cv` success, `find_duplicate_candidates`, `parse_cv`, `parse_cv_text`.
-  - (c) `_log_create_outcome`: `force` logs `created_with_force` under the passed id only (42B A1). Otherwise `created_new` under the fresh id, and also under the passed id when different. If the check could not run, the passed id only. Responses add `match_check_id` (the passed id) when given. `create_candidate` now always returns `duplicate_check` (P2).
+  - (c) `_log_create_outcome`: `force` logs `created_with_force` under the passed id only (42B A1). Otherwise `created_new` under the fresh id, and also under the passed id when different. If the check could not run, the passed id only. Responses add `passed_match_check_id` (the passed id) when given. `create_candidate` now always returns `duplicate_check` (P2).
   - (d) The name warning was reworded in the shared `_strip_contact_title`, so the new text ("replaced with the name computed from firstName and lastName") also applies to ClientContact and `create_candidate`, not only the CV paths.
   - (e) `show_cv_upload_box` success returns a FastMCP `ToolResult` with meta `{ui: {resourceUri}}`. Its annotation is now `str | ToolResult`, which removed the tool's output schema, so no `structuredContent` is sent. The box reads the JSON text block, which is unchanged. Check at the T43.15 box retest.
   - (f) The current company is proposed before the duplicate check on the create path, so the match profile now sees it.
