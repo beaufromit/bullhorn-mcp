@@ -10,7 +10,6 @@ import copy
 import json
 from pathlib import Path
 
-import httpx
 import pytest
 
 from bullhorn_mcp import server
@@ -34,15 +33,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "cv_parse_sample.json"
 
 
 class _E2EBullhorn(_Bullhorn):
-    """Adds the read-back GET for the child entities the base harness does not answer."""
-
-    def __call__(self, request):
-        path = request.url.path.split("/rest-services/abc123", 1)[1]
-        for entity in ("CandidateWorkHistory", "CandidateEducation"):
-            if request.method == "GET" and path.startswith(f"/entity/{entity}/"):
-                self.requests.append(("GET", path, request))
-                return httpx.Response(200, json={"data": {"id": int(path.rsplit("/", 1)[1])}})
-        return super().__call__(request)
+    """The base harness, which also answers the child read-back GET."""
 
 
 @pytest.fixture

@@ -2390,7 +2390,7 @@ def create_candidate(
         data = json.loads(format_response(result))
         data["duplicate_check"] = _public_check(check)
         if match_check_id:
-            data["match_check_id"] = match_check_id
+            data["passed_match_check_id"] = match_check_id
         if not has_children:
             if warnings:
                 data["warnings"] = warnings
@@ -3335,7 +3335,8 @@ def _writable_candidate_fields(metadata: BullhornMetadata, fields: dict) -> tupl
     """
     try:
         meta = {f["name"]: f for f in metadata.get_fields("Candidate")}
-    except Exception:
+    except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as exc:
+        _logger.warning("Candidate /meta unavailable, CV fields filtered by name only: %s", exc)
         meta = {}
     kept: dict = {}
     dropped: list[str] = []
@@ -3372,7 +3373,18 @@ def _filtered_cv_override(metadata: BullhornMetadata, fields_override: dict, war
     ``description`` and ``name`` never come from Claude (CR43, CR26) and are handled
     before the filter so each gets exactly one message.
     """
-    override = metadata.resolve_fields("Candidate", dict(fields_override))
+    raw = dict(fields_override)
+    for key in [k for k in raw if isinstance(k, str) and k.strip().lower() == "title"]:
+        # Candidate has no job title field called title, and the label "Title" is
+        # namePrefix (the salutation), so a job title sent as title would land there.
+        # Only a tenant alias that maps title to occupation is kept (pattern 1).
+        if next(iter(metadata.resolve_fields("Candidate", {key: None}))) != "occupation":
+            raw.pop(key)
+            warnings.append(
+                f"fields_override '{key}' was ignored: Candidate has no title field. "
+                "Use 'occupation' for job title or 'namePrefix' for salutation."
+            )
+    override = metadata.resolve_fields("Candidate", raw)
     if "description" in override:
         # CR43 goal 2: the description is the parser's rendering of the CV itself.
         override.pop("description")
@@ -3407,6 +3419,20 @@ def _current_company_name(work_history: list | None) -> str | None:
             best, best_start = entry, start
     name = (best or {}).get("companyName")
     return name.strip() if isinstance(name, str) and name.strip() else None
+
+
+def _company_not_proposed_warning(work_history: list | None) -> str | None:
+    """A warning when no current company could be picked because no startDate is a number."""
+    entries = [e for e in work_history or [] if isinstance(e, dict)]
+    if not entries or _current_company_name(entries) is not None:
+        return None
+    if any(isinstance(e.get("startDate"), (int, float)) and not isinstance(e.get("startDate"), bool) for e in entries):
+        return None
+    return (
+        "companyName was not proposed from work_history: no entry has a numeric startDate "
+        "(epoch milliseconds), so the current employer could not be picked. Pass companyName "
+        "in fields_override, or give startDate as epoch milliseconds."
+    )
 
 
 def _create_candidate_from_cv(
@@ -3448,12 +3474,21 @@ def _create_candidate_from_cv(
             company = _current_company_name(work_history)
             if company:
                 candidate_data["companyName"] = company
+            elif (msg := _company_not_proposed_warning(work_history)):
+                warnings.append(msg)
         parsed_names, parsed_ids = _split_parsed_skills(parsed)
         given_names, given_ids = _normalize_skills(skills, primary_skills)
         skill_names = given_names if skills is not None else parsed_names
         primary_ids = given_ids if primary_skills is not None else parsed_ids
         # An entry repeated in one list is written once, as in attach_cv.
+        given_wh, given_edu = len(work_history), len(education)
         work_history, education = _new_cv_children([], [], work_history, education)
+        if len(work_history) < given_wh or len(education) < given_edu:
+            warnings.append(
+                f"Repeated entries written once: work history {given_wh} given, {len(work_history)} written; "
+                f"education {given_edu} given, {len(education)} written. Work history entries repeat when "
+                "companyName, title and startDate are all the same."
+            )
 
         # The check runs on the corrected names and email (CR43 P5).
         dup = None
@@ -3562,7 +3597,7 @@ def _create_candidate_from_cv(
                 content_mime = client._guess_content_type(upload["format"])
                 file_attachment = client.attach_file(
                     "Candidate", candidate_id, upload["data"], upload["filename"], content_mime,
-                    external_id=_CV_FILE_EXTERNAL_ID, type=_CV_FILE_TYPE
+                    external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
                 )
                 written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
                 upload_store.mark_attached(upload_id, written["file"]["file_id"], candidate_id)
@@ -3576,7 +3611,7 @@ def _create_candidate_from_cv(
         result["warnings"] = warnings
     result["duplicate_check"] = _public_check(dup)
     if match_check_id:
-        result["match_check_id"] = match_check_id
+        result["passed_match_check_id"] = match_check_id
     if upload is not None and written["file"] is None:
         # The Candidate exists now. Calling this tool again would flag it as a
         # duplicate, and force=True would create a second one, so point the
@@ -3618,7 +3653,7 @@ def attach_cv(
     EACH one, then call again with the same arguments plus overwrite=[the accepted
     fields]; that writes only those and repeats nothing. If they reject all, do not
     call again. With no consultant present (automation), pass overwrite=["all"] on
-    the first call.
+    the first call; "all" must be the only entry.
     Tell the user exactly what the response says was written.
 
     Args:
@@ -3715,6 +3750,8 @@ def _attach_cv(
             company = _current_company_name(work_history)
             if company:
                 candidate_fields["companyName"] = company
+            elif (msg := _company_not_proposed_warning(work_history)):
+                warnings.append(msg)
         proposed_fields = {
             k: v for k, v in candidate_fields.items()
             if k not in _ATTACH_SKIP_FIELDS and isinstance(v, (str, int, float, bool))
@@ -3783,6 +3820,12 @@ def _attach_cv(
     if names:
         if len(names) == 1 and names[0].strip().lower() == "all":
             chosen = {c["field"] for c in overwrites}
+        elif any(n.strip().lower() == "all" for n in names):
+            # Fail safe: a mixed list may be a mistake, so nothing is overwritten.
+            warnings.append(
+                f"overwrite {names} mixes \"all\" with field names, so nothing was overwritten. "
+                "Pass [\"all\"] on its own, or only the accepted field names."
+            )
         else:
             pending = {c["field"] for c in overwrites}
             try:
@@ -3790,7 +3833,10 @@ def _attach_cv(
             except (AuthenticationError, BullhornAPIError) as e:
                 return f"ERROR: {e}"
             chosen = {api for api in api_names.values() if api in pending}
-            not_pending = [n for n, api in api_names.items() if api not in pending]
+            # A name written as an addition (empty on the record) is not an ignored name.
+            not_pending = [
+                n for n, api in api_names.items() if api not in pending and api not in additions["fields"]
+            ]
             if not_pending:
                 warnings.append(f"overwrite names that are not pending overwrites, ignored: {not_pending}")
     written: dict = {"fields": [], "work_history": [], "education": [], "skill_set": [], "primary_skills": [], "file": None}
@@ -3832,7 +3878,7 @@ def _attach_cv(
                 content_mime = client._guess_content_type(upload["format"])
                 file_attachment = client.attach_file(
                     "Candidate", candidate_id, upload["data"], upload["filename"], content_mime,
-                    external_id=_CV_FILE_EXTERNAL_ID, type=_CV_FILE_TYPE
+                    external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
                 )
                 written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
                 upload_store.mark_attached(upload_id, written["file"]["file_id"], candidate_id)
@@ -3910,7 +3956,7 @@ def _attach_created_cv_file(
             content_mime = client._guess_content_type(upload["format"])
             file_attachment = client.attach_file(
                 "Candidate", candidate_id, upload["data"], upload["filename"], content_mime,
-                external_id=_CV_FILE_EXTERNAL_ID, type=_CV_FILE_TYPE
+                external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
             )
             written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
             upload_store.mark_attached(upload_id, written["file"]["file_id"], candidate_id)

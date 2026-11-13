@@ -1586,7 +1586,7 @@ class TestAttachFile:
         client = BullhornClient(mock_auth)
         client.attach_file(
             "Candidate", 123, b"%PDF-fake", "cv.pdf", "application/pdf",
-            external_id="EXT-001", type="CV",
+            external_id="EXT-001", file_type="CV",
         )
 
         url = str(route.calls[0].request.url)
@@ -1604,7 +1604,7 @@ class TestAttachFile:
         client = BullhornClient(mock_auth)
         client.attach_file(
             "Candidate", 123, b"%PDF-fake", "cv.pdf", "application/pdf",
-            external_id="Portfolio", type="Original CV",
+            external_id="Portfolio", file_type="Original CV",
         )
 
         params = route.calls[0].request.url.params

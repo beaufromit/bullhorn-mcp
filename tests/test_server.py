@@ -7057,7 +7057,7 @@ class TestCreateCandidateFromCv:
 
         assert data["created"] is True
         mock_client.attach_file.assert_called_once_with(
-            "Candidate", data["candidate_id"], _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", type="Original CV"
+            "Candidate", data["candidate_id"], _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", file_type="Original CV"
         )
         mock_client.parse_resume_file.assert_called_once_with(_CV_BYTES, "Jane_Doe_CV.pdf", "pdf")
 
@@ -7181,7 +7181,7 @@ class TestCreateCandidateFromCv:
         mock_client.add_association.assert_not_called()
         mock_client.get.assert_not_called()
         mock_client.attach_file.assert_called_once_with(
-            "Candidate", candidate_id, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", type="Original CV"
+            "Candidate", candidate_id, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", file_type="Original CV"
         )
         assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
 
@@ -7946,7 +7946,7 @@ class TestAttachCv:
         assert data["written"]["file"] == {"file_id": 80, "name": "Jane_Doe_CV.pdf"}
         mock_client.add_association.assert_called_once_with("Candidate", self.CID, "primarySkills", [1000125, 1000200])
         mock_client.attach_file.assert_called_once_with(
-            "Candidate", self.CID, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", type="Original CV"
+            "Candidate", self.CID, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", file_type="Original CV"
         )
         assert "overwritten" not in data
 

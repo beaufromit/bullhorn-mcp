@@ -4204,7 +4204,7 @@ Result in CR46.md B6: the host mounts the app on web, Desktop and Cowork; the bo
 #### T43.5 Child rows read back with explicit fields (B3) (DONE 2026-11-13)
 **File:** `src/bullhorn_mcp/client.py`
 - `DEFAULT_FIELDS` gains `CandidateWorkHistory: id,candidate,companyName,title,startDate,endDate,isLastJob` and `CandidateEducation: id,candidate,school,degree,major,certification,graduationDate,startDate,endDate` (both verified live 2026-10-06 and again 2026-11-11), with a comment marking them load-bearing for the CV write path, as `Note` is.
-- **Tests:** `test_default_fields_pin_candidate_children`, `test_write_children_reports_rows_when_readback_uses_default_fields` (respx: the GET for the new row carries explicit `fields`, never `*`; `written.work_history` and `written.education` list the rows).
+- **Tests:** `test_default_fields_pin_candidate_children`, `test_create_candidate_children_readback_uses_default_fields` (respx: the GET for the new row carries explicit `fields`, never `*`) and `test_e2e_create_from_cv_real_parse` (`written.work_history` and `written.education` list the rows). Built as these two instead of the one planned `test_write_children_reports_rows_when_readback_uses_default_fields` (review m9).
 
 #### T43.6 skillSet returned as a list (B8) (DONE 2026-11-13)
 **File:** `src/bullhorn_mcp/server.py`
@@ -4243,7 +4243,7 @@ Result in CR46.md B6: the host mounts the app on web, Desktop and Cowork; the bo
 #### T43.12 End-to-end at the HTTP boundary (DONE 2026-11-13)
 **File:** `tests/test_server.py` (or a new `tests/test_cv_write_e2e.py`, LF)
 - With respx and `cv_parse_sample.json` (names and contacts already the test persons'): `create_candidate_from_cv` and `attach_cv` end to end, asserting the GET `fields`, the Candidate PUT body, the child create bodies and their read-back `fields`, the skills writes, the file query string, `written` matching what was sent, and the outcome log lines. Plus the prior-sprint E2E: the full suite stays green (1,306 baseline).
-- **Tests:** `test_e2e_create_from_cv_real_parse`, `test_e2e_attach_cv_real_parse_additions_then_confirm`, `test_e2e_attach_cv_file_only_path`.
+- **Tests:** `test_e2e_create_from_cv_real_parse`, `test_e2e_attach_cv_real_parse_additions_then_overwrite_choice` (renamed from `..._additions_then_confirm` by CR48), `test_e2e_attach_cv_file_only_path`.
 
 #### T43.13 Build-time live write check (owner approval required) (DONE 2026-11-13)
 - After the suite is green and before the commit, with the owner's approval: first seed `skillSet` on test Candidate 173063 (it is null today, so a B8 check without seeding proves nothing) with two names, then `attach_cv` on 173063 with a small test CV upload and `skills` holding one of the seeded names and one new name (direct server call, as T41.7). Read back: no 400; the file attached with `type=Original CV`; `skillSet` holds both seeded names plus the new one, once each (this also proves a `skillSet` write replaces rather than appends, which B8 assumes); child rows reported as written match `/query`. Results recorded here. Skipped if the owner declines; then T43.15 is the first live proof.
@@ -4257,6 +4257,7 @@ Result in CR46.md B6: the host mounts the app on web, Desktop and Cowork; the bo
 - Owner deploys v0.0.58; before the retest soft-deletes 173152 and 173153 so Person A and B are new again.
 - Run `COWORK_TEST_v0.0.58.md`: every step PASS; the CV file attached on create and on `attach_cv` with `type=Original CV`; `get_cv_upload` shows `attached`; each write report matches a read-back (including skills as a list and primarySkills by association); the match log shows each outcome under the passed id (checked on the server).
 - Upload box retest with the owner in Cowork (and Desktop/web): the box appears and a dropped file shows `received`. If still blank, Desktop Developer Mode DevTools next.
+- Upload box points the suite cannot check (Sprint 43 review m6, closed only here): (1) the box shows the filename hint, which proves it read its ticket from the text block now that `show_cv_upload_box` returns a `ToolResult` with no output schema or `structuredContent` (`readTicket` falls back to the text block by design); (2) the host accepts or harmlessly ignores the `ui/notifications/size-changed` sent before `ui/initialize` completes, and the frame is not zero height; (3) the CR46 B6 root cause (handshake params) is confirmed by the box connecting. If (2) fails, move the first `reportSize()` after the handshake and keep the one in the rejection handler.
 - Carried from T42B.8: record any new test Candidate id in the approved live test records; CR43, CR44 and CR46 Status set to COMPLETE; then remind the owner to start CR45 (apply its PRD amendment, replan Sprint 44).
 
 #### T43.16 Consultant chooses each overwrite on attach_cv (CR48, added 2026-11-13, owner-approved) (DONE 2026-11-13)

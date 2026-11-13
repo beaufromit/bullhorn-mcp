@@ -16,7 +16,7 @@ import respx
 
 from bullhorn_mcp import server
 from bullhorn_mcp.auth import BullhornAuth
-from bullhorn_mcp.client import BullhornClient
+from bullhorn_mcp.client import BullhornAPIError, BullhornClient
 from bullhorn_mcp.metadata import BullhornMetadata
 # Autouse / shared fixtures and helpers live in test_server.py.
 from tests.test_server import (  # noqa: F401
@@ -105,6 +105,10 @@ class _Bullhorn:
                 return httpx.Response(200, json={"changedEntityId": CID, "changeType": "ASSOCIATE"})
         if method == "PUT" and path in ("/entity/CandidateWorkHistory", "/entity/CandidateEducation"):
             return httpx.Response(200, json={"changedEntityId": next(self.ids), "changeType": "INSERT"})
+        for entity in ("CandidateWorkHistory", "CandidateEducation"):
+            # client.create() reads each new child row back (CR46 B3).
+            if method == "GET" and path.startswith(f"/entity/{entity}/"):
+                return httpx.Response(200, json={"data": {"id": int(path.rsplit("/", 1)[1])}})
         if method == "GET" and path == "/query/CandidateWorkHistory":
             return httpx.Response(200, json={"data": self.existing_wh, "total": len(self.existing_wh)})
         if method == "GET" and path == "/query/CandidateEducation":
@@ -161,6 +165,13 @@ def _attach(stack, bh, parse=PARSE, upload_id=None, **kwargs):
     upload_id = upload_id or _upload_with_parse(parse)
     kwargs.setdefault("candidate_id", CID)
     return stack(bh, server.attach_cv, upload_id=upload_id, **kwargs), upload_id
+
+
+def _assert_children_written(data, work_history=0, education=0):
+    """The child rows read back, so they are reported as written with no failure warning (M2)."""
+    assert len(data["written"]["work_history"]) == work_history
+    assert len(data["written"]["education"]) == education
+    assert not [w for w in data.get("warnings", []) if "entry failed" in w]
 
 
 # --- T43.4: the CV file attaches like a consultant upload ---------------------------
@@ -223,15 +234,25 @@ class TestWritableFields:
         assert kept == {"skillSet": "Excel", "middleName": "Q"}
         assert dropped == []
 
-    def test_writable_fields_meta_unavailable_drops_known_parser_keys(self):
+    def test_writable_fields_meta_unavailable_drops_known_parser_keys(self, caplog):
+        import logging
         client = Mock(spec=BullhornClient)
-        client.get_meta.side_effect = RuntimeError("meta down")
-        kept, dropped = server._writable_candidate_fields(
-            BullhornMetadata(client),
-            {"firstName": "Jane", "editHistoryValue": {}, "onboardingReceivedSent": {}, "anything": 1},
-        )
+        client.get_meta.side_effect = BullhornAPIError("meta down")
+        with caplog.at_level(logging.WARNING, logger="bullhorn_mcp.server"):
+            kept, dropped = server._writable_candidate_fields(
+                BullhornMetadata(client),
+                {"firstName": "Jane", "editHistoryValue": {}, "onboardingReceivedSent": {}, "anything": 1},
+            )
         assert kept == {"firstName": "Jane", "anything": 1}
         assert dropped == ["editHistoryValue", "onboardingReceivedSent"]
+        assert any("meta down" in r.getMessage() for r in caplog.records)
+
+    def test_writable_fields_meta_bug_is_not_swallowed(self):
+        """Only API, auth and network errors fall back; a bug in the projection surfaces."""
+        client = Mock(spec=BullhornClient)
+        client.get_meta.side_effect = RuntimeError("projection bug")
+        with pytest.raises(RuntimeError):
+            server._writable_candidate_fields(BullhornMetadata(client), {"firstName": "Jane"})
 
     def test_attach_cv_fetch_excludes_non_meta_parse_keys(self, stack, clean_upload_store):
         bh = _Bullhorn(existing={"firstName": "Jane", "lastName": "Doe"})
@@ -303,6 +324,46 @@ class TestWritableFields:
             assert set(field) <= {"name", "label", "type", "required", "options"}
 
 
+class TestTitleOverride:
+    """M3: on the live tenant the label "Title" is namePrefix, so a job title sent as
+    title must not land in the salutation (failure pattern 1)."""
+
+    META = META_FIELDS + [{"name": "namePrefix", "label": "Title", "type": "SCALAR", "maxLength": 20}]
+
+    @pytest.mark.parametrize("key", ["title", "Title"])
+    def test_create_from_cv_title_override_dropped(self, stack, clean_upload_store, key):
+        bh = _Bullhorn(meta_fields=self.META)
+        data = _create(stack, bh, fields_override={key: "Finance Director"}, force=True)
+        body = bh.body("PUT", "/entity/Candidate")
+        assert "namePrefix" not in body and "title" not in body
+        assert body["occupation"] == "Finance Manager"
+        assert any(f"'{key}' was ignored" in w and "occupation" in w for w in data["warnings"])
+
+    @pytest.mark.parametrize("key", ["title", "Title"])
+    def test_attach_cv_title_override_dropped(self, stack, clean_upload_store, key):
+        bh = _Bullhorn(meta_fields=self.META, existing={"firstName": "Jane", "lastName": "Doe"})
+        data, _ = _attach(stack, bh, fields_override={key: "Finance Director"})
+        body = _merged_post(bh)
+        assert "namePrefix" not in body and "title" not in body
+        assert not [c for c in data.get("pending_overwrites", []) if c["field"] == "namePrefix"]
+        assert any(f"'{key}' was ignored" in w for w in data["warnings"])
+
+    def test_explicit_name_prefix_still_written(self, stack, clean_upload_store):
+        bh = _Bullhorn(meta_fields=self.META)
+        data = _create(stack, bh, fields_override={"namePrefix": "Ms"}, force=True)
+        assert bh.body("PUT", "/entity/Candidate")["namePrefix"] == "Ms"
+        assert not any("was ignored" in w for w in data.get("warnings", []))
+
+    def test_title_alias_to_occupation_kept(self, stack, clean_upload_store):
+        """A tenant alias that maps title to occupation keeps working."""
+        from bullhorn_mcp import metadata as metadata_mod
+        bh = _Bullhorn(meta_fields=self.META)
+        aliases = {**metadata_mod.FIELD_ALIASES.get("Candidate", {}), "title": "occupation"}
+        with patch.dict(metadata_mod.FIELD_ALIASES, {"Candidate": aliases}):
+            _create(stack, bh, fields_override={"title": "Finance Director"}, force=True)
+        assert bh.body("PUT", "/entity/Candidate")["occupation"] == "Finance Director"
+
+
 # --- T43.6: skillSet returned as a list ---------------------------------------------
 
 class TestListSkillSet:
@@ -338,6 +399,46 @@ class TestListSkillSet:
         assert body["skillSet"] == ("Excel, IFRS, Budgeting" if skills else "Excel, IFRS")
 
 
+class TestCvListSkillSet:
+    """M4: a list skillSet on the CV create path is joined to text before the write."""
+
+    @pytest.mark.parametrize("skills,expected", [(None, "Excel, IFRS"), (["Budgeting"], "Excel, IFRS, Budgeting")])
+    def test_create_from_cv_override_list_skillset_joined(self, stack, clean_upload_store, skills, expected):
+        bh = _Bullhorn()
+        kwargs = {"fields_override": {"skillSet": ["Excel", "IFRS"]}, "force": True}
+        if skills:
+            kwargs["skills"] = skills
+        _create(stack, bh, **kwargs)
+        assert bh.body("PUT", "/entity/Candidate")["skillSet"] == expected
+
+    @pytest.mark.parametrize("skills,expected", [(None, "Excel, IFRS"), (["Budgeting"], "Excel, IFRS, Budgeting")])
+    def test_create_from_cv_parsed_list_skillset_joined(self, stack, clean_upload_store, skills, expected):
+        """The parse's own skillSet as a list, with no override, is joined by the create path itself."""
+        bh = _Bullhorn()
+        parse = {**PARSE, "candidate": {**PARSE["candidate"], "skillSet": ["Excel", "IFRS"]}}
+        kwargs = {"force": True}
+        if skills:
+            kwargs["skills"] = skills
+        _create(stack, bh, parse=parse, **kwargs)
+        assert bh.body("PUT", "/entity/Candidate")["skillSet"] == expected
+
+
+class TestCreateRepeatedChildren:
+    def test_create_from_cv_repeated_work_history_reported(self, stack, clean_upload_store):
+        """m4: entries collapsed by the B10 key are written once and the response says so."""
+        bh = _Bullhorn()
+        same = [WH_CURRENT, {**WH_CURRENT, "endDate": None}, WH_OLD]
+        data = _create(stack, bh, work_history=same, force=True)
+        assert len(bh.find("PUT", "/entity/CandidateWorkHistory")) == 2
+        _assert_children_written(data, work_history=2)
+        assert any("work history 3 given, 2 written" in w for w in data["warnings"])
+
+    def test_create_from_cv_no_repeats_no_warning(self, stack, clean_upload_store):
+        bh = _Bullhorn()
+        data = _create(stack, bh, work_history=[WH_CURRENT, WH_OLD], force=True)
+        assert not any("Repeated entries" in w for w in data.get("warnings", []))
+
+
 # --- T43.7: current company from the CV ---------------------------------------------
 
 WH_CURRENT = {"companyName": "Acme Ltd", "title": "FC", "startDate": 1700000000000, "endDate": 1790000000000}
@@ -363,6 +464,7 @@ class TestCurrentCompany:
         data, _ = _attach(stack, bh, parse=parse)
         assert bh.body("POST", f"/entity/Candidate/{CID}")["companyName"] == "Acme Ltd"
         assert "pending_overwrites" not in data
+        _assert_children_written(data, work_history=2)
 
     def test_attach_cv_company_change_is_pending_overwrite(self, stack, clean_upload_store):
         bh = _Bullhorn(existing={"firstName": "Jane", "lastName": "Doe", "companyName": "Previous Plc"})
@@ -370,6 +472,7 @@ class TestCurrentCompany:
         upload_id = _upload_with_parse(parse)
         first, _ = _attach(stack, bh, upload_id=upload_id)
         assert {"field": "companyName", "current": "Previous Plc", "proposed": "Acme Ltd"} in first["pending_overwrites"]
+        _assert_children_written(first, work_history=2)
         assert all("companyName" not in json.loads(r.content) for r in bh.find("POST", f"/entity/Candidate/{CID}"))
 
         bh2 = _Bullhorn(existing={"firstName": "Jane", "lastName": "Doe", "companyName": "Previous Plc"})
@@ -381,14 +484,34 @@ class TestCurrentCompany:
         bh = _Bullhorn()
         parse = {**PARSE, "candidateWorkHistory": [WH_OLD]}
         corrected = [{"companyName": "Corrected Co", "title": "CFO", "startDate": 1750000000000}, WH_OLD]
-        _create(stack, bh, parse=parse, work_history=corrected)
+        data = _create(stack, bh, parse=parse, work_history=corrected, force=True)
         assert bh.body("PUT", "/entity/Candidate")["companyName"] == "Corrected Co"
+        _assert_children_written(data, work_history=2)
 
     def test_create_from_cv_company_from_parse_when_not_corrected(self, stack, clean_upload_store):
         bh = _Bullhorn()
         parse = {**PARSE, "candidateWorkHistory": [WH_OLD, WH_CURRENT]}
-        _create(stack, bh, parse=parse)
+        data = _create(stack, bh, parse=parse, force=True)
         assert bh.body("PUT", "/entity/Candidate")["companyName"] == "Acme Ltd"
+        _assert_children_written(data, work_history=2)
+
+    def test_no_numeric_start_date_warns_instead_of_proposing(self, stack, clean_upload_store):
+        """m8: an ISO startDate cannot pick the current employer; say so instead of staying silent."""
+        iso = [{"companyName": "Acme Ltd", "title": "FC", "startDate": "2021-01-01"}]
+        assert server._current_company_name(iso) is None
+        bh = _Bullhorn(existing={"firstName": "Jane", "lastName": "Doe", "companyName": ""})
+        data, _ = _attach(stack, bh, work_history=iso)
+        assert "companyName" not in _merged_post(bh)
+        assert any("numeric startDate" in w for w in data["warnings"])
+        bh = _Bullhorn()
+        data = _create(stack, bh, work_history=iso, force=True)
+        assert "companyName" not in bh.body("PUT", "/entity/Candidate")
+        assert any("numeric startDate" in w for w in data["warnings"])
+
+    def test_numeric_start_date_without_company_does_not_warn(self, stack, clean_upload_store):
+        bh = _Bullhorn()
+        data = _create(stack, bh, work_history=[{"title": "FC", "startDate": 1700000000000}], force=True)
+        assert not any("numeric startDate" in w for w in data.get("warnings", []))
 
 
 # --- T43.8 / T43.9: outcome under the passed id, no points in responses ------------------
@@ -452,7 +575,7 @@ class TestOutcomeUnderPassedId:
             ("mc_fresh", "created_new", CID), ("mc_passed", "created_new", CID),
         ]
         assert data["duplicate_check"]["match_check_id"] == "mc_fresh"
-        assert data["match_check_id"] == "mc_passed"
+        assert data["passed_match_check_id"] == "mc_passed" and "match_check_id" not in data
 
     def test_create_candidate_logs_outcome_under_passed_id(self, stack, match_stub, real_log):
         _fresh_check(match_stub)
@@ -463,7 +586,7 @@ class TestOutcomeUnderPassedId:
             ("mc_fresh", "created_new", CID), ("mc_passed", "created_new", CID),
         ]
         assert data["duplicate_check"]["match_check_id"] == "mc_fresh"
-        assert data["match_check_id"] == "mc_passed"
+        assert data["passed_match_check_id"] == "mc_passed" and "match_check_id" not in data
 
     def test_same_passed_and_fresh_id_logged_once(self, stack, match_stub, real_log):
         _fresh_check(match_stub, check_id="mc_same")
@@ -478,7 +601,7 @@ class TestOutcomeUnderPassedId:
         match_stub.match.assert_not_called()
         assert _outcomes(real_log) == [("mc_passed", "created_with_force", CID)]
         assert data["duplicate_check"] is None
-        assert data["match_check_id"] == "mc_passed"
+        assert data["passed_match_check_id"] == "mc_passed" and "match_check_id" not in data
 
     def test_create_candidate_logs_outcome_under_passed_id_with_force(self, stack, match_stub, real_log):
         data = _create_candidate(stack, _Bullhorn(), force=True, match_check_id="mc_passed")
@@ -486,7 +609,7 @@ class TestOutcomeUnderPassedId:
         match_stub.match.assert_not_called()
         assert _outcomes(real_log) == [("mc_passed", "created_with_force", CID)]
         assert data["duplicate_check"] is None
-        assert data["match_check_id"] == "mc_passed"
+        assert data["passed_match_check_id"] == "mc_passed" and "match_check_id" not in data
 
     def test_create_candidate_returns_duplicate_check(self, stack, match_stub):
         """create_candidate reports the check on every create, as the CV path does (P2)."""
@@ -646,7 +769,7 @@ class TestWorkHistoryMatchIgnoresEndDate:
 
 # --- CR48 / T43.16: the consultant chooses each overwrite --------------------------------
 
-OVERWRITE_PARSE = {**PARSE, "candidateWorkHistory": [WH_CURRENT], "skillList": ["Excel"]}
+OVERWRITE_PARSE = {**PARSE, "candidateWorkHistory": [WH_CURRENT], "skillList": ["Excel", "Budgeting"]}
 OVERWRITE_EXISTING = {
     "firstName": "Jane", "lastName": "Doe", "email": "jane@example.com", "mobile": "0851234567",
     "occupation": "Old Title", "companyName": "Previous Plc", "description": "<p>an older description</p>",
@@ -728,6 +851,24 @@ class TestOverwriteChoice:
         warning = " ".join(w for w in data["warnings"] if "overwrite" in w)
         assert "email" in warning and "nonsense" in warning and "occupation" not in warning
 
+    def test_attach_cv_overwrite_name_written_as_addition_not_warned(self, stack, clean_upload_store):
+        """m1: a named field that was empty on the record is written as an addition, not ignored."""
+        existing = {**OVERWRITE_EXISTING, "companyName": ""}
+        bh = _Bullhorn(existing=existing)
+        data, _ = _attach(stack, bh, parse=OVERWRITE_PARSE, overwrite=["companyName", "occupation"])
+        assert _merged_post(bh)["companyName"] == "Acme Ltd"
+        assert "companyName" in data["written"]["fields"]
+        assert not [w for w in data.get("warnings", []) if "not pending" in w]
+
+    def test_attach_cv_overwrite_all_mixed_with_names_overwrites_nothing(self, stack, clean_upload_store):
+        """m2: "all" among field names is treated as a mistake: nothing is overwritten, with a warning."""
+        _, upload_id = self._first(stack)
+        data, bh = self._again(stack, upload_id, overwrite=["occupation", "all"])
+        assert not {"occupation", "companyName", "description"} & set(_merged_post(bh))
+        assert data["overwritten"] == []
+        assert {k["field"] for k in data["kept"]} == {"occupation", "companyName", "description"}
+        assert any('mixes "all"' in w for w in data["warnings"])
+
     def test_attach_cv_overwrite_description_chosen(self, stack, clean_upload_store):
         _, upload_id = self._first(stack)
         data, bh = self._again(stack, upload_id, overwrite=["occupation"])
@@ -744,8 +885,14 @@ class TestOverwriteChoice:
     def test_attach_cv_overwrite_call_adds_nothing_twice(self, stack, clean_upload_store):
         first, upload_id = self._first(stack)
         assert first["written"]["file"]["file_id"] == 77
-        written_wh = [{"id": 1, **WH_CURRENT}]
-        bh = _Bullhorn(existing=OVERWRITE_EXISTING, existing_wh=written_wh)
+        # The first call really added a skill and a work history row ...
+        assert first["written"]["skill_set"] == ["Budgeting"]
+        _assert_children_written(first, work_history=1)
+        # ... so the second call sees them on the record. The row read back with a
+        # different endDate, as the parser fills it inconsistently (B10).
+        written_wh = [{"id": 1, **WH_CURRENT, "endDate": None}]
+        existing = {**OVERWRITE_EXISTING, "skillSet": "Excel, Budgeting"}
+        bh = _Bullhorn(existing=existing, existing_wh=written_wh)
         data, _ = _attach(stack, bh, upload_id=upload_id, overwrite=["occupation"])
         assert bh.find("PUT", "/entity/CandidateWorkHistory") == []
         assert bh.find("PUT", "/entity/CandidateEducation") == []

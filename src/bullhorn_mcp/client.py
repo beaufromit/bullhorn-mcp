@@ -289,7 +289,7 @@ class BullhornClient:
         filename: str,
         content_type: str,
         external_id: str | None = None,
-        type: str | None = None,
+        file_type: str | None = None,
     ) -> dict[str, Any]:
         """Attach a file to an entity record via Bullhorn's raw file upload.
 
@@ -302,7 +302,7 @@ class BullhornClient:
             external_id: externalID query param. Effectively required: live
                 (2026-10-06) Bullhorn returns 500 DUPLICATE_VALUE without it.
                 "Portfolio" attaches exactly like a consultant upload.
-            type: File type query param shown as "File Type" in the UI (e.g.
+            file_type: The type query param, shown as "File Type" in the UI (e.g.
                 "Original CV"). Replaces the old fileType param, which Bullhorn
                 ignores.
 
@@ -313,8 +313,8 @@ class BullhornClient:
         params: dict[str, Any] = {}
         if external_id is not None:
             params["externalID"] = external_id
-        if type is not None:
-            params["type"] = type
+        if file_type is not None:
+            params["type"] = file_type
         return self._request_multipart(
             "PUT",
             f"/file/{entity}/{entity_id}/raw",
