@@ -1866,7 +1866,7 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
             })
 
         resolved, warnings = _strip_contact_title(resolved, entity)
-        warnings[:0] = [_title_dropped_warning(k) for k in title_dropped]
+        warnings[:0] = [_title_dropped_warning(get_metadata(), k) for k in title_dropped]
 
         # Recompute name when firstName or lastName changes on person entities
         if entity in ("Candidate", "ClientContact") and ("firstName" in resolved or "lastName" in resolved):
@@ -2328,7 +2328,6 @@ def create_candidate(
         metadata = get_metadata()
         defaults, defaults_title = _drop_title_to_salutation(metadata, get_candidate_defaults())
         fields, title_dropped = _drop_title_to_salutation(metadata, fields)
-        title_dropped += defaults_title
         resolved_input = metadata.resolve_fields("Candidate", fields)
         merged = {**metadata.resolve_fields("Candidate", defaults), **resolved_input}
 
@@ -2363,7 +2362,9 @@ def create_candidate(
             })
 
         resolved, warnings = _strip_contact_title(resolved, "Candidate")
-        warnings[:0] = [_title_dropped_warning(k) for k in title_dropped]
+        warnings[:0] = [_title_dropped_warning(metadata, k) for k in title_dropped] + [
+            _title_dropped_warning(metadata, k, _DEFAULTS_SOURCE) for k in defaults_title
+        ]
 
         computed = _compute_person_name(resolved)
         if computed:
@@ -3352,10 +3353,26 @@ def _is_title_not_occupation(metadata: BullhornMetadata, key: object) -> bool:
     )
 
 
-def _title_dropped_warning(key: str) -> str:
+def _title_dropped_warning(metadata: BullhornMetadata, key: str, source: str = "the Candidate payload") -> str:
+    """The warning for a dropped title key; says namePrefix only when the key resolves there."""
+    target = next(iter(metadata.resolve_fields("Candidate", {key: None})))
+    reason = "Candidate has no title field"
+    if target != "title":
+        reason += f" and '{key}' resolves to {target} (the salutation)"
     return (
-        f"Field '{key}' was stripped from the Candidate payload: Candidate has no title field and "
-        "'Title' is the salutation (namePrefix). Use 'occupation' for job title or 'namePrefix' for salutation."
+        f"Field '{key}' was stripped from {source}: {reason}. "
+        "Use 'occupation' for job title or 'namePrefix' for salutation."
+    )
+
+
+_DEFAULTS_SOURCE = "the tenant Candidate defaults (BULLHORN_CANDIDATE_DEFAULTS)"
+
+
+def _title_name_not_selected_warning(param: str, names: list) -> str:
+    """attach_cv: a name spelled title selects no field; point the caller at occupation."""
+    return (
+        f"{param} {names} selected nothing: Candidate has no title field. "
+        "Use 'occupation' for the job title, or 'namePrefix' for the salutation."
     )
 
 
@@ -3410,7 +3427,7 @@ def _filtered_cv_override(metadata: BullhornMetadata, fields_override: dict, war
     before the filter so each gets exactly one message.
     """
     raw, title_dropped = _drop_title_to_salutation(metadata, dict(fields_override))
-    warnings.extend(_title_dropped_warning(k) for k in title_dropped)
+    warnings.extend(_title_dropped_warning(metadata, k) for k in title_dropped)
     override = metadata.resolve_fields("Candidate", raw)
     if "description" in override:
         # CR43 goal 2: the description is the parser's rendering of the CV itself.
@@ -3557,7 +3574,7 @@ def _create_candidate_from_cv(
 
         # Apply tenant defaults
         defaults, defaults_title = _drop_title_to_salutation(metadata, get_candidate_defaults())
-        warnings.extend(_title_dropped_warning(k) for k in defaults_title)
+        warnings.extend(_title_dropped_warning(metadata, k, _DEFAULTS_SOURCE) for k in defaults_title)
         candidate_data = {**metadata.resolve_fields("Candidate", defaults), **candidate_data}
 
         # Stamp source with configured MCP value if not already set
@@ -3701,7 +3718,7 @@ def attach_cv(
         primary_skills: Corrected Bullhorn Skill ids (replaces parsed primarySkills).
         overwrite: Names (API name or display label) of the pending overwrites the
                    consultant accepted; only those are written, the rest come back
-                   under kept. ["all"] writes every pending overwrite (automation
+                   under kept. Use occupation for the job title: title selects nothing. ["all"] writes every pending overwrite (automation
                    only). Omitted: nothing is overwritten.
         match_check_id: The match_check_id from the duplicate check that led here; the outcome is recorded under it.
 
@@ -3802,9 +3819,12 @@ def _attach_cv(
             }
             fields_to_update = list(dict.fromkeys(api_names.values()))
             # The warning names fields as the caller sent them.
-            unknown = [f for f, api in api_names.items() if api not in proposed_fields]
+            title_names = [f for f in api_names if _is_title_not_occupation(metadata, f)]
+            unknown = [f for f, api in api_names.items() if api not in proposed_fields and f not in title_names]
             if unknown:
                 warnings.append(f"fields_to_update not in the parse or fields_override, ignored: {unknown}")
+            if title_names:
+                warnings.append(_title_name_not_selected_warning("fields_to_update", title_names))
 
         parsed_names, parsed_ids = _split_parsed_skills(parsed)
         given_names, given_ids = _normalize_skills(skills, primary_skills)
@@ -3879,11 +3899,15 @@ def _attach_cv(
                 return f"ERROR: {e}"
             chosen = {api for api in api_names.values() if api in pending}
             # A name written as an addition (empty on the record) is not an ignored name.
+            title_names = [n for n in api_names if _is_title_not_occupation(metadata, n)]
             not_pending = [
-                n for n, api in api_names.items() if api not in pending and api not in additions["fields"]
+                n for n, api in api_names.items()
+                if api not in pending and api not in additions["fields"] and n not in title_names
             ]
             if not_pending:
                 warnings.append(f"overwrite names that are not pending overwrites, ignored: {not_pending}")
+            if title_names:
+                warnings.append(_title_name_not_selected_warning("overwrite", title_names))
     written: dict = {"fields": [], "work_history": [], "education": [], "skill_set": [], "primary_skills": [], "file": None}
     result: dict = {"committed": True, "candidate_id": candidate_id, "written": written}
 

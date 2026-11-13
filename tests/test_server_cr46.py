@@ -395,14 +395,16 @@ class TestTitleOverride:
         data, _ = _attach(stack, bh, parse=parse, overwrite=["title"])
         assert "namePrefix" not in _merged_post(bh)
         assert data["overwritten"] == []
-        assert any("not pending" in w and "title" in w for w in data["warnings"])
+        assert any("overwrite ['title'] selected nothing" in w and "occupation" in w for w in data["warnings"])
+        assert not any("not pending" in w for w in data["warnings"])
 
     def test_attach_cv_title_in_fields_to_update_does_not_select_name_prefix(self, stack, clean_upload_store):
         parse = {**PARSE, "candidate": {**PARSE["candidate"], "namePrefix": "Mr"}}
         bh = _Bullhorn(meta_fields=self.META, existing={"firstName": "Jane", "lastName": "Doe"})
         data, _ = _attach(stack, bh, parse=parse, fields_to_update=["title"])
         assert "namePrefix" not in _merged_post(bh)
-        assert any("fields_to_update" in w and "title" in w for w in data["warnings"])
+        assert any("fields_to_update ['title'] selected nothing" in w and "occupation" in w for w in data["warnings"])
+        assert not any("not in the parse" in w for w in data["warnings"])
 
     @pytest.mark.parametrize("tool", ["create_candidate", "create_candidate_from_cv"])
     def test_title_in_tenant_defaults_dropped(self, stack, clean_upload_store, tool):
@@ -415,7 +417,37 @@ class TestTitleOverride:
         else:
             data = _create(stack, bh, _defaults=defaults, force=True)
         assert "namePrefix" not in bh.body("PUT", "/entity/Candidate")
-        assert any("'Title' was stripped" in w for w in data["warnings"])
+        assert any("'Title' was stripped from the tenant Candidate defaults (BULLHORN_CANDIDATE_DEFAULTS)" in w
+                   for w in data["warnings"])
+
+    @pytest.mark.parametrize("meta,says_name_prefix", [(META_FIELDS, False), (META, True)])
+    def test_title_warning_names_name_prefix_only_when_it_resolves_there(
+        self, stack, clean_upload_store, meta, says_name_prefix,
+    ):
+        """Cycle 4 m1: with no "Title" label, the warning must not claim title is namePrefix."""
+        bh = _Bullhorn(meta_fields=meta)
+        data = stack(bh, server.create_candidate,
+                     fields={"firstName": "Jane", "lastName": "Doe", "title": "FD"}, force=True)
+        warning = next(w for w in data["warnings"] if "'title' was stripped" in w)
+        assert ("resolves to" in warning) is says_name_prefix
+        assert ("resolves to namePrefix (the salutation)" in warning) is says_name_prefix
+        assert "occupation" in warning
+
+    @pytest.mark.parametrize("param", ["overwrite", "fields_to_update"])
+    def test_attach_cv_title_alias_to_occupation_selects_occupation(self, stack, clean_upload_store, param):
+        """Cycle 4 m5: with a tenant alias title -> occupation, title in attach_cv names occupation."""
+        from bullhorn_mcp import metadata as metadata_mod
+        existing = {"firstName": "Jane", "lastName": "Doe", "occupation": "Old Title"}
+        bh = _Bullhorn(meta_fields=self.META, existing=existing)
+        aliases = {**metadata_mod.FIELD_ALIASES.get("Candidate", {}), "title": "occupation"}
+        kwargs = {param: ["title"]}
+        if param == "fields_to_update":
+            kwargs["overwrite"] = ["all"]
+        with patch.dict(metadata_mod.FIELD_ALIASES, {"Candidate": aliases}):
+            data, _ = _attach(stack, bh, **kwargs)
+        assert _merged_post(bh)["occupation"] == "Finance Manager"
+        assert data["overwritten"] == ["occupation"]
+        assert not any("selected nothing" in w for w in data.get("warnings", []))
 
     def test_title_alias_to_occupation_kept(self, stack, clean_upload_store):
         """A tenant alias that maps title to occupation keeps working."""
