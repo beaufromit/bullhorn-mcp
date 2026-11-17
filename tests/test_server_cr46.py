@@ -815,7 +815,7 @@ class TestUploadBoxResult:
 
         async def call():
             async with fastmcp.Client(server.mcp) as c:
-                return await c.call_tool("show_cv_upload_box", {"upload_id": upload_id})
+                return await c.call_tool("show_upload_box", {"upload_id": upload_id})
 
         with _http_as(), patch.dict("os.environ", {"MCP_BASE_URL": "https://mcp.example.com"}):
             result = asyncio.run(call())
@@ -828,8 +828,8 @@ class TestUploadBoxResult:
     def test_upload_responses_have_expires_in_seconds(self):
         with _http_as(), patch.dict("os.environ", {"MCP_BASE_URL": "https://mcp.example.com"}), \
              patch.object(server, "_client_supports_ui", return_value=True):
-            first = json.loads(server.request_cv_upload("Jane_Doe_CV.pdf"))
-            shown = server.show_cv_upload_box(first["upload_id"])
+            first = json.loads(server.request_file_upload("Jane_Doe_CV.pdf"))
+            shown = server.show_upload_box(first["upload_id"])
         shown = json.loads(shown.content[0].text)
 
         for data in (first, shown):
@@ -1023,3 +1023,46 @@ class TestOverwriteChoice:
         hint = first["hint"]
         assert "overwrite=[" in hint and "EACH" in hint and "confirm" not in hint
         assert "current vs proposed" in hint
+
+
+class TestTitleWarningWording:
+    """Sprint 44 F6-F9: one builder, wording by where the key resolves."""
+
+    @staticmethod
+    def _metadata(target):
+        from unittest.mock import Mock
+        md = Mock()
+        md.resolve_fields.side_effect = lambda entity, fields: {(target if target is not None else k): v for k, v in fields.items()}
+        return md
+
+    @pytest.mark.parametrize("key", ["title", "Title", "TITLE", " title "])
+    def test_title_warning_unresolved_any_spelling(self, key):
+        warning = server._title_dropped_warning(self._metadata(None), key)
+        assert warning == (
+            f"Field '{key}' was stripped from the Candidate payload: Candidate has no title field. "
+            "Use 'occupation' for job title or 'namePrefix' for salutation."
+        )
+        assert "resolves to" not in warning
+
+    def test_title_warning_nameprefix_says_salutation(self):
+        warning = server._title_dropped_warning(self._metadata("namePrefix"), "Title", "the payload")
+        assert warning == (
+            "Field 'Title' was stripped from the payload: Candidate has no title field and "
+            "'Title' resolves to namePrefix (the salutation). "
+            "Use 'occupation' for job title or 'namePrefix' for salutation."
+        )
+
+    def test_title_warning_alias_target_no_salutation(self):
+        warning = server._title_dropped_warning(self._metadata("customText5"), "title")
+        assert "'title' resolves to customText5." in warning
+        assert "(the salutation)" not in warning
+
+    def test_attach_cv_docstring_lines_wrapped(self):
+        import pathlib
+        src = pathlib.Path(server.__file__).read_text()
+        start = src.index("def attach_cv(")
+        block = src[start:src.index("# Fields attach_cv never plans")].split('"' * 3)[1]
+        assert [l for l in block.splitlines() if len(l) > 100] == []
+        flat = " ".join(block.split())
+        assert "selects nothing unless the tenant aliases title to occupation" in flat
+        assert flat.count("unless the tenant aliases title to occupation") == 2

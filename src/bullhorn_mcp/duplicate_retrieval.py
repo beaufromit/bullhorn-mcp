@@ -22,6 +22,7 @@ from .duplicates import (
     MatchContext,
     default_match_config,
     employer_words,
+    employers_in_titles,
     linkedin_key,
     name_forms,
     name_key,
@@ -336,7 +337,31 @@ def retrieve_pool(client, profile: CandidateProfile, config: dict) -> tuple[list
 
     context.n = live_candidate_count(client, config)
     pool = _fetch_pool_profiles(client, union)
+    _count_title_employers(client, profile, pool, context, flags, len(employer_keys), config)
     return pool, context, flags
+
+
+def _count_title_employers(client, profile, pool, context, flags, searched: int, config: dict) -> None:
+    """Count employers that the profile only has inside a job title (F3).
+
+    Those are not in ``to_echo()["employers"]``, so no count search ran for them
+    and their match reason had no count. Together with the searches already run,
+    at most ``max_employers`` employer searches are made; count-only (count=1).
+    """
+    room = config["caps"]["max_employers"] - searched
+    if room <= 0:
+        return
+    keys = [k for k in employers_in_titles(profile, pool, config) if k not in context.employer_counts][:room]
+    for key in keys:
+        equery = _employer_query(key, config)
+        if not equery:
+            continue
+        try:
+            context.employer_counts[key] = _run_search(client, equery, 1)["total"]
+        except Exception as exc:
+            _logger.warning("match lookup employer failed: %s", exc)
+            if "lookup_failed:employer" not in flags:
+                flags.append("lookup_failed:employer")
 
 
 # ---------------------------------------------------------------------------

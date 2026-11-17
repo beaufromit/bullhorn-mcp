@@ -38,6 +38,7 @@ from .duplicates import CandidateProfile, profile_from_fields, profile_from_pars
 from .perplexity import search_people, PerplexityError
 from .uploads import (
     ALLOWED_EXTENSIONS,
+    CV_EXTENSIONS,
     MAX_UPLOAD_BYTES,
     UploadError,
     upload_store,
@@ -295,8 +296,8 @@ mcp = FastMCP(
     instructions=(
         "Query and manage Bullhorn CRM data — jobs, candidates, contacts, companies, "
         "and placements. Supports field metadata resolution between API names and "
-        "display labels. For CV files, call request_cv_upload first; never pass file "
-        "contents in a tool argument."
+        "display labels. For any file (CV, image, email), call request_file_upload first; "
+        "never pass file contents in a tool argument."
     ),
 )
 
@@ -2506,12 +2507,30 @@ def find_duplicate_candidates(
 
 
 # --- CR41: CV upload tickets --------------------------------------------------
-# CV bytes never travel in a tool argument. request_cv_upload mints a single-use
+# File bytes never travel in a tool argument. request_file_upload mints a single-use
 # URL, the file is POSTed there out of band (curl in Cowork, or the in-chat upload
-# box), and the CV tools take the resulting upload_id. Uploads are bound to the
+# box), and the CV tools and attach_file take the resulting upload_id. Uploads are bound to the
 # Entra `sub`, so they need HTTP mode (stdio has no token and no upload listener).
 
+# The URI keeps its CV-era name (CR45 P5): a risk-avoidance choice, not a known host
+# requirement. The box only just started rendering in Cowork, and the URI is not user-facing.
 _UPLOAD_BOX_URI = "ui://bullhorn/cv-upload-box.html"
+
+# Entities Bullhorn accepts files on (CR45 D1). Lead is refused with its own message.
+ATTACHABLE_ENTITIES = (
+    "Candidate", "ClientContact", "ClientCorporation", "JobOrder", "Placement", "Opportunity",
+)
+
+
+def _unsupported_entity_error(entity: str) -> str | None:
+    """Return the ``unsupported_entity`` error JSON for an entity files cannot go on, else None."""
+    if entity in ATTACHABLE_ENTITIES:
+        return None
+    if entity == "Lead":
+        message = "Bullhorn does not allow files on leads; use the person's contact or candidate record."
+    else:
+        message = f"Files can be attached to: {', '.join(ATTACHABLE_ENTITIES)}. '{entity}' is not one of them."
+    return format_response({"error": "unsupported_entity", "message": message})
 
 
 def _uploads_unavailable() -> str | None:
@@ -2520,8 +2539,8 @@ def _uploads_unavailable() -> str | None:
         return format_response({
             "error": "uploads_require_http_mode",
             "message": (
-                "CV file uploads need the hosted (HTTP) server. This server runs in "
-                "stdio mode, which has no upload endpoint. Use parse_cv_text or "
+                "File uploads need the hosted (HTTP) server. This server runs in "
+                "stdio mode, which has no upload endpoint. For a CV, use parse_cv_text or "
                 "create_candidate_from_cv(content=...) with pasted CV text instead."
             ),
         })
@@ -2542,12 +2561,13 @@ def _client_supports_ui() -> bool:
 
 def _upload_error(e: UploadError) -> str:
     hints = {
-        "upload_not_found": "Call request_cv_upload to start a new upload.",
-        "upload_expired": "The upload expired. Call request_cv_upload again and resend the file.",
-        "upload_already_used": "This upload has already been used. Call request_cv_upload for a new one.",
-        "unsupported_file_type": "Allowed CV types: " + ", ".join(sorted(ALLOWED_EXTENSIONS)) + ".",
+        "upload_not_found": "Call request_file_upload to start a new upload.",
+        "upload_expired": "The upload expired. Call request_file_upload again and resend the file.",
+        "upload_already_used": "This upload has already been used. Call request_file_upload for a new one.",
+        "unsupported_file_type": "Allowed file types: " + ", ".join(sorted(ALLOWED_EXTENSIONS)) + ".",
+        "invalid_entity_hint": "Pass both entity and entity_id, or neither.",
         "too_many_uploads": "Use or finish the uploads already started; unused ones expire after 15 minutes.",
-        "upload_in_use": "Wait for the other call on this upload to finish, then check get_cv_upload(upload_id).",
+        "upload_in_use": "Wait for the other call on this upload to finish, then check get_file_upload(upload_id).",
     }
     body = {"error": e.code, "message": str(e)}
     if e.code in hints:
@@ -2555,8 +2575,22 @@ def _upload_error(e: UploadError) -> str:
     return format_response(body)
 
 
+def _not_a_cv_file(upload_id: str, rec: dict) -> str:
+    return format_response({
+        "error": "not_a_cv_file",
+        "message": (
+            f"Upload '{upload_id}' is a .{rec['extension']} file ('{rec['filename']}'), not a CV. "
+            "CV tools take only CV files (" + ", ".join(sorted(CV_EXTENSIONS)) + "). Nothing was changed."
+        ),
+        "hint": (
+            f"Use attach_file(entity, entity_id, upload_id='{upload_id}', type?) to attach it "
+            "without parsing."
+        ),
+    })
+
+
 def _load_received_upload(
-    upload_id: str, claim: bool = False, attached_ok_for: int | None = None
+    upload_id: str, claim: bool = False, attached_ok_for: int | None = None, cv_only: bool = False
 ) -> tuple[dict | None, str | None]:
     """Fetch a received upload for the caller. Returns ``(record, None)`` or ``(None, error_json)``.
 
@@ -2574,6 +2608,10 @@ def _load_received_upload(
     attached to that same Candidate is returned (without bytes) while its stored
     parse lives, so an attach_cv overwrite call can follow the call that attached the
     file. Attached to any other Candidate it is still ``upload_already_attached``.
+
+    ``cv_only=True`` (the CV tools, CR45 P7): a file that is not a CV type is refused
+    with ``not_a_cv_file`` before anything else; any claim taken is released, so the
+    upload stays ``received`` and ``attach_file`` can still use it.
     """
     unavailable = _uploads_unavailable()
     if unavailable:
@@ -2596,6 +2634,10 @@ def _load_received_upload(
             upload_store.release(upload_id)
         return None, _upload_error(e)
     rec["owner_sub"] = sub
+    if cv_only and rec["extension"] not in CV_EXTENSIONS:
+        if claim:
+            upload_store.release(upload_id)
+        return None, _not_a_cv_file(upload_id, rec)
     status = rec["status"]
     if status == "received":
         return rec, None
@@ -2613,20 +2655,20 @@ def _load_received_upload(
             "error": "upload_pending",
             "message": f"No file has been received for upload '{upload_id}' yet.",
             "hint": (
-                "Send the file to the upload_url from request_cv_upload (or the upload box), "
-                "then check get_cv_upload(upload_id) shows status 'received'."
+                "Send the file to the upload_url from request_file_upload (or the upload box), "
+                "then check get_file_upload(upload_id) shows status 'received'."
             ),
         })
     if status == "attached":
         return None, format_response({
             "error": "upload_already_attached",
             "message": f"Upload '{upload_id}' is already attached in Bullhorn and its file was deleted here.",
-            "hint": "Call request_cv_upload and resend the file to use it again.",
+            "hint": "Call request_file_upload and resend the file to use it again.",
         })
     return None, format_response({
         "error": "upload_expired",
         "message": f"Upload '{upload_id}' has expired and its file was deleted.",
-        "hint": "Call request_cv_upload again and resend the file.",
+        "hint": "Call request_file_upload again and resend the file.",
     })
 
 
@@ -3000,15 +3042,17 @@ def _plan_cv_update(
 
 
 @mcp.tool()
-def request_cv_upload(filename: str, candidate_id: int | None = None) -> str:
-    """Start a CV file upload. Call this before parse_cv, create_candidate_from_cv or attach_cv.
+def request_file_upload(filename: str, entity: str | None = None, entity_id: int | None = None) -> str:
+    """Start a file upload (a CV, document, image or email). Call this before parse_cv, create_candidate_from_cv, attach_cv or attach_file.
 
     Returns an upload_id, a single-use upload_url (15 minutes) and next_steps to follow.
-    Never pass file contents in a tool argument.
+    Never pass file contents in a tool argument. A CV for a Candidate goes to parse_cv,
+    then create_candidate_from_cv or attach_cv; any other file goes to attach_file.
 
     Args:
-        filename: The CV's original name exactly as the user attached it (e.g. "Jane_Doe_CV.pdf").
-        candidate_id: Optional existing Candidate the CV is for.
+        filename: The file's original name exactly as the user attached it (e.g. "Jane_Doe_CV.pdf").
+        entity: Optional record the file is for: Candidate, ClientContact, ClientCorporation, JobOrder, Placement or Opportunity. Give it with entity_id or not at all.
+        entity_id: Optional id of that record.
     """
     unavailable = _uploads_unavailable()
     if unavailable:
@@ -3017,25 +3061,30 @@ def request_cv_upload(filename: str, candidate_id: int | None = None) -> str:
         sub = resolve_caller_sub()
     except IdentityResolutionError as e:
         return format_response({"error": "identity_resolution_failed", "message": str(e)})
+    if entity is not None:
+        refused = _unsupported_entity_error(entity)
+        if refused:
+            return refused
     try:
-        upload_id, token, expires_at = upload_store.create(sub, filename, candidate_id)
+        upload_id, token, expires_at = upload_store.create(sub, filename, entity, entity_id)
     except UploadError as e:
         return _upload_error(e)
 
     upload_url = _upload_url(token)
     use_step = (
-        f"Then call get_cv_upload(upload_id='{upload_id}') and check status is 'received'. "
-        f"Then call parse_cv(upload_id='{upload_id}') and review the parse against the CV itself: "
+        f"Then call get_file_upload(upload_id='{upload_id}') and check status is 'received'. "
+        f"For a CV going on a Candidate, call parse_cv(upload_id='{upload_id}') and review the parse against the CV itself: "
         "fix names, the current employer (companyName), job titles with the employer merged in, "
         "dates (an ongoing role has no endDate) and skills that are not in the CV. "
         f"Then call create_candidate_from_cv(upload_id='{upload_id}', <your corrections>) for a new "
         f"candidate, or attach_cv(candidate_id=..., upload_id='{upload_id}', <your corrections>) for an "
-        "existing one, and tell the user exactly what was written."
+        "existing one, and tell the user exactly what was written. "
+        f"For anything else, call attach_file(entity, entity_id, upload_id='{upload_id}', type?, description?)."
     )
     if _client_supports_ui():
         fallback = (
             f"If curl fails or you cannot run shell commands, call "
-            f"show_cv_upload_box(upload_id='{upload_id}') so the user can drop the file into the chat. "
+            f"show_upload_box(upload_id='{upload_id}') so the user can drop the file into the chat. "
             "Showing the box replaces this upload URL: the old URL stops working, so do not curl it afterwards."
         )
     else:
@@ -3052,7 +3101,7 @@ def request_cv_upload(filename: str, candidate_id: int | None = None) -> str:
         "max_bytes": MAX_UPLOAD_BYTES,
         "next_steps": [
             (
-                "If the CV is a file in your environment and you can run shell commands, send it "
+                "If the file is in your environment and you can run shell commands, send it "
                 "(use its full path on disk, which may carry an extra prefix; the original name is kept): "
                 f"curl -sS -X POST -F file=@\"<full path to the attached file>\" {upload_url}"
             ),
@@ -3063,11 +3112,13 @@ def request_cv_upload(filename: str, candidate_id: int | None = None) -> str:
 
 
 @mcp.tool()
-def get_cv_upload(upload_id: str) -> str:
-    """Check a CV upload's status: pending, received, attached or expired.
+def get_file_upload(upload_id: str) -> str:
+    """Check a file upload's status: pending, received, attached or expired.
+
+    Once attached it also reports file_id, attached_entity and attached_entity_id.
 
     Args:
-        upload_id: The id returned by request_cv_upload.
+        upload_id: The id returned by request_file_upload.
     """
     unavailable = _uploads_unavailable()
     if unavailable:
@@ -3085,11 +3136,132 @@ def get_cv_upload(upload_id: str) -> str:
         "status": rec["status"],
         "filename": rec["filename"],
         "size": rec["size"],
-        "candidate_id": rec["candidate_id"],
+        "entity": rec["entity"],
+        "entity_id": rec["entity_id"],
     }
     if rec["status"] == "attached":
         result["file_id"] = rec["file_id"]
+        result["attached_entity"] = rec["attached_entity"]
+        result["attached_entity_id"] = rec["attached_entity_id"]
     return format_response(result)
+
+
+@mcp.tool()
+def attach_file(
+    entity: str,
+    entity_id: int,
+    upload_id: str,
+    type: str | None = None,
+    description: str | None = None,
+) -> str:
+    """Attach an uploaded file to a record without parsing it (FR-24).
+
+    Entities: Candidate, ClientContact, ClientCorporation, JobOrder, Placement, Opportunity.
+    Leads cannot hold files. Set `type` only when a label from that record's list fits
+    the document (the error lists the allowed labels, which differ for companies);
+    leave it blank rather than force a wrong one. A job description goes on a JobOrder
+    with no label. A CV to be parsed uses parse_cv and the CV tools instead.
+
+    Args:
+        entity: The record type to attach to.
+        entity_id: The record's id.
+        upload_id: The id from request_file_upload; its status must be 'received'.
+        type: Optional file type label (matched ignoring case).
+        description: Optional note shown against the file in Bullhorn.
+    """
+    # The claim is taken up front, for the whole call, as attach_cv does: the status
+    # is read under the claim, so an overlapping call gets upload_in_use (or
+    # upload_already_attached once this one finishes) and can never double-write.
+    # The cost is that a call refused on entity, label or record briefly holds the
+    # claim; every path below releases it in the finally.
+    upload, error = _load_received_upload(upload_id, claim=True)
+    if error:
+        return error
+    try:
+        refused = _unsupported_entity_error(entity)
+        if refused:
+            return refused
+        # P3: Bullhorn does not validate the label itself, so it is checked here.
+        label = (type or "").strip() or None
+        client = get_client()
+        if label is not None:
+            try:
+                allowed = client.get_file_types(entity)
+            except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as e:
+                _logger.warning("attach_file: file type list unavailable for %s: %s", entity, e)
+                return format_response({
+                    "error": "file_types_unavailable",
+                    "message": (
+                        f"Could not read the allowed file types for {entity}, so the label "
+                        f"'{label}' cannot be checked. Nothing was attached."
+                    ),
+                    "hint": "Retry, or call attach_file again without type.",
+                })
+            match = next((a for a in allowed if a.lower() == label.lower()), None)
+            if match is None:
+                return format_response({
+                    "error": "invalid_file_type_label",
+                    "message": (
+                        f"'{label}' is not a file type for {entity}. Nothing was attached."
+                    ),
+                    "allowed": allowed,
+                    "hint": "Pick one of the allowed labels, or leave type blank.",
+                })
+            label = match
+        # P1: a soft-deleted record still answers 200 on /entityFiles, so read the record.
+        try:
+            record = client.get(
+                entity, entity_id,
+                fields="id,isDeleted" if client._entity_has_isdeleted(entity) else "id",
+            )
+        except BullhornAPIError as e:
+            if "404" in str(e):
+                record = None
+            else:
+                return f"ERROR: {e}"
+        if not record or record.get("isDeleted"):
+            return format_response({
+                "error": "record_not_found",
+                "message": f"{entity} {entity_id} was not found (or is deleted). Nothing was attached.",
+            })
+        # P2 (D7): warn about a file with the same name, but still attach.
+        warnings: list[str] = []
+        filename = upload["filename"]
+        try:
+            existing = client.get_entity_files(entity, entity_id)
+            same = [
+                str(row.get("id")) for row in existing
+                if not row.get("isDeleted")
+                and (row.get("name") or "").strip().lower() == filename.strip().lower()
+            ]
+            if same:
+                warnings.append(
+                    f"A file named '{filename}' is already on {entity} {entity_id} "
+                    f"(file id {', '.join(same)}). The new file was added alongside it."
+                )
+        except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as e:
+            # Best effort: no filename or personal data in the log.
+            _logger.warning("attach_file: could not read existing files of %s %s: %s", entity, entity_id, e)
+        result = client.attach_file(
+            entity, entity_id, upload["data"], filename,
+            client._guess_content_type(upload["extension"]),
+            external_id=_CV_FILE_EXTERNAL_ID, file_type=label, description=description,
+        )
+        file_id = (result or {}).get("fileId")
+        upload_store.mark_attached(upload_id, file_id, entity, entity_id)
+        return format_response({
+            "attached": True,
+            "entity": entity,
+            "entity_id": entity_id,
+            "file_id": file_id,
+            "filename": filename,
+            "type": label,
+            "warnings": warnings,
+        })
+    except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as e:
+        return f"ERROR: {e}"
+    finally:
+        upload_store.release(upload_id)
 
 
 def _seconds_until(expires_at: datetime) -> int:
@@ -3117,11 +3289,11 @@ def _upload_box_app_config(base_url: str | None) -> AppConfig:
 
 @mcp.resource(
     _UPLOAD_BOX_URI,
-    name="cv_upload_box",
-    description="In-chat CV upload box (MCP App).",
+    name="upload_box",
+    description="In-chat file upload box (MCP App).",
     app=_upload_box_app_config(os.environ.get("MCP_BASE_URL")),
 )
-def cv_upload_box_resource() -> str:
+def upload_box_resource() -> str:
     """Serve the upload box HTML (packaged beside this module)."""
     # INFO so the next "box stayed blank" report can be checked against the server logs.
     _logger.info("MCP App resource read: %s", _UPLOAD_BOX_URI)
@@ -3129,14 +3301,14 @@ def cv_upload_box_resource() -> str:
 
 
 @mcp.tool(app=AppConfig(resource_uri=_UPLOAD_BOX_URI))
-def show_cv_upload_box(upload_id: str) -> str | ToolResult:
-    """Show an upload box in the chat for a pending CV upload, when curl could not send the file.
+def show_upload_box(upload_id: str) -> str | ToolResult:
+    """Show an upload box in the chat for a pending file upload, when curl could not send the file.
 
-    Afterwards wait for the user to say the file is uploaded, then call get_cv_upload.
+    Afterwards wait for the user to say the file is uploaded, then call get_file_upload.
     This replaces the earlier upload URL, which stops working.
 
     Args:
-        upload_id: The id returned by request_cv_upload.
+        upload_id: The id returned by request_file_upload.
     """
     unavailable = _uploads_unavailable()
     if unavailable:
@@ -3153,8 +3325,9 @@ def show_cv_upload_box(upload_id: str) -> str | ToolResult:
                 "error": "upload_already_received",
                 "message": f"Upload '{upload_id}' has already received its file, so no upload box is needed.",
                 "hint": (
-                    f"Carry on with create_candidate_from_cv(upload_id='{upload_id}') for a new "
-                    f"candidate, or attach_cv(candidate_id=..., upload_id='{upload_id}') for an existing one."
+                    f"Carry on: a CV goes to parse_cv, then create_candidate_from_cv(upload_id='{upload_id}') "
+                    f"or attach_cv(candidate_id=..., upload_id='{upload_id}'); any other file goes to "
+                    f"attach_file(entity, entity_id, upload_id='{upload_id}')."
                 ),
             })
         # The store keeps only token hashes, so the box gets a fresh token for the
@@ -3172,7 +3345,7 @@ def show_cv_upload_box(upload_id: str) -> str | ToolResult:
         "allowed_extensions": [rec["extension"]],
         "message": (
             "An upload box is now shown in the chat. Wait for the user to drop the file, "
-            f"then call get_cv_upload(upload_id='{upload_id}'). This box replaces the earlier upload "
+            f"then call get_file_upload(upload_id='{upload_id}'). This box replaces the earlier upload "
             "URL (it no longer works), so do not curl the old one."
         ),
     })
@@ -3196,7 +3369,7 @@ def parse_cv(upload_id: str) -> str:
     consultant every match with who, the percentage and the reasons.
 
     Args:
-        upload_id: The id from request_cv_upload, once get_cv_upload shows 'received'.
+        upload_id: The id from request_file_upload, once get_file_upload shows 'received'.
 
     Returns:
         JSON {"parsed": {confidenceScore, candidate, description_length,
@@ -3205,7 +3378,7 @@ def parse_cv(upload_id: str) -> str:
         description is left out (only its length is shown); it is always written
         from the stored parse.
     """
-    upload, error = _load_received_upload(upload_id)
+    upload, error = _load_received_upload(upload_id, cv_only=True)
     if error:
         return error
     try:
@@ -3273,10 +3446,10 @@ def create_candidate_from_cv(
     mode). Nothing is shown for confirmation first: tell the user exactly what the
     response says was written. Stops on a likely or possible duplicate unless force=True:
     show the consultant who, the percentage and the reasons, and offer attach_cv.
-    Exactly one of upload_id (file, from request_cv_upload) or content (text) is needed.
+    Exactly one of upload_id (file, from request_file_upload) or content (text) is needed.
 
     Args:
-        upload_id: The id from request_cv_upload, once get_cv_upload shows 'received' (file mode)
+        upload_id: The id from request_file_upload, once get_file_upload shows 'received' (file mode)
         content: Plain text or HTML CV content (text mode)
         content_type: MIME type for text mode. Default: text/plain
         force: Skip duplicate check and create regardless. Default False.
@@ -3301,7 +3474,7 @@ def create_candidate_from_cv(
     if not is_binary and not is_text:
         return format_response({
             "error": "input_required",
-            "message": "Provide either upload_id (from request_cv_upload) for a CV file or content for CV text.",
+            "message": "Provide either upload_id (from request_file_upload) for a CV file or content for CV text.",
         })
     if is_binary and is_text:
         return format_response({
@@ -3312,7 +3485,7 @@ def create_candidate_from_cv(
     corrections = (fields_override, work_history, education, skills, primary_skills, match_check_id)
     if not is_binary:
         return _create_candidate_from_cv(None, None, content, content_type, force, *corrections)
-    upload, error = _load_received_upload(upload_id, claim=True)
+    upload, error = _load_received_upload(upload_id, claim=True, cv_only=True)
     if error:
         return error
     try:
@@ -3354,11 +3527,18 @@ def _is_title_not_occupation(metadata: BullhornMetadata, key: object) -> bool:
 
 
 def _title_dropped_warning(metadata: BullhornMetadata, key: str, source: str = "the Candidate payload") -> str:
-    """The warning for a dropped title key; says namePrefix only when the key resolves there."""
+    """The one warning for a dropped title key, used by every caller.
+
+    Names the resolved field only when the key resolved somewhere: namePrefix is the
+    salutation, any other target (a tenant alias) is named without that gloss. An
+    unresolved key comes back from the resolver in whatever spelling it was sent.
+    """
     target = next(iter(metadata.resolve_fields("Candidate", {key: None})))
     reason = "Candidate has no title field"
-    if target != "title":
-        reason += f" and '{key}' resolves to {target} (the salutation)"
+    if target.strip().lower() != "title":
+        reason += f" and '{key}' resolves to {target}"
+        if target == "namePrefix":
+            reason += " (the salutation)"
     return (
         f"Field '{key}' was stripped from {source}: {reason}. "
         "Use 'occupation' for job title or 'namePrefix' for salutation."
@@ -3649,7 +3829,7 @@ def _create_candidate_from_cv(
                     external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
                 )
                 written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
-                upload_store.mark_attached(upload_id, written["file"]["file_id"], candidate_id)
+                upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id)
             except Exception as exc:
                 warnings.append(f"CV file attachment failed: {exc}")
     except Exception as exc:
@@ -3707,9 +3887,11 @@ def attach_cv(
 
     Args:
         candidate_id: Bullhorn Candidate ID of the existing record.
-        upload_id: The id from request_cv_upload, once get_cv_upload shows 'received'.
+        upload_id: The id from request_file_upload, once get_file_upload shows 'received'.
         fields_to_update: Optional list of Candidate field names to consider. Omitted:
-                          every parsed field (plus fields_override).
+                          every parsed field (plus fields_override). Use occupation
+                          for the job title: title selects nothing unless the tenant
+                          aliases title to occupation.
         fields_override: Corrected or extra Candidate field values; they win over the parse.
                          The description always comes from the parse.
         work_history: Corrected CandidateWorkHistory entries (replaces the parsed list).
@@ -3718,9 +3900,12 @@ def attach_cv(
         primary_skills: Corrected Bullhorn Skill ids (replaces parsed primarySkills).
         overwrite: Names (API name or display label) of the pending overwrites the
                    consultant accepted; only those are written, the rest come back
-                   under kept. Use occupation for the job title: title selects nothing. ["all"] writes every pending overwrite (automation
+                   under kept. Use occupation for the job title: a name spelled
+                   title selects nothing unless the tenant aliases title to
+                   occupation. ["all"] writes every pending overwrite (automation
                    only). Omitted: nothing is overwritten.
-        match_check_id: The match_check_id from the duplicate check that led here; the outcome is recorded under it.
+        match_check_id: The match_check_id from the duplicate check that led here; the
+                        outcome is recorded under it.
 
     Returns:
         {"committed": true, "candidate_id", "written": {fields, work_history, education,
@@ -3729,11 +3914,12 @@ def attach_cv(
         after the first write: also "partial": true and "error".
     """
     # Every call can write (additions apply at once), so every call claims (CR43 P1).
-    upload, error = _load_received_upload(upload_id, claim=True, attached_ok_for=candidate_id)
+    upload, error = _load_received_upload(upload_id, claim=True, attached_ok_for=candidate_id, cv_only=True)
     if error:
         return error
     try:
-        hinted = upload["candidate_id"]
+        # Only a Candidate hint is enforced; a hint for another entity is not ours to check.
+        hinted = upload["entity_id"] if upload["entity"] == "Candidate" else None
         if hinted is not None and hinted != candidate_id:
             return format_response({
                 "error": "upload_candidate_mismatch",
@@ -3743,8 +3929,8 @@ def attach_cv(
                 ),
                 "hint": (
                     f"If the CV is for Candidate {hinted}, call attach_cv(candidate_id={hinted}, "
-                    f"upload_id='{upload_id}'). Otherwise call request_cv_upload with the right "
-                    "candidate_id (or none) and resend the file."
+                    f"upload_id='{upload_id}'). Otherwise call request_file_upload with the right "
+                    "entity='Candidate', entity_id=<id> (or neither) and resend the file."
                 ),
             })
         return _attach_cv(
@@ -3950,7 +4136,7 @@ def _attach_cv(
                     external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
                 )
                 written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
-                upload_store.mark_attached(upload_id, written["file"]["file_id"], candidate_id)
+                upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id)
             except Exception as exc:
                 warnings.append(
                     f"CV file attachment failed: {exc}. Retry with attach_cv(candidate_id={candidate_id}, "
@@ -4028,7 +4214,7 @@ def _attach_created_cv_file(
                 external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
             )
             written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
-            upload_store.mark_attached(upload_id, written["file"]["file_id"], candidate_id)
+            upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id)
         except Exception as exc:
             warnings.append(
                 f"CV file attachment failed: {exc}. Retry with attach_cv(candidate_id={candidate_id}, "
@@ -4781,7 +4967,7 @@ async def _read_capped_body(request: Request) -> bytes | None:
 
 
 async def _upload_handler(request: Request) -> Response:
-    """Handle POST /upload/{token}: receive one CV file (multipart field ``file``)."""
+    """Handle POST /upload/{token}: receive one file (multipart field ``file``)."""
     if request.method == "OPTIONS":
         origin = _cors_origin(request)
         if not origin:
@@ -4809,7 +4995,7 @@ async def _upload_handler(request: Request) -> Response:
         if not request.headers.get("content-type", "").startswith("multipart/form-data"):
             return _upload_json(request, {
                 "error": "missing_file",
-                "message": "Send the CV as multipart/form-data in a field named 'file'.",
+                "message": "Send the file as multipart/form-data in a field named 'file'.",
             }, 400)
 
         body = await _read_capped_body(request)
@@ -4830,15 +5016,15 @@ async def _upload_handler(request: Request) -> Response:
         if upload is None or not hasattr(upload, "read"):
             return _upload_json(request, {
                 "error": "missing_file",
-                "message": "Send the CV as multipart/form-data in a field named 'file'.",
+                "message": "Send the file as multipart/form-data in a field named 'file'.",
             }, 400)
         data = await upload.read()
         result = upload_store.redeem(token, upload.filename, data)
     except UploadError as e:
-        _logger.info("cv upload rejected: %s", e.code)
+        _logger.info("file upload rejected: %s", e.code)
         return _upload_json(request, {"error": e.code, "message": str(e)}, e.http_status)
 
-    _logger.info("cv upload received upload_id=%s size=%s", result["upload_id"], result["size"])
+    _logger.info("file upload received upload_id=%s size=%s", result["upload_id"], result["size"])
     return _upload_json(request, result, 200)
 
 
@@ -4860,6 +5046,31 @@ class _RedactUploadTokenFilter(logging.Filter):
         return True
 
 
+class _BullhornMcpStderrHandler(logging.StreamHandler):
+    """Marker class so _configure_logging can tell its own handler from any other."""
+
+
+def _configure_logging() -> None:
+    """Send the bullhorn_mcp logger's INFO lines to stderr (idempotent).
+
+    Nothing else configures logging, so without this every INFO line (resource reads,
+    upload received/rejected, transport start) is dropped and never reaches the journal.
+    stderr, never stdout: in stdio mode stdout carries the MCP protocol. propagate=False
+    stops a root handler from printing each line twice. The root logger is left alone
+    and httpx/httpcore stay at WARNING: their INFO request lines carry the Bullhorn
+    auth URL (username and password in the query string) and upload URLs with tokens.
+    Called from main() only, never at import.
+    """
+    logger = logging.getLogger("bullhorn_mcp")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    if any(isinstance(h, _BullhornMcpStderrHandler) for h in logger.handlers):
+        return
+    handler = _BullhornMcpStderrHandler()  # StreamHandler defaults to stderr
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(handler)
+
+
 def main():
     """Run the MCP server.
 
@@ -4874,6 +5085,7 @@ def main():
     All env vars are read at module import time — transport, host, and port are consistent.
     """
     global _metadata
+    _configure_logging()
     try:
         _metadata = asyncio.run(enrich_tool_descriptions(mcp, get_client()))
     except Exception as exc:

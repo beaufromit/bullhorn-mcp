@@ -1559,6 +1559,18 @@ class TestParseResume:
         client = BullhornClient(mock_auth)
         assert client._guess_content_type("xyz") == "application/octet-stream"
 
+    def test_guess_content_type_new_extensions(self, mock_auth):
+        """CR45 generic upload: rtf, odt, htm, png, jpg, jpeg, msg, eml are mapped."""
+        client = BullhornClient(mock_auth)
+        assert client._guess_content_type("rtf") == "application/rtf"
+        assert client._guess_content_type("odt") == "application/vnd.oasis.opendocument.text"
+        assert client._guess_content_type("htm") == "text/html"
+        assert client._guess_content_type("png") == "image/png"
+        assert client._guess_content_type("jpg") == "image/jpeg"
+        assert client._guess_content_type("jpeg") == "image/jpeg"
+        assert client._guess_content_type("msg") == "application/vnd.ms-outlook"
+        assert client._guess_content_type("eml") == "message/rfc822"
+
 
 class TestAttachFile:
     """Tests for BullhornClient.attach_file()."""
@@ -1639,6 +1651,179 @@ class TestAttachFile:
         client = BullhornClient(mock_auth)
         with pytest.raises(BullhornAPIError):
             client.attach_file("Candidate", 123, b"data", "cv.pdf", "application/pdf")
+
+
+class TestAttachFileDescription:
+    """CR45 T44.3: description query param on attach_file()."""
+
+    @respx.mock
+    def test_attach_file_sends_description_query_param(self, mock_auth, mock_session):
+        route = respx.put(f"{mock_session.rest_url}/file/Candidate/123/raw").mock(
+            return_value=httpx.Response(200, json={"fileId": 1})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.attach_file(
+            "Candidate", 123, b"data", "ref.pdf", "application/pdf",
+            external_id="Portfolio", file_type="Reference",
+            description="Signed reference",
+        )
+
+        params = route.calls[0].request.url.params
+        assert dict(params) == {
+            "externalID": "Portfolio",
+            "type": "Reference",
+            "description": "Signed reference",
+        }
+
+    @respx.mock
+    def test_attach_file_omits_description_when_none(self, mock_auth, mock_session):
+        route = respx.put(f"{mock_session.rest_url}/file/Candidate/123/raw").mock(
+            return_value=httpx.Response(200, json={"fileId": 1})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.attach_file(
+            "Candidate", 123, b"data", "ref.pdf", "application/pdf",
+            external_id="Portfolio", file_type="Reference",
+        )
+
+        params = route.calls[0].request.url.params
+        assert "description" not in params
+        assert dict(params) == {"externalID": "Portfolio", "type": "Reference"}
+
+    @respx.mock
+    def test_attach_file_never_sends_filetype(self, mock_auth, mock_session):
+        route = respx.put(f"{mock_session.rest_url}/file/Candidate/123/raw").mock(
+            return_value=httpx.Response(200, json={"fileId": 1})
+        )
+
+        client = BullhornClient(mock_auth)
+        client.attach_file(
+            "Candidate", 123, b"data", "ref.pdf", "application/pdf",
+            external_id="Portfolio", file_type="Reference", description="d",
+        )
+
+        assert "fileType" not in route.calls[0].request.url.params
+
+
+class TestFileTypes:
+    """CR45 T44.3: get_file_types() reads and caches /settings."""
+
+    SETTINGS = {
+        "clientCorporationFileTypeList": ["Contract", "Terms", "Logo", "Other"],
+        "fileTypeList": [
+            "Original CV", "Formatted CV", "Reference", "Cover Letter",
+            "Portfolio", "Job Spec", "Other",
+        ],
+    }
+    URL_PATH = "/settings/fileTypeList,clientCorporationFileTypeList"
+
+    @respx.mock
+    def test_get_file_types_company_list(self, mock_auth, mock_session):
+        route = respx.get(f"{mock_session.rest_url}{self.URL_PATH}").mock(
+            return_value=httpx.Response(200, json=self.SETTINGS)
+        )
+
+        client = BullhornClient(mock_auth)
+
+        assert client.get_file_types("ClientCorporation") == [
+            "Contract", "Terms", "Logo", "Other"
+        ]
+        assert route.call_count == 1
+
+    @respx.mock
+    def test_get_file_types_shared_list_for_other_entities(self, mock_auth, mock_session):
+        respx.get(f"{mock_session.rest_url}{self.URL_PATH}").mock(
+            return_value=httpx.Response(200, json=self.SETTINGS)
+        )
+
+        client = BullhornClient(mock_auth)
+
+        for entity in ("Candidate", "JobOrder", "ClientContact", "Placement", "Opportunity"):
+            assert client.get_file_types(entity) == self.SETTINGS["fileTypeList"]
+
+    @respx.mock
+    def test_get_file_types_cached_one_request(self, mock_auth, mock_session):
+        route = respx.get(f"{mock_session.rest_url}{self.URL_PATH}").mock(
+            return_value=httpx.Response(200, json=self.SETTINGS)
+        )
+
+        client = BullhornClient(mock_auth)
+        client.get_file_types("Candidate")
+        client.get_file_types("ClientCorporation")
+        client.get_file_types("Placement")
+
+        assert route.call_count == 1
+
+    @respx.mock
+    def test_get_file_types_failure_not_cached(self, mock_auth, mock_session):
+        route = respx.get(f"{mock_session.rest_url}{self.URL_PATH}").mock(
+            side_effect=[
+                httpx.Response(500, text="boom"),
+                httpx.Response(200, json=self.SETTINGS),
+            ]
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError):
+            client.get_file_types("Candidate")
+
+        assert client.get_file_types("Candidate") == self.SETTINGS["fileTypeList"]
+        assert route.call_count == 2
+
+    @respx.mock
+    def test_get_file_types_missing_list_not_cached(self, mock_auth, mock_session):
+        """A response without a list must not cache [] (that would refuse every label)."""
+        route = respx.get(f"{mock_session.rest_url}{self.URL_PATH}").mock(
+            side_effect=[
+                httpx.Response(200, json={"fileTypeList": ["Original CV"]}),
+                httpx.Response(200, json=self.SETTINGS),
+            ]
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError):
+            client.get_file_types("ClientCorporation")
+
+        assert client.get_file_types("ClientCorporation") == self.SETTINGS["clientCorporationFileTypeList"]
+        assert route.call_count == 2
+
+
+class TestGetEntityFiles:
+    """CR45 T44.3: get_entity_files() reads /entityFiles."""
+
+    @respx.mock
+    def test_get_entity_files_parses_entityfiles_key(self, mock_auth, mock_session):
+        files = [{"id": 5, "name": "cv.pdf", "type": "Original CV"}]
+        route = respx.get(f"{mock_session.rest_url}/entityFiles/Candidate/123").mock(
+            return_value=httpx.Response(200, json={"EntityFiles": files})
+        )
+
+        client = BullhornClient(mock_auth)
+
+        assert client.get_entity_files("Candidate", 123) == files
+        assert route.call_count == 1
+
+    @respx.mock
+    def test_get_entity_files_missing_key_is_empty(self, mock_auth, mock_session):
+        respx.get(f"{mock_session.rest_url}/entityFiles/Candidate/123").mock(
+            return_value=httpx.Response(200, json={})
+        )
+
+        client = BullhornClient(mock_auth)
+
+        assert client.get_entity_files("Candidate", 123) == []
+
+    @respx.mock
+    def test_get_entity_files_404_raises(self, mock_auth, mock_session):
+        respx.get(f"{mock_session.rest_url}/entityFiles/Candidate/999").mock(
+            return_value=httpx.Response(404, json={"errorMessage": "Entity not found."})
+        )
+
+        client = BullhornClient(mock_auth)
+        with pytest.raises(BullhornAPIError, match="404"):
+            client.get_entity_files("Candidate", 999)
 
 
 class TestCandidateChildDefaultFields:

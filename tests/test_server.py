@@ -11,6 +11,20 @@ from bullhorn_mcp.auth import AuthenticationError
 from bullhorn_mcp.client import BullhornAPIError
 
 
+@pytest.fixture(autouse=True)
+def restore_bullhorn_mcp_logger():
+    """main() and _configure_logging() change the bullhorn_mcp logger; undo it per test."""
+    import logging
+    lg = logging.getLogger("bullhorn_mcp")
+    saved = (lg.level, list(lg.handlers), lg.propagate)
+    try:
+        yield
+    finally:
+        lg.setLevel(saved[0])
+        lg.handlers[:] = saved[1]
+        lg.propagate = saved[2]
+
+
 @pytest.fixture
 def mock_client(sample_job, sample_candidate):
     """Create a mock Bullhorn client."""
@@ -3002,9 +3016,43 @@ class TestMCPServerSetup:
         assert "update_record" in tools
         assert "add_note" in tools
         assert "bulk_import" in tools
-        assert "request_cv_upload" in tools
-        assert "get_cv_upload" in tools
-        assert "show_cv_upload_box" in tools
+        assert "request_file_upload" in tools
+        assert "get_file_upload" in tools
+        assert "show_upload_box" in tools
+
+    def test_tool_list_has_renamed_upload_tools(self):
+        """CR45 D1: the three upload tools carry file-generic names."""
+        import asyncio
+        tools = {t.name for t in asyncio.run(server.mcp.list_tools())}
+
+        assert {"request_file_upload", "get_file_upload", "show_upload_box", "attach_file"} <= tools
+        assert len(tools) == 43
+
+    def test_old_upload_tool_names_absent(self):
+        """No tool, instruction, description, parameter text or next_steps still says the old names."""
+        import asyncio
+        old = ("request_cv_upload", "get_cv_upload", "show_cv_upload_box", "cv_upload_box")
+        tools = asyncio.run(server.mcp.list_tools())
+        corpus = [server.mcp.instructions or ""]
+        for t in tools:
+            assert t.name not in old
+            corpus.append(t.description or "")
+            corpus.append(json.dumps(t.parameters))
+        resources = asyncio.run(server.mcp.list_resources())
+        corpus.extend(f"{r.name} {r.description}" for r in resources)
+        # Rendered next_steps and hints from the live tools.
+        with _http_as(), patch.dict(os.environ, {"MCP_BASE_URL": "https://mcp.example.com"}), \
+             patch.object(server, "_client_supports_ui", return_value=True):
+            data = json.loads(server.request_file_upload("Jane_Doe_CV.pdf"))
+            corpus.append(" ".join(data["next_steps"]))
+            corpus.append(server.show_upload_box(data["upload_id"]).content[0].text)
+            corpus.append(server.get_file_upload("upl_missing"))
+            corpus.append(server.parse_cv(data["upload_id"]))
+            corpus.append(server.attach_cv(candidate_id=1, upload_id=data["upload_id"]))
+
+        text = "\n".join(corpus)
+        for name in old:
+            assert name not in text, name
 
     def test_server_name(self):
         """Test server name is set correctly."""
@@ -3950,7 +3998,7 @@ class TestSprint15HttpTransport:
     def test_main_stdio_logs_transport(self, caplog):
         """main() logs the active stdio transport mode before running."""
         with patch.object(server, "_transport_mode", "stdio"):
-            with patch.object(server.mcp, "run"):
+            with patch.object(server.mcp, "run"), patch.object(server, "_configure_logging"):
                 with caplog.at_level("INFO", logger="bullhorn_mcp.server"):
                     server.main()
 
@@ -6229,8 +6277,12 @@ def _http_as(sub="user-a"):
 
 
 def _seed_upload(sub="user-a", filename="Jane_Doe_CV.pdf", data=_CV_BYTES, candidate_id=None):
-    """Create a ticket on the live server store and redeem it. Returns the upload_id."""
-    upload_id, token, _ = server.upload_store.create(sub, filename, candidate_id)
+    """Create a ticket on the live server store and redeem it. Returns the upload_id.
+
+    candidate_id is shorthand for the entity hint Candidate/<id>.
+    """
+    entity = "Candidate" if candidate_id is not None else None
+    upload_id, token, _ = server.upload_store.create(sub, filename, entity, candidate_id)
     server.upload_store.redeem(token, "8655a252-" + filename, data)
     return upload_id
 
@@ -7910,7 +7962,7 @@ class TestAttachCv:
         upload_id = _seed_upload()
         server.upload_store.set_parsed(upload_id, "user-a", sample_parsed_resume)  # the create parsed it
         server.upload_store.mark_created(upload_id, self.CID)
-        server.upload_store.mark_attached(upload_id, 80, self.CID)
+        server.upload_store.mark_attached(upload_id, 80, "Candidate", self.CID)
 
         data = self._attach(mock_client, mock_metadata, upload_id=upload_id, match_check_id="chk-9")
 
@@ -9124,8 +9176,8 @@ class TestUploadRoute:
 
 
 @pytest.mark.usefixtures("clean_upload_store")
-class TestRequestCvUpload:
-    """Tests for the request_cv_upload tool (CR41)."""
+class TestRequestFileUpload:
+    """Tests for the request_file_upload tool (CR41)."""
 
     BASE = {"MCP_BASE_URL": "https://mcp.example.com"}
 
@@ -9133,7 +9185,7 @@ class TestRequestCvUpload:
         with _http_as(sub), \
              patch.dict(os.environ, base or self.BASE), \
              patch.object(server, "_client_supports_ui", return_value=ui):
-            return json.loads(server.request_cv_upload(filename, **kwargs))
+            return json.loads(server.request_file_upload(filename, **kwargs))
 
     def test_url_built_from_mcp_base_url(self):
         """upload_url is MCP_BASE_URL + /upload/<token> (trailing slash tolerated) and the token redeems."""
@@ -9156,18 +9208,18 @@ class TestRequestCvUpload:
             server.upload_store.get(data["upload_id"], "user-b")
 
     def test_next_steps_offer_upload_box_when_ui_supported(self):
-        """With MCP Apps support the fallback step points at show_cv_upload_box."""
+        """With MCP Apps support the fallback step points at show_upload_box."""
         data = self._request(ui=True)
 
         text = " ".join(data["next_steps"])
-        assert f"show_cv_upload_box(upload_id='{data['upload_id']}')" in text
+        assert f"show_upload_box(upload_id='{data['upload_id']}')" in text
 
     def test_next_steps_omit_upload_box_when_ui_unsupported(self):
         """Without MCP Apps support there is no mention of the box, and the agent is told to stop."""
         data = self._request(ui=False)
 
         text = " ".join(data["next_steps"])
-        assert "show_cv_upload_box" not in text
+        assert "show_upload_box" not in text
         assert "stop" in text.lower()
 
     def test_next_steps_curl_line_contains_url(self):
@@ -9179,19 +9231,19 @@ class TestRequestCvUpload:
         assert data["upload_url"] in curl_line
 
     def test_disallowed_extension_rejected(self):
-        """A non-CV extension returns unsupported_file_type and creates nothing."""
+        """A disallowed extension returns unsupported_file_type and creates nothing."""
         data = self._request(filename="payload.exe")
 
         assert data["error"] == "unsupported_file_type"
         assert server.upload_store._uploads == {}
 
     def test_stdio_mode_returns_uploads_require_http_mode(self):
-        """request_cv_upload, get_cv_upload and show_cv_upload_box all refuse in stdio mode."""
+        """request_file_upload, get_file_upload and show_upload_box all refuse in stdio mode."""
         with patch.object(server, "_transport_mode", "stdio"):
             results = [
-                server.request_cv_upload("Jane_Doe_CV.pdf"),
-                server.get_cv_upload("upl_x"),
-                server.show_cv_upload_box("upl_x"),
+                server.request_file_upload("Jane_Doe_CV.pdf"),
+                server.get_file_upload("upl_x"),
+                server.show_upload_box("upl_x"),
             ]
 
         for result in results:
@@ -9205,11 +9257,57 @@ class TestRequestCvUpload:
         with patch.object(server, "_transport_mode", "http"), \
              patch("bullhorn_mcp.identity.get_access_token", return_value=token), \
              patch.dict(os.environ, self.BASE):
-            data = json.loads(server.request_cv_upload("Jane_Doe_CV.pdf"))
+            data = json.loads(server.request_file_upload("Jane_Doe_CV.pdf"))
 
         assert data["error"] == "identity_resolution_failed"
         assert server.upload_store._uploads == {}
-    def test_request_cv_upload_next_steps_mention_review(self):
+    def test_request_file_upload_entity_hint(self):
+        """entity + entity_id are stored as the hint on the ticket."""
+        data = self._request(filename="Spec.pdf", entity="JobOrder", entity_id=51437)
+
+        rec = server.upload_store.get(data["upload_id"], "user-a")
+        assert (rec["entity"], rec["entity_id"]) == ("JobOrder", 51437)
+
+    def test_request_file_upload_rejects_lead_hint(self):
+        """Lead is refused with its own message and nothing is created."""
+        data = self._request(entity="Lead", entity_id=1)
+
+        assert data["error"] == "unsupported_entity"
+        assert data["message"] == (
+            "Bullhorn does not allow files on leads; use the person's contact or candidate record."
+        )
+        assert server.upload_store._uploads == {}
+
+    def test_request_file_upload_unknown_entity_lists_the_six(self):
+        """Any other entity is refused and the message lists the six attachable ones."""
+        data = self._request(entity="Tearsheet", entity_id=1)
+
+        assert data["error"] == "unsupported_entity"
+        for name in server.ATTACHABLE_ENTITIES:
+            assert name in data["message"]
+        assert len(server.ATTACHABLE_ENTITIES) == 6
+        assert server.upload_store._uploads == {}
+
+    def test_request_file_upload_half_hint_refused(self):
+        """Only one of entity / entity_id is refused (owner decision) and creates nothing."""
+        for kwargs in ({"entity": "Candidate"}, {"entity_id": 5}):
+            data = self._request(**kwargs)
+
+            assert data["error"] == "invalid_entity_hint"
+            assert "both" in data["hint"]
+        assert server.upload_store._uploads == {}
+
+    def test_next_steps_point_non_cv_to_attach_file(self):
+        """next_steps send a CV to parse_cv and create/attach, and any other file to attach_file."""
+        data = self._request(filename="photo.png")
+        upload_id = data["upload_id"]
+
+        text = " ".join(data["next_steps"])
+        assert f"attach_file(entity, entity_id, upload_id='{upload_id}'" in text
+        assert f"parse_cv(upload_id='{upload_id}')" in text
+        assert text.index("parse_cv(") < text.index("attach_file(")
+
+    def test_request_file_upload_next_steps_mention_review(self):
         """next_steps tell the agent to parse_cv, review and correct the parse, then create or attach."""
         data = self._request()
         upload_id = data["upload_id"]
@@ -9225,16 +9323,16 @@ class TestRequestCvUpload:
 
 
 @pytest.mark.usefixtures("clean_upload_store")
-class TestGetCvUpload:
-    """Tests for the get_cv_upload tool (CR41)."""
+class TestGetFileUpload:
+    """Tests for the get_file_upload tool (CR41)."""
 
     def _get(self, upload_id, sub="user-a"):
         with _http_as(sub):
-            return json.loads(server.get_cv_upload(upload_id))
+            return json.loads(server.get_file_upload(upload_id))
 
     def test_get_status_pending_then_received(self):
         """Status moves from pending (no size) to received (size set) once the file arrives."""
-        upload_id, token, _ = server.upload_store.create("user-a", "Jane_Doe_CV.pdf", 42)
+        upload_id, token, _ = server.upload_store.create("user-a", "Jane_Doe_CV.pdf", "Candidate", 42)
 
         pending = self._get(upload_id)
         server.upload_store.redeem(token, "cv.pdf", _CV_BYTES)
@@ -9242,7 +9340,9 @@ class TestGetCvUpload:
 
         assert pending["status"] == "pending"
         assert pending["size"] is None
-        assert pending["candidate_id"] == 42
+        assert pending["entity"] == "Candidate"
+        assert pending["entity_id"] == 42
+        assert "candidate_id" not in pending
         assert received["status"] == "received"
         assert received["size"] == len(_CV_BYTES)
         assert received["filename"] == "Jane_Doe_CV.pdf"
@@ -9258,6 +9358,20 @@ class TestGetCvUpload:
         assert data["status"] == "attached"
         assert data["file_id"] == 77
 
+    def test_get_file_upload_reports_attached_entity(self):
+        """An attached upload reports file_id, attached_entity and attached_entity_id (F2)."""
+        upload_id, token, _ = server.upload_store.create("user-a", "Spec.pdf", "JobOrder", 51437)
+        server.upload_store.redeem(token, "spec.pdf", _CV_BYTES)
+        server.upload_store.mark_attached(upload_id, 88, "JobOrder", 51437)
+
+        data = self._get(upload_id)
+
+        assert data["status"] == "attached"
+        assert data["file_id"] == 88
+        assert (data["attached_entity"], data["attached_entity_id"]) == ("JobOrder", 51437)
+        assert (data["entity"], data["entity_id"]) == ("JobOrder", 51437)
+        assert "candidate_id" not in data
+
     def test_get_other_users_upload_not_found(self):
         """Another user's upload id answers upload_not_found."""
         upload_id = _seed_upload(sub="user-a")
@@ -9268,23 +9382,23 @@ class TestGetCvUpload:
 
 
 @pytest.mark.usefixtures("clean_upload_store")
-class TestShowCvUploadBox:
-    """Tests for the show_cv_upload_box tool and its MCP App resource (CR41)."""
+class TestShowUploadBox:
+    """Tests for the show_upload_box tool and its MCP App resource (CR41)."""
 
     BOX_URI = "ui://bullhorn/cv-upload-box.html"
 
     def _show(self, upload_id, sub="user-a"):
         with _http_as(sub), patch.dict(os.environ, {"MCP_BASE_URL": "https://mcp.example.com"}):
-            result = server.show_cv_upload_box(upload_id)
+            result = server.show_upload_box(upload_id)
         # The success path is a ToolResult (it carries _meta.ui); errors stay plain JSON text.
         return json.loads(result if isinstance(result, str) else result.content[0].text)
 
     def test_upload_box_tool_registered_with_ui_meta(self):
-        """show_cv_upload_box links to the ui:// resource through its tool meta."""
+        """show_upload_box links to the ui:// resource through its tool meta."""
         import asyncio
         tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
 
-        assert tools["show_cv_upload_box"].meta == {"ui": {"resourceUri": self.BOX_URI}}
+        assert tools["show_upload_box"].meta == {"ui": {"resourceUri": self.BOX_URI}}
 
     def test_upload_box_csp_connect_domain_is_base_url(self):
         """The CSP connect domain is the base URL origin; with no base URL no CSP is declared."""
@@ -9316,7 +9430,7 @@ class TestShowCvUploadBox:
 
         assert self.BOX_URI in resources
         assert resources[self.BOX_URI].mime_type == "text/html;profile=mcp-app"
-        html = server.cv_upload_box_resource()
+        html = server.upload_box_resource()
         assert "ui/initialize" in html
         assert "fetch(" in html
         # The page comments mention base64 to say it is absent; check the code only.
@@ -9334,7 +9448,7 @@ class TestShowCvUploadBox:
         with _http_as(), \
              patch.dict(os.environ, {"MCP_BASE_URL": "https://mcp.example.com"}), \
              patch.object(server, "_client_supports_ui", return_value=True):
-            first = json.loads(server.request_cv_upload("Jane_Doe_CV.pdf"))
+            first = json.loads(server.request_file_upload("Jane_Doe_CV.pdf"))
         old_token = first["upload_url"].rsplit("/", 1)[1]
 
         shown = self._show(first["upload_id"])
@@ -9366,18 +9480,18 @@ class TestShowCvUploadBox:
 
         assert data["error"] == "upload_already_received"
         assert "create_candidate_from_cv" in data["hint"]
-        assert "request_cv_upload" not in data["hint"]
+        assert "request_file_upload" not in data["hint"]
         assert server.upload_store.get(upload_id, "user-a")["status"] == "received"
 
     def test_upload_box_on_attached_upload_says_start_over(self):
-        """A box for an attached upload is refused and points at request_cv_upload."""
+        """A box for an attached upload is refused and points at request_file_upload."""
         upload_id = _seed_upload()
         server.upload_store.mark_attached(upload_id, 1)
 
         data = self._show(upload_id)
 
         assert data["error"] == "upload_already_used"
-        assert "request_cv_upload" in data["hint"]
+        assert "request_file_upload" in data["hint"]
 
 
 class TestQueryEntitiesNoteGuard:
@@ -9937,3 +10051,55 @@ class TestPeopleSearchPerplexity:
         assert json.loads(route.calls.last.request.content)["max_results"] == 1
         server.people_search_perplexity(["q"], max_results=100)
         assert json.loads(route.calls.last.request.content)["max_results"] == 50
+
+
+class TestConfigureLogging:
+    """Sprint 44 T44.12 (F10): INFO lines from bullhorn_mcp reach a stderr handler."""
+
+    @staticmethod
+    def _logger():
+        import logging
+        return logging.getLogger("bullhorn_mcp")
+
+    def test_main_configures_bullhorn_mcp_logger_info(self):
+        import inspect
+        import logging
+        assert "_configure_logging()" in inspect.getsource(server.main)
+        with patch.object(server, "_transport_mode", "stdio"), patch.object(server.mcp, "run"), \
+                patch.object(server, "enrich_tool_descriptions", Mock(side_effect=RuntimeError("no"))):
+            server.main()
+        lg = self._logger()
+        assert lg.level == logging.INFO
+        assert lg.propagate is False
+        assert len([h for h in lg.handlers if isinstance(h, server._BullhornMcpStderrHandler)]) == 1
+
+    def test_main_does_not_configure_root_logger(self):
+        import logging
+        root = logging.getLogger()
+        before = (root.level, list(root.handlers))
+        server._configure_logging()
+        assert (root.level, list(root.handlers)) == before
+
+    def test_httpx_logger_not_lowered(self):
+        import logging
+        before = {n: logging.getLogger(n).level for n in ("httpx", "httpcore")}
+        server._configure_logging()
+        for n, level in before.items():
+            assert logging.getLogger(n).level == level
+            assert logging.getLogger(n).getEffectiveLevel() >= logging.WARNING
+
+    def test_resource_read_line_reaches_handler(self):
+        import io
+        server._configure_logging()
+        handler = next(h for h in self._logger().handlers if isinstance(h, server._BullhornMcpStderrHandler))
+        stream = io.StringIO()
+        handler.setStream(stream)
+        server.upload_box_resource()
+        assert "MCP App resource read" in stream.getvalue()
+        assert "INFO bullhorn_mcp.server" in stream.getvalue()
+
+    def test_main_logging_idempotent(self):
+        server._configure_logging()
+        server._configure_logging()
+        handlers = [h for h in self._logger().handlers if isinstance(h, server._BullhornMcpStderrHandler)]
+        assert len(handlers) == 1

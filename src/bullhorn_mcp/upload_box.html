@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CV upload</title>
+<title>File upload</title>
 <!--
-  CR41 Route B: the in-chat CV upload box (MCP App, US-49).
-  The host sends this frame the show_cv_upload_box tool result (upload_url,
+  CR41 Route B (generalised by CR45): the in-chat file upload box (MCP App, US-49).
+  The host sends this frame the show_upload_box tool result (upload_url,
   filename, limits) over the MCP Apps postMessage bridge. The file goes straight
   from the browser to POST {upload_url} as multipart form data. It never passes
   through the model or a tool argument, and there is no base64 anywhere.
@@ -33,7 +33,7 @@
 <body>
 <main>
   <div id="zone" role="button" tabindex="0" aria-describedby="hint">
-    <strong>Drop the CV here</strong> or <button type="button" id="pick">choose a file</button>
+    <strong>Drop the file here</strong> or <button type="button" id="pick">choose a file</button>
     <div id="hint" class="muted">Waiting for upload details…</div>
   </div>
   <input type="file" id="file" hidden>
@@ -170,7 +170,7 @@
         request("ui/message", {
           role: "user",
           // The spec (McpUiMessageRequest) requires an array of content blocks.
-          content: [{ type: "text", text: "I've uploaded the CV in the upload box (upload_id " + ticket.upload_id + "). Please continue." }]
+          content: [{ type: "text", text: "I've uploaded the file in the upload box (upload_id " + ticket.upload_id + "). Please continue." }]
         }).catch(function () { /* the on-screen message is enough */ });
       })
       .catch(function () {

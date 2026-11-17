@@ -37,7 +37,7 @@ Typical use cases:
 
 ## MCP Tools
 
-42 tools, grouped by family below. Each tool's full parameter and field reference is in its live MCP description (enriched from Bullhorn `/meta` at startup), which is the authoritative interface.
+43 tools, grouped by family below. Each tool's full parameter and field reference is in its live MCP description (enriched from Bullhorn `/meta` at startup), which is the authoritative interface.
 
 ### Read tools
 
@@ -72,11 +72,12 @@ Typical use cases:
 - `update_job`
 - `bulk_import`
 
-### CV parsing tools
+### File upload and CV parsing tools
 
-- `request_cv_upload`
-- `get_cv_upload`
-- `show_cv_upload_box`
+- `request_file_upload`
+- `get_file_upload`
+- `show_upload_box`
+- `attach_file`
 - `parse_cv`
 - `parse_cv_text`
 - `create_candidate_from_cv`
@@ -294,19 +295,21 @@ With these set, callers can use `"vertical"` and `"notice period"` as keys in `f
 
 Invalid JSON in any of these variables logs a warning and falls back to the empty default. The server starts normally.
 
-### CV upload (Cowork)
+### File upload (Cowork)
 
-CV files never travel through a tool argument. The server issues a single-use upload ticket, the file is sent to it with `curl`, and later tools refer to the file by `upload_id`. This works in hosted HTTP mode only.
+Files never travel through a tool argument. The server issues a single-use upload ticket, the file is sent to it with `curl`, and later tools refer to the file by `upload_id`. This works in hosted HTTP mode only.
 
 **What the consultant does:** attach the CV in Cowork and ask Claude to add the candidate, or to attach the CV to an existing candidate. Nothing else.
 
 **What Claude runs:**
 
-1. `request_cv_upload(filename=<the CV's original name>, candidate_id=<optional>)` returns an `upload_id` and an `upload_url`. In Cowork the attachment sits at `/root/.claude/uploads/<session-uuid>/<8 hex>-<original name>`, so the model passes the original name (without the hex prefix) as `filename`.
+1. `request_file_upload(filename=<the file's original name>, entity=<optional>, entity_id=<optional>)` returns an `upload_id` and an `upload_url`. `entity` and `entity_id` are an optional hint (both or neither, one of Candidate, ClientContact, ClientCorporation, JobOrder, Placement or Opportunity; a Lead is refused). The hint is echoed back and never enforced, except that `attach_cv` refuses an upload hinted for a different Candidate. In Cowork the attachment sits at `/root/.claude/uploads/<session-uuid>/<8 hex>-<original name>`, so the model passes the original name (without the hex prefix) as `filename`.
 2. `curl -sS -X POST -F file=@"<path>" <upload_url>` sends the file to the server.
-3. `get_cv_upload(upload_id)` confirms the status is `received`.
+3. `get_file_upload(upload_id)` confirms the status is `received`. It returns `upload_id`, `status`, `filename`, `size`, `entity` and `entity_id`, and once the file is attached also `file_id`, `attached_entity` and `attached_entity_id`.
 4. `parse_cv(upload_id)` parses the CV once and keeps the parse with the upload. Claude checks it against the CV itself and notes corrections (names, the current employer in `companyName`, job titles with the employer merged in, dates, education, skills the CV does not mention). The HTML description is left out of the response; only its length is shown.
 5. `create_candidate_from_cv(upload_id=..., <corrections>)` for a new candidate, or `attach_cv(candidate_id=..., upload_id=..., <corrections>)` for an existing one. Both use the stored parse (no second parser call) and take the same corrections: `fields_override` for Candidate fields, and `work_history`, `education`, `skills` (free-text names for `skillSet`) and `primary_skills` (Bullhorn Skill ids). A list that is passed replaces the parsed one; an omitted list uses the parse; an empty list writes none. The description always comes from the parse.
+
+**Files that are not CVs.** `attach_file(entity, entity_id, upload_id, type=None, description=None)` attaches an uploaded file to a Candidate, ClientContact, ClientCorporation, JobOrder, Placement or Opportunity without parsing it. A job description goes on its job with no `type`. `type` is the label in the Bullhorn "File Type" column. It is optional and checked, case-insensitively, against the tenant's own lists: `fileTypeList` for Candidate, JobOrder, ClientContact, Placement and Opportunity (on this tenant Original CV, Formatted CV, Cover Letter, References, Signed Contract, Proof of ID, Visa) and `clientCorporationFileTypeList` for ClientCorporation (Fee Agreement, Directions, Contract, Credit Check). A label not on the list returns `invalid_file_type_label` with the allowed values; if the settings cannot be read, a label returns `file_types_unavailable`. A missing or soft-deleted record returns `record_not_found`, and a Lead returns `unsupported_entity`. A file with the same name already on the record is still attached, with a warning. The response has `attached`, `entity`, `entity_id`, `file_id`, `filename`, `type` and `warnings`. The CV tools (`parse_cv`, `create_candidate_from_cv`, `attach_cv`) take only the CV types (the first eight below) and refuse anything else with `not_a_cv_file`, which points to `attach_file`.
 
 **CV file label.** The CV attaches with `externalID=Portfolio` and `type=Original CV`, so it shows as "Original CV" in the Bullhorn "File Type" column, the same as a consultant upload. This applies to `create_candidate_from_cv`, `attach_cv` and the file-only path of `attach_cv` for a candidate the upload created.
 
@@ -320,19 +323,20 @@ CV files never travel through a tool argument. The server issues a single-use up
 
 `create_candidate(fields, work_history=..., education=..., skills=..., primary_skills=...)` writes the same child records for a candidate found without a CV (LinkedIn, `people_search_perplexity`).
 
-**Fallback:** if `curl` cannot reach the server, Claude calls `show_cv_upload_box(upload_id)`, which renders an upload box in the chat (an MCP App) when the client supports MCP Apps. The consultant picks the file there and the box shows `received`. The box is never blank: if its handshake fails it shows an error. Showing the box replaces the earlier upload URL, so the old one stops working. `request_cv_upload` and `show_cv_upload_box` return `expires_in_seconds`. If the client does not support MCP Apps, Claude reports the failure and stops.
+**Fallback:** if `curl` cannot reach the server, Claude calls `show_upload_box(upload_id)`, which renders an upload box in the chat (an MCP App, resource `ui://bullhorn/cv-upload-box.html`, which keeps its CV-era name) when the client supports MCP Apps. The consultant picks the file there and the box shows `received`. The box is never blank: if its handshake fails it shows an error. Showing the box replaces the earlier upload URL, so the old one stops working. `request_file_upload` and `show_upload_box` return `expires_in_seconds`. If the client does not support MCP Apps, Claude reports the failure and stops.
 
 **Cowork egress setting:** set network egress to "Package managers only" and add `mcp.thepanel.com` to Additional allowed domains. This was verified sufficient on 2026-09-29.
 
 **Limits and retention:**
 
 - Maximum file size 10 MB (Bullhorn's attachment limit).
-- Allowed types: `pdf`, `doc`, `docx`, `rtf`, `odt`, `txt`, `html`, `htm`.
+- Allowed types: `pdf`, `doc`, `docx`, `rtf`, `odt`, `txt`, `html`, `htm`, `png`, `jpg`, `jpeg`, `msg`, `eml`. Other types are refused at `request_file_upload`.
 - Tickets are single use and expire after 15 minutes. The token is stored only as a SHA-256 hash and is bound to the caller's Entra identity.
 - The token is blanked in the server's own access log (`/upload/<redacted>`). If the reverse proxy (Caddy) has access logging turned on, it will record the full path, so keep Caddy's access log off for this site or filter `/upload/*` out of it.
 - Each user can have at most 10 uploads open (pending or received) at once.
 - Files are held in server memory only, never on disk. A file is deleted as soon as it is attached in Bullhorn, otherwise purged 30 minutes after upload. A server restart drops any in-flight uploads.
 - The upload route never calls Bullhorn. Only the tools above do.
+- The `bullhorn_mcp` logger writes INFO to stderr, so lines such as `MCP App resource read: ui://...` reach the journal.
 - CORS is allowed only for `https://*.claudemcpcontent.com` (the MCP App sandbox).
 
 **stdio mode:** the upload tools return `uploads_require_http_mode`. Use `parse_cv_text` or `create_candidate_from_cv(content=...)` with pasted text instead.

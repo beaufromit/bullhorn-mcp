@@ -707,6 +707,10 @@ def _entry(signal: str, points: float, reason: str) -> dict:
 _IDENTIFIER_LABEL = {"email": "email address", "phone": "phone number", "linkedin": "LinkedIn profile"}
 
 
+def _plural(label: str) -> str:
+    return label + ("es" if label.endswith("s") else "s")
+
+
 def _identifier_values(profile: CandidateProfile, config: dict) -> dict[str, set[str]]:
     cc = config["default_country_code"]
     key = linkedin_key(profile.linkedin_url)
@@ -727,7 +731,7 @@ def _score_identifiers(a, b, context, n, config, forenames_disagree, breakdown, 
             continue  # missing on either side: exactly zero
         shared = va[kind] & vb[kind]
         if not shared:
-            breakdown.append(_entry(kind, float(spec["differ_points"]), f"Different {label}s on file"))
+            breakdown.append(_entry(kind, float(spec["differ_points"]), f"Different {_plural(label)} on file"))
             continue
         holders_by_value = context.identifier_holders.get(kind, {})
         best = None
@@ -892,6 +896,23 @@ def _contains_employer(text: str | None, key: str, config: dict) -> bool:
     return f" {key} " in f" {' '.join(_words(text))} "
 
 
+def employers_in_titles(profile: CandidateProfile, others, config: dict) -> list[str]:
+    """Employer keys of ``others`` that appear inside ``profile``'s job titles.
+
+    The parser sometimes puts the employer in the title, so such an employer is
+    not in ``profile.to_echo()["employers"]`` and retrieval never counted it.
+    Scoring finds these matches, so retrieval uses this to count them too.
+    """
+    found: list[str] = []
+    for other in others:
+        for key in _employers(other, config):
+            if key in found:
+                continue
+            if any(_contains_employer(w.title, key, config) for w in profile.work_history):
+                found.append(key)
+    return found
+
+
 def _spans_overlap(spans_a, spans_b) -> bool:
     # Year granularity (D3); a missing end year is a current role (CR44), though
     # only as of when the record was written, so an old open-ended role overlaps
@@ -980,22 +1001,29 @@ def _score_education(a, b, config, breakdown) -> None:
             if sx and sy and _employers_match(sx, sy, config):
                 close = x.year is not None and y.year is not None and abs(x.year - y.year) <= spec["year_tolerance"]
                 if close:
-                    pairs.append((spec["school_and_year"], i, j, f"Studied at the same school ({x.school}), graduating within a year"))
+                    pairs.append((spec["school_and_year"], i, j, f"Studied at the same school ({x.school}), graduating within a year", ("school", sx, sy)))
                 else:
-                    pairs.append((spec["school"], i, j, f"Studied at the same school ({x.school})"))
+                    pairs.append((spec["school"], i, j, f"Studied at the same school ({x.school})", ("school", sx, sy)))
                 continue
             dx, dy = " ".join(_words(x.degree)), " ".join(_words(y.degree))
             if dx and dx == dy and dx not in generic:
-                pairs.append((spec["qualification"], i, j, f"Same qualification ({x.degree})"))
+                pairs.append((spec["qualification"], i, j, f"Same qualification ({x.degree})", ("degree", dx, dy)))
     used_a, used_b, remaining = set(), set(), float(config["caps"]["education_points"])
-    for points, i, j, reason in sorted(pairs, key=lambda p: (-p[0], p[1], p[2])):
+    shown: dict[tuple, dict] = {}  # one reason per distinct school (or degree) pair
+    for points, i, j, reason, pair_key in sorted(pairs, key=lambda p: (-p[0], p[1], p[2])):
         if i in used_a or j in used_b or remaining <= 0:
             continue
         used_a.add(i)
         used_b.add(j)
         points = min(points, remaining)
         remaining -= points
-        breakdown.append(_entry("education", points, reason))
+        if pair_key in shown:
+            # Points still count (capped above); the reason is not repeated.
+            shown[pair_key]["_raw"] += points
+            shown[pair_key]["points"] = round(shown[pair_key]["_raw"], 2)
+            continue
+        shown[pair_key] = _entry("education", points, reason)
+        breakdown.append(shown[pair_key])
 
 
 def score_pair(profile: CandidateProfile, existing: CandidateProfile, context: MatchContext | None, config: dict) -> dict:

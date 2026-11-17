@@ -1,14 +1,21 @@
-"""In-memory CV upload tickets (CR41, FR-15 Amendment, NFR-9).
+"""In-memory file upload tickets (CR41, CR45, FR-15 Amendment, FR-24, NFR-9).
 
-A CV must reach Bullhorn without its bytes ever passing through a tool argument
-(base64 in a tool call costs roughly 100k output tokens per CV). Instead:
+A file must reach Bullhorn without its bytes ever passing through a tool argument
+(base64 in a tool call costs roughly 100k output tokens per file). Instead:
 
-1. ``request_cv_upload`` mints a ticket: an opaque ``upload_id`` plus a single-use
-   ``token`` that forms the upload URL ``{MCP_BASE_URL}/upload/{token}``.
+1. ``request_file_upload`` (was ``request_cv_upload``) mints a ticket: an opaque
+   ``upload_id`` plus a single-use ``token`` that forms the upload URL
+   ``{MCP_BASE_URL}/upload/{token}``.
 2. Whoever holds the file (curl in the Cowork VM, or the in-chat upload box)
    POSTs it to that URL. ``redeem`` stores the bytes against the ticket.
-3. The CV tools read the bytes back with ``get(upload_id, owner_sub)`` and call
-   ``mark_attached`` once Bullhorn has the file, which drops the bytes.
+3. The CV tools (``parse_cv``, ``create_candidate_from_cv``, ``attach_cv``, CV
+   types only) and ``attach_file`` (any allowed type, any supported entity) read
+   the bytes back with ``get(upload_id, owner_sub)`` and call ``mark_attached``
+   once Bullhorn has the file, which drops the bytes.
+
+The optional ``entity`` / ``entity_id`` given to ``create`` is only a hint that is
+stored and echoed back. This store never validates or enforces it; the server
+tools do that, because the allowed entities are a server concern.
 
 Security and retention rules (NFR-9):
 - The token is 256 bits from ``secrets`` and only its SHA-256 is stored, so a
@@ -47,7 +54,11 @@ from typing import Callable
 # Bullhorn's own attachment cap is 10 MB (File Attachment FAQ). Anything larger
 # would pass this server and then fail at Bullhorn, so it is rejected up front.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-ALLOWED_EXTENSIONS = frozenset({"pdf", "doc", "docx", "rtf", "odt", "txt", "html", "htm"})
+# The types Bullhorn's resume parser takes. The CV tools check against this set.
+CV_EXTENSIONS = frozenset({"pdf", "doc", "docx", "rtf", "odt", "txt", "html", "htm"})
+# Every type a ticket accepts: the CV types plus images and email. Spreadsheets,
+# slides, archives, executables and heic stay refused.
+ALLOWED_EXTENSIONS = CV_EXTENSIONS | frozenset({"png", "jpg", "jpeg", "msg", "eml"})
 TICKET_TTL_SECONDS = 15 * 60
 FILE_TTL_SECONDS = 30 * 60
 # Pending plus received uploads one user may hold at once (10 x 10 MB at most).
@@ -87,6 +98,11 @@ class UploadTooLarge(UploadError):
 class UploadBadType(UploadError):
     code = "unsupported_file_type"
     http_status = 415
+
+
+class UploadBadEntityHint(UploadError):
+    code = "invalid_entity_hint"
+    http_status = 400
 
 
 class UploadEmpty(UploadError):
@@ -131,7 +147,8 @@ class _Upload:
     owner_sub: str
     filename: str
     extension: str
-    candidate_id: int | None
+    entity: str | None  # hint from create(); echoed back, never enforced here
+    entity_id: int | None
     token_hash: str | None
     ticket_expires_at: float
     status: str = "pending"  # pending | received | attached | expired
@@ -142,6 +159,12 @@ class _Upload:
     file_id: object = None
     remove_at: float | None = None  # set once the record is a tombstone
     parsed: dict | None = None  # stored resume parse (no file bytes)
+    # Set by every attach, so a file attached to a job is not mistaken for one
+    # attached to a Candidate.
+    attached_entity: str | None = None
+    attached_entity_id: int | None = None
+    # The two candidate fields stay for the CV paths (Sprint 41 C1 fix depends on
+    # created_candidate_id).
     attached_candidate_id: int | None = None
     created_candidate_id: int | None = None  # Candidate create_candidate_from_cv made from it
 
@@ -202,18 +225,28 @@ class UploadStore:
     # --- public API -----------------------------------------------------
 
     def create(
-        self, owner_sub: str, filename: str, candidate_id: int | None = None
+        self,
+        owner_sub: str,
+        filename: str,
+        entity: str | None = None,
+        entity_id: int | None = None,
     ) -> tuple[str, str, datetime]:
         """Mint a ticket. Returns ``(upload_id, token, expires_at_utc)``.
 
         ``filename`` is the original name the user attached; it is the name the
         file gets in Bullhorn. Raises ``UploadBadType`` before any upload when its
-        extension is not an allowed CV type.
+        extension is not an allowed file type. ``entity`` and ``entity_id`` are an
+        optional hint, given together or not at all (``UploadBadEntityHint``
+        otherwise); they are stored and echoed, never validated here.
         """
+        if (entity is None) != (entity_id is None):
+            raise UploadBadEntityHint(
+                "Give both entity and entity_id, or neither."
+            )
         extension = file_extension(filename)
         if extension not in ALLOWED_EXTENSIONS:
             raise UploadBadType(
-                f"'{filename}' is not an allowed CV type. Allowed: "
+                f"'{filename}' is not an allowed file type. Allowed: "
                 + ", ".join(sorted(ALLOWED_EXTENSIONS))
             )
         name = PurePath(filename.replace("\\", "/")).name
@@ -226,7 +259,7 @@ class UploadStore:
             )
             if open_count >= MAX_OPEN_UPLOADS_PER_USER:
                 raise UploadLimitReached(
-                    f"You already have {open_count} open CV uploads (the limit is "
+                    f"You already have {open_count} open uploads (the limit is "
                     f"{MAX_OPEN_UPLOADS_PER_USER}). Finish or wait out one of them first."
                 )
             upload_id = "upl_" + secrets.token_hex(12)
@@ -235,7 +268,8 @@ class UploadStore:
                 owner_sub=owner_sub,
                 filename=name,
                 extension=extension,
-                candidate_id=candidate_id,
+                entity=entity,
+                entity_id=entity_id,
                 token_hash=None,
                 ticket_expires_at=now,
             )
@@ -259,7 +293,7 @@ class UploadStore:
             raise UploadNotFound("Unknown, used or expired upload link.")
         rec = self._uploads[upload_id]
         if rec.status == "expired" or (rec.status == "pending" and now >= rec.ticket_expires_at):
-            raise UploadExpired("This upload link has expired. Call request_cv_upload again.")
+            raise UploadExpired("This upload link has expired. Call request_file_upload again.")
         if rec.status != "pending":
             raise UploadAlreadyUsed("This upload link has already been used.")
         return rec
@@ -304,7 +338,7 @@ class UploadStore:
             self._purge(now)
             rec = self._owned(upload_id, owner_sub)
             if rec.status == "expired":
-                raise UploadExpired("This upload has expired. Call request_cv_upload again.")
+                raise UploadExpired("This upload has expired. Call request_file_upload again.")
             if rec.status != "pending":
                 raise UploadAlreadyUsed(f"This upload is already {rec.status}.")
             token = self._issue_token(rec, now)
@@ -313,10 +347,10 @@ class UploadStore:
     def get(self, upload_id: str, owner_sub: str) -> dict:
         """Return the record as a dict for its owner; anyone else gets ``UploadNotFound``.
 
-        Keys: upload_id, status, filename, extension, format, candidate_id, size,
-        sha256, file_id, ``parsed`` (stored resume parse or None),
-        ``attached_candidate_id``, ``created_candidate_id``, and ``data`` (bytes,
-        only while ``received``).
+        Keys: upload_id, status, filename, extension, format, entity, entity_id
+        (the hint), attached_entity, attached_entity_id, size, sha256, file_id,
+        ``parsed`` (stored resume parse or None), ``attached_candidate_id``,
+        ``created_candidate_id``, and ``data`` (bytes, only while ``received``).
         """
         with self._lock:
             now = self._clock()
@@ -328,7 +362,10 @@ class UploadStore:
                 "filename": rec.filename,
                 "extension": rec.extension,
                 "format": parser_format(rec.extension),
-                "candidate_id": rec.candidate_id,
+                "entity": rec.entity,
+                "entity_id": rec.entity_id,
+                "attached_entity": rec.attached_entity,
+                "attached_entity_id": rec.attached_entity_id,
                 "size": rec.size,
                 "sha256": rec.sha256,
                 "file_id": rec.file_id,
@@ -345,7 +382,7 @@ class UploadStore:
             self._purge(now)
             rec = self._owned(upload_id, owner_sub)
             if rec.status == "expired":
-                raise UploadExpired("This upload has expired. Call request_cv_upload again.")
+                raise UploadExpired("This upload has expired. Call request_file_upload again.")
             if rec.status == "pending":
                 raise UploadError("No file has been received for this upload yet.")
             rec.parsed = parsed
@@ -377,7 +414,11 @@ class UploadStore:
                 rec.created_candidate_id = candidate_id
 
     def mark_attached(
-        self, upload_id: str, file_id: object = None, candidate_id: int | None = None
+        self,
+        upload_id: str,
+        file_id: object = None,
+        entity: str | None = None,
+        entity_id: int | None = None,
     ) -> None:
         """Drop the bytes once Bullhorn holds the file; keep a tombstone until the purge."""
         with self._lock:
@@ -387,7 +428,10 @@ class UploadStore:
             if rec is None:
                 return
             rec.file_id = file_id
-            rec.attached_candidate_id = candidate_id
+            rec.attached_entity = entity
+            rec.attached_entity_id = entity_id
+            # The CV paths read the candidate field; keep it in step.
+            rec.attached_candidate_id = entity_id if entity == "Candidate" else None
             # The bytes go at once (NFR-9) but ``parsed`` stays on the tombstone
             # until the purge: an attach_cv confirm call that follows a first
             # (additions) call which already attached the file still needs the

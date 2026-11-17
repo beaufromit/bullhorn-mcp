@@ -69,3 +69,26 @@ class TestUploadBoxSpec:
         # handler further up also calls reportSize(), so a looser slice would pass
         # against the v0.0.56 box too.
         assert re.search(r'^\s*reportSize\(\);\s*\n\s*request\("ui/initialize"', script, re.M)
+
+
+class TestUploadBoxGeneric:
+    """CR45 D1/P5: the box is for any file; its resource URI keeps the old name."""
+
+    def test_upload_box_wording_generic(self):
+        html = BOX.read_text(encoding="utf-8")
+
+        assert "<title>File upload</title>" in html
+        assert "Drop the file here" in html
+        assert "uploaded the file in the upload box" in html
+        assert "show_upload_box" in html
+        for stale in ("Drop the CV", "uploaded the CV", "show_cv_upload_box", "<title>CV upload"):
+            assert stale not in html
+
+    def test_upload_box_uri_unchanged(self):
+        import asyncio
+        from bullhorn_mcp import server
+
+        assert server._UPLOAD_BOX_URI == "ui://bullhorn/cv-upload-box.html"
+        resources = {str(r.uri): r for r in asyncio.run(server.mcp.list_resources())}
+        assert resources["ui://bullhorn/cv-upload-box.html"].name == "upload_box"
+        assert resources["ui://bullhorn/cv-upload-box.html"].description == "In-chat file upload box (MCP App)."

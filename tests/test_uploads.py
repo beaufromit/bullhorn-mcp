@@ -1,4 +1,4 @@
-"""Tests for the in-memory CV upload ticket store (CR41, T40.2)."""
+"""Tests for the in-memory file upload ticket store (CR41, T40.2; CR45, T44.2)."""
 
 import hashlib
 
@@ -9,8 +9,11 @@ from bullhorn_mcp.uploads import (
     FILE_TTL_SECONDS,
     MAX_OPEN_UPLOADS_PER_USER,
     MAX_UPLOAD_BYTES,
+    ALLOWED_EXTENSIONS,
+    CV_EXTENSIONS,
     TICKET_TTL_SECONDS,
     UploadAlreadyUsed,
+    UploadBadEntityHint,
     UploadBadType,
     UploadEmpty,
     UploadExpired,
@@ -86,11 +89,61 @@ class TestCreate:
             store.create(OWNER, "")
         assert store._uploads == {}
 
-    def test_candidate_id_hint_kept(self, store):
-        upload_id, token, _ = store.create(OWNER, "cv.pdf", candidate_id=4242)
-        assert store.get(upload_id, OWNER)["candidate_id"] == 4242
+    def test_candidate_entity_hint_kept(self, store):
+        upload_id, token, _ = store.create(OWNER, "cv.pdf", entity="Candidate", entity_id=4242)
+        rec = store.get(upload_id, OWNER)
+        assert rec["entity"] == "Candidate"
+        assert rec["entity_id"] == 4242
+        assert "candidate_id" not in rec
         upload_id2, _, _ = store.create(OWNER, "cv2.pdf")
-        assert store.get(upload_id2, OWNER)["candidate_id"] is None
+        rec2 = store.get(upload_id2, OWNER)
+        assert rec2["entity"] is None
+        assert rec2["entity_id"] is None
+
+    def test_entity_hint_echoed_not_enforced(self, store):
+        # The store never validates entity names; the server tool does.
+        upload_id, _, _ = store.create(OWNER, "scan.png", entity="NotAnEntity", entity_id=7)
+        rec = store.get(upload_id, OWNER)
+        assert rec["entity"] == "NotAnEntity"
+        assert rec["entity_id"] == 7
+        # A CV file with a non-Candidate hint is also accepted.
+        upload_id2, _, _ = store.create(OWNER, "cv.pdf", entity="JobOrder", entity_id=9)
+        assert store.get(upload_id2, OWNER)["entity"] == "JobOrder"
+
+    @pytest.mark.parametrize(
+        "entity,entity_id", [("Candidate", None), (None, 4242)]
+    )
+    def test_half_entity_hint_refused(self, store, entity, entity_id):
+        with pytest.raises(UploadBadEntityHint) as exc:
+            store.create(OWNER, "cv.pdf", entity=entity, entity_id=entity_id)
+        assert exc.value.code == "invalid_entity_hint"
+        assert exc.value.http_status == 400
+        assert "both entity and entity_id" in str(exc.value)
+        assert store._uploads == {}
+
+    def test_allowed_extensions_include_images_and_email(self, store):
+        for ext in ("png", "jpg", "jpeg", "msg", "eml"):
+            assert ext in ALLOWED_EXTENSIONS
+            upload_id, token, _ = store.create(OWNER, f"file.{ext.upper()}")
+            assert store.redeem(token, f"file.{ext}", b"x")["size"] == 1
+            assert store.get(upload_id, OWNER)["extension"] == ext
+
+    @pytest.mark.parametrize("ext", ["xlsx", "csv", "pptx", "zip", "exe", "heic"])
+    def test_refused_extensions(self, store, ext):
+        assert ext not in ALLOWED_EXTENSIONS
+        with pytest.raises(UploadBadType) as exc:
+            store.create(OWNER, f"file.{ext}")
+        assert exc.value.http_status == 415
+        assert "allowed file type" in str(exc.value)
+        assert "CV" not in str(exc.value)
+        assert store._uploads == {}
+
+    def test_cv_extensions_subset(self):
+        assert CV_EXTENSIONS == frozenset(
+            {"pdf", "doc", "docx", "rtf", "odt", "txt", "html", "htm"}
+        )
+        assert CV_EXTENSIONS < ALLOWED_EXTENSIONS
+        assert ALLOWED_EXTENSIONS - CV_EXTENSIONS == {"png", "jpg", "jpeg", "msg", "eml"}
 
     def test_double_dot_filename_is_pdf(self, store):
         assert file_extension("Jane_CV_New..pdf") == "pdf"
@@ -273,6 +326,27 @@ class TestGetAndAttach:
         with pytest.raises(UploadNotFound):
             store.get(upload_id, OWNER)
 
+    def test_mark_attached_records_entity(self, store):
+        upload_id = _received(store, "photo.png")
+        rec = store.get(upload_id, OWNER)
+        assert rec["attached_entity"] is None
+        assert rec["attached_entity_id"] is None
+        store.mark_attached(upload_id, 11, "JobOrder", 51437)
+        rec = store.get(upload_id, OWNER)
+        assert rec["attached_entity"] == "JobOrder"
+        assert rec["attached_entity_id"] == 51437
+        assert rec["file_id"] == 11
+        # Not a Candidate, so the CV-path field stays empty.
+        assert rec["attached_candidate_id"] is None
+
+    def test_mark_attached_candidate_also_sets_attached_candidate_id(self, store):
+        upload_id = _received(store)
+        store.mark_attached(upload_id, 12, "Candidate", 173063)
+        rec = store.get(upload_id, OWNER)
+        assert rec["attached_entity"] == "Candidate"
+        assert rec["attached_entity_id"] == 173063
+        assert rec["attached_candidate_id"] == 173063
+
     def test_mark_attached_unknown_id_is_noop(self, store):
         assert store.mark_attached("upl_missing", file_id=1) is None
 
@@ -291,7 +365,7 @@ class TestStoredParse:
     def test_parsed_kept_after_mark_attached(self, store):
         upload_id = _received(store)
         store.set_parsed(upload_id, OWNER, self.PARSED)
-        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        store.mark_attached(upload_id, file_id=5, entity="Candidate", entity_id=42)
         rec = store.get(upload_id, OWNER)
         assert rec["status"] == "attached"
         assert rec["parsed"] == self.PARSED
@@ -299,7 +373,7 @@ class TestStoredParse:
     def test_mark_attached_records_candidate_id(self, store):
         upload_id = _received(store)
         assert store.get(upload_id, OWNER)["attached_candidate_id"] is None
-        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        store.mark_attached(upload_id, file_id=5, entity="Candidate", entity_id=42)
         assert store.get(upload_id, OWNER)["attached_candidate_id"] == 42
 
     def test_mark_created_records_candidate_id_through_attach(self, store):
@@ -307,7 +381,7 @@ class TestStoredParse:
         assert store.get(upload_id, OWNER)["created_candidate_id"] is None
         store.mark_created(upload_id, 42)
         assert store.get(upload_id, OWNER)["created_candidate_id"] == 42
-        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        store.mark_attached(upload_id, file_id=5, entity="Candidate", entity_id=42)
         assert store.get(upload_id, OWNER)["created_candidate_id"] == 42
 
     def test_mark_created_unknown_upload_is_noop(self, store):
@@ -316,7 +390,7 @@ class TestStoredParse:
     def test_bytes_still_dropped_on_attach_with_parse_kept(self, store):
         upload_id = _received(store)
         store.set_parsed(upload_id, OWNER, self.PARSED)
-        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        store.mark_attached(upload_id, file_id=5, entity="Candidate", entity_id=42)
         rec = store.get(upload_id, OWNER)
         assert rec["data"] is None
         assert store._uploads[upload_id].data is None
@@ -325,7 +399,7 @@ class TestStoredParse:
     def test_parsed_dropped_at_purge(self, store, clock):
         upload_id = _received(store)
         store.set_parsed(upload_id, OWNER, self.PARSED)
-        store.mark_attached(upload_id, file_id=5, candidate_id=42)
+        store.mark_attached(upload_id, file_id=5, entity="Candidate", entity_id=42)
         clock.advance(FILE_TTL_SECONDS)
         with pytest.raises(UploadNotFound):
             store.get(upload_id, OWNER)
@@ -362,6 +436,14 @@ class TestOpenUploadCap:
         assert exc.value.code == "too_many_uploads"
         assert exc.value.http_status == 429
         store.create(OTHER, "cv.pdf")  # another user is unaffected
+
+    def test_cap_message_says_uploads(self, store):
+        for _ in range(MAX_OPEN_UPLOADS_PER_USER):
+            store.create(OWNER, "cv.pdf")
+        with pytest.raises(UploadLimitReached) as exc:
+            store.create(OWNER, "cv.pdf")
+        assert "open uploads" in str(exc.value)
+        assert "CV" not in str(exc.value)
 
     def test_attached_and_expired_uploads_free_a_slot(self, store, clock):
         first = _received(store)

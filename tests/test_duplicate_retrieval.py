@@ -484,3 +484,59 @@ class TestMatchCandidates:
         out = dr.match_candidates(bh.client, profile(emails=["a@example.test"]))
         assert "lookup_failed:email" in out["flags"]
         assert out["deleted_matches"][0]["candidate_id"] == 91
+
+
+# ---------------------------------------------------------------------------
+# F3 (T44.11): employer count on parse_cv checks, where the employer sits in a title
+# ---------------------------------------------------------------------------
+
+class TestEmployerCountFromTitle:
+    @pytest.fixture
+    def log(self):
+        with patch("bullhorn_mcp.duplicate_retrieval.match_log") as m:
+            m.new_match_check_id.return_value = "mc-1"
+            yield m
+
+    def _parse_profile(self):
+        from pathlib import Path
+        from bullhorn_mcp.duplicates import profile_from_parse
+        parsed = json.loads((Path(__file__).parent / "fixtures" / "cv_parse_sample.json").read_text())
+        return profile_from_parse(parsed)
+
+    def _setup(self, bh):
+        p = self._parse_profile()
+        bh.on_search(lambda q: "email:" in q and "isDeleted:0" in q, ids=[11])
+        # Count search for the employer: 7 candidates list it.
+        bh.on_search(lambda q: "workHistories.companyName" in q and "email:" not in q, ids=[11], total=7)
+        bh.candidates = {11: {"id": 11, "firstName": "Testcase", "lastName": "Cr-Fortyone",
+                              "email": "testcase.cr41@example.com", "companyName": None}}
+        bh.child_rows["CandidateWorkHistory"] = [
+            {"id": 1, "candidate": {"id": 11}, "companyName": "Sample Gadgets Ireland",
+             "title": "Accountant", "startDate": 1496332800000, "endDate": 1606842000000},
+        ]
+        return p
+
+    def test_fixture_has_no_company_name(self):
+        p = self._parse_profile()
+        assert all(w.company is None for w in p.work_history)
+        assert p.to_echo(CONFIG)["employers"] == []
+
+    def test_parse_cv_check_reason_has_employer_count(self, bh, log):
+        p = self._setup(bh)
+        out = dr.match_candidates(bh.client, p)
+        reasons = [e["reason"] for e in out["matches"][0]["breakdown"] if e["signal"] == "employer"]
+        assert reasons, out["matches"][0]["breakdown"]
+        assert "7 candidates list this employer" in reasons[0]
+
+    def test_employer_found_in_title_has_count(self, bh, log):
+        p = self._setup(bh)
+        out = dr.match_candidates(bh.client, p)
+        reason = next(e["reason"] for e in out["matches"][0]["breakdown"] if e["signal"] == "employer")
+        assert "found in a job title" in reason
+        assert "7 candidates list this employer" in reason
+
+    def test_title_employer_count_adds_no_searches_beyond_max_employers(self, bh, log):
+        p = self._setup(bh)
+        dr.match_candidates(bh.client, p)
+        employer_searches = queries_matching(bh, "workHistories.companyName")
+        assert 1 <= len(employer_searches) <= CONFIG["caps"]["max_employers"]

@@ -88,6 +88,10 @@ class BullhornClient:
         self._note_search_probe: bool | None = None
         # Serialises the 401 refresh, so parallel calls refresh an expired session once.
         self._refresh_lock = threading.Lock()
+        # Both file type label lists from /settings, read once per client.
+        # None until a read succeeds; a failed read leaves it None (retried).
+        self._file_type_lists: dict[str, list[str]] | None = None
+        self._file_type_lock = threading.Lock()
 
     def prepare_for_parallel(self, entity: str) -> None:
         """Settle the session and the isDeleted gate for ``entity`` before parallel calls.
@@ -198,8 +202,16 @@ class BullhornClient:
             "doc": "application/msword",
             "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "html": "text/html",
+            "htm": "text/html",
             "text": "text/plain",
             "txt": "text/plain",
+            "rtf": "application/rtf",
+            "odt": "application/vnd.oasis.opendocument.text",
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "msg": "application/vnd.ms-outlook",
+            "eml": "message/rfc822",
         }.get(format.lower(), "application/octet-stream")
 
     def _request_multipart(
@@ -290,6 +302,7 @@ class BullhornClient:
         content_type: str,
         external_id: str | None = None,
         file_type: str | None = None,
+        description: str | None = None,
     ) -> dict[str, Any]:
         """Attach a file to an entity record via Bullhorn's raw file upload.
 
@@ -304,7 +317,10 @@ class BullhornClient:
                 "Portfolio" attaches exactly like a consultant upload.
             file_type: The type query param, shown as "File Type" in the UI (e.g.
                 "Original CV"). Replaces the old fileType param, which Bullhorn
-                ignores.
+                ignores. Bullhorn does not validate this label itself (any string
+                is stored), so callers must check it against get_file_types().
+            description: description query param, shown against the file in
+                Bullhorn. Sent only when given.
 
         Returns:
             File attachment metadata from Bullhorn
@@ -315,12 +331,60 @@ class BullhornClient:
             params["externalID"] = external_id
         if file_type is not None:
             params["type"] = file_type
+        if description is not None:
+            params["description"] = description
         return self._request_multipart(
             "PUT",
             f"/file/{entity}/{entity_id}/raw",
             files=files,
             params=params or None,
         )
+
+    def get_file_types(self, entity: str) -> list[str]:
+        """Return the allowed file type labels for an entity's file attachments.
+
+        Bullhorn does not validate the ``type`` label on upload, so the server
+        must. The labels live in tenant settings: one list for
+        ClientCorporation (``clientCorporationFileTypeList``) and one shared by
+        Candidate, JobOrder, ClientContact, Placement and Opportunity
+        (``fileTypeList``). Both are read in one call and cached per client. A
+        failed read raises BullhornAPIError and is not cached, so the next call
+        retries.
+
+        Returns:
+            A copy of the label list (so callers cannot mutate the cache).
+        """
+        with self._file_type_lock:
+            if self._file_type_lists is None:
+                result = self._request(
+                    "GET", "/settings/fileTypeList,clientCorporationFileTypeList"
+                )
+                lists = {}
+                for name in ("fileTypeList", "clientCorporationFileTypeList"):
+                    value = result.get(name)
+                    # A missing or malformed list would make every label look
+                    # invalid for the life of the process, so it is treated as a
+                    # failed read (raised, not cached) rather than an empty list.
+                    if not isinstance(value, list):
+                        raise BullhornAPIError(f"Settings response has no {name} list")
+                    lists[name] = [str(v) for v in value]
+                self._file_type_lists = lists
+            key = (
+                "clientCorporationFileTypeList"
+                if entity == "ClientCorporation"
+                else "fileTypeList"
+            )
+            return list(self._file_type_lists[key])
+
+    def get_entity_files(self, entity: str, entity_id: int) -> list[dict[str, Any]]:
+        """List the files attached to a record via ``GET /entityFiles/{entity}/{id}``.
+
+        Returns the ``EntityFiles`` list (empty if the key is missing). A missing
+        record (404 "Entity not found.") raises BullhornAPIError like any other
+        non-200 response.
+        """
+        result = self._request("GET", f"/entityFiles/{entity}/{entity_id}")
+        return result.get("EntityFiles") or []
 
     def create(self, entity: str, data: dict[str, Any]) -> dict[str, Any]:
         """Create a new entity in Bullhorn.

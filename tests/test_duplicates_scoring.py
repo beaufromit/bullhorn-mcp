@@ -318,6 +318,37 @@ class TestEducation:
         assert 0 < total <= cfg["caps"]["education_points"] + 1e-9
         assert total == pytest.approx(cfg["caps"]["education_points"], abs=0.01)
 
+    def test_education_same_school_two_rows_one_reason(self, cfg):
+        a = prof(ed=[edu("Tarnmoor Institute", "BSc", 2008), edu("Tarnmoor Institute", "MSc", 2010)])
+        b = prof(ed=[edu("Tarnmoor Institute", "BA", 2008), edu("Tarnmoor Institute", "MA", 2010)])
+        res = run(a, b, cfg)
+        assert len(entries(res, "education")) == 1
+        assert "Tarnmoor Institute" in entries(res, "education")[0]["reason"]
+
+    def test_education_points_unchanged_by_dedupe(self, cfg):
+        a = prof(ed=[edu("Tarnmoor Institute", "BSc", 2008), edu("Tarnmoor Institute", "MSc", 2010)])
+        b = prof(ed=[edu("Tarnmoor Institute", "BA", 2008), edu("Tarnmoor Institute", "MA", 2010)])
+        res = run(a, b, cfg)
+        spec = cfg["education"]
+        expected = min(2 * spec["school_and_year"], cfg["caps"]["education_points"])
+        assert pts(res, "education") == pytest.approx(expected, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Identifier differ reasons (F1)
+# ---------------------------------------------------------------------------
+
+class TestDifferReasonPlural:
+    def test_differ_reason_email_address_plural(self, cfg):
+        res = run(prof({"email": "one@example.test"}), prof({"email": "two@example.test"}), cfg)
+        reasons = [e["reason"] for e in entries(res, "email")]
+        assert reasons == ["Different email addresses on file"]
+
+    def test_differ_reason_phone_plural(self, cfg):
+        res = run(prof({"mobile": "0877260864"}), prof({"mobile": "0861234567"}), cfg)
+        reasons = [e["reason"] for e in entries(res, "phone")]
+        assert reasons == ["Different phone numbers on file"]
+
 
 # ---------------------------------------------------------------------------
 # Whole-pair properties
