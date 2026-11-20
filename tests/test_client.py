@@ -1253,17 +1253,18 @@ class TestMetadataDrivenIsDeletedGate:
     """Tests for the metadata-driven isDeleted detection in search/query.
 
     These tests mock /meta to verify detection of entities that genuinely
-    lack the isDeleted field (e.g. Placement, PlacementChangeRequest) and
-    confirm that entities which DO have it still get the clause appended.
+    lack the isDeleted field (e.g. PlacementChangeRequest; Placement is on the
+    static denylist, so /meta is never read for it) and confirm that entities
+    which DO have it still get the clause appended.
     """
 
     @respx.mock
     def test_query_skips_isdeleted_when_meta_lacks_field(self, mock_auth, mock_session):
         """query() omits isDeleted=false when /meta reports the field is absent."""
-        # Mock /meta/Placement to return fields WITHOUT isDeleted
-        respx.get(f"{mock_session.rest_url}/meta/Placement").mock(
+        # Mock /meta/PlacementChangeRequest to return fields WITHOUT isDeleted
+        meta_route = respx.get(f"{mock_session.rest_url}/meta/PlacementChangeRequest").mock(
             return_value=httpx.Response(200, json={
-                "entity": "Placement",
+                "entity": "PlacementChangeRequest",
                 "fields": [
                     {"name": "id", "type": "ID"},
                     {"name": "status", "type": "SCALAR"},
@@ -1271,12 +1272,13 @@ class TestMetadataDrivenIsDeletedGate:
                 ],
             })
         )
-        route = respx.get(f"{mock_session.rest_url}/query/Placement").mock(
+        route = respx.get(f"{mock_session.rest_url}/query/PlacementChangeRequest").mock(
             return_value=httpx.Response(200, json={"data": []})
         )
         client = BullhornClient(mock_auth)
-        client.query("Placement", "dateBegin > 0")
+        client.query("PlacementChangeRequest", "dateBegin > 0")
         url = str(route.calls[0].request.url)
+        assert meta_route.call_count == 1
         assert "isDeleted" not in url
         assert "dateBegin" in url
 
