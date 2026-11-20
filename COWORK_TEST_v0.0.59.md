@@ -9,9 +9,9 @@ Tick each box before starting. The old tool names no longer exist and there are 
 - [ ] Anywhere a skill passes `candidate_id` to the upload request, it now passes `entity="Candidate"` and `entity_id=<id>`. The `candidate_id` key is also gone from `get_file_upload`; the response has `entity`, `entity_id` and, once attached, `attached_entity` and `attached_entity_id`.
 - [ ] Skills that read the success key of a match check now read `passed_match_check_id` (renamed in Sprint 43, m7).
 - [ ] The new-job-setup skill attaches the letterheaded JD to the new job with `attach_file(entity="JobOrder", entity_id=<job id>, upload_id=...)` and no `type`.
-- [ ] Claude Code (not Cowork) has created the test Placement and the test Opportunity with an inline `BullhornClient` script (owner approved 2026-11-13). Their ids are filled in below and recorded in IMPLEMENTATION-PLAN.md and the live test records. A Placement has no `isDeleted`, so it stays as test data.
-  - Test Placement id: `<placement_id>`
-  - Test Opportunity id: `<opportunity_id>`
+- [x] Claude Code (not Cowork) has created the test Placement and the test Opportunity with an inline `BullhornClient` script (owner approved 2026-11-13). Their ids are filled in below and recorded in IMPLEMENTATION-PLAN.md and the live test records. A Placement has no `isDeleted`, so it stays as test data.
+  - Test Placement id: `11720`
+  - Test Opportunity id: `51535`
 
 ## Ground rules (read first, follow throughout)
 
@@ -20,7 +20,7 @@ Tick each box before starting. The old tool names no longer exist and there are 
    - JobOrder **51437**;
    - ClientCorporation **10666**;
    - ClientContact **145635**;
-   - the test Placement `<placement_id>` and the test Opportunity `<opportunity_id>`.
+   - the test Placement `11720` and the test Opportunity `51535`.
    Never attach to, create, update or add notes to any other record. If a step would write anywhere else, stop and tell me.
 2. **Attach only fake test files** that you make yourself, each with "TEST RECORD, CR45 acceptance" in the body or file name. Never attach a real person's document.
 3. **Lead is write-refused.** The one Lead step (2.1) must be refused. If it is not refused, stop and tell me.
@@ -67,11 +67,11 @@ For each step: upload as in rule 4 (with the `entity` and `entity_id` hint where
 - Expected: attached, no type. Contact 145635 has 1 file.
 - [ ] PASS  [ ] FAIL  [ ] BLOCKED
 
-1.5 **A file on the test Placement.** Upload `cr45_t448_placement.docx` with `entity="Placement"`, `entity_id=<placement_id>`. `attach_file(entity="Placement", entity_id=<placement_id>, upload_id=..., type="References")`.
+1.5 **A file on the test Placement.** Upload `cr45_t448_placement.docx` with `entity="Placement"`, `entity_id=11720`. `attach_file(entity="Placement", entity_id=11720, upload_id=..., type="References")`.
 - Expected: attached with `type` `References`.
 - [ ] PASS  [ ] FAIL  [ ] BLOCKED
 
-1.6 **A file on the test Opportunity.** Upload `cr45_t448_opportunity.eml` with `entity="Opportunity"`, `entity_id=<opportunity_id>`. `attach_file(entity="Opportunity", entity_id=<opportunity_id>, upload_id=...)` with no `type`.
+1.6 **A file on the test Opportunity.** Upload `cr45_t448_opportunity.eml` with `entity="Opportunity"`, `entity_id=51535`. `attach_file(entity="Opportunity", entity_id=51535, upload_id=...)` with no `type`.
 - Expected: attached, no type.
 - [ ] PASS  [ ] FAIL  [ ] BLOCKED
 

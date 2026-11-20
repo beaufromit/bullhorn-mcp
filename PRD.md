@@ -4,7 +4,7 @@
 
 The existing Bullhorn MCP server provides read-only access to Bullhorn CRM data (jobs, candidates, placements, and generic entity search/query). This expansion adds record creation, updating, duplicate detection, note management, field metadata resolution, hosted HTTP access, authenticated-user owner stamping, first-class JobOrder create/update workflows, and JobSubmission (shortlist) write tools.
 
-Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15, with CV files delivered through single-use upload tickets rather than base64 per the FR-15 Amendment), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), tearsheet (hotlist) management tools (FR-21), a read-only external people search via Perplexity for sourcing candidates not yet in Bullhorn (FR-22), reviewed CV parsing that writes work history, education and skills (FR-15 Amendment 2), candidate duplicate detection by weighted evidence (FR-23), and attaching uploaded files that are not CVs to records (FR-24).
+Subsequent change requests extended the scope to include: candidate creation and CV parsing (FR-15, with CV files delivered through single-use upload tickets rather than base64 per the FR-15 Amendment), note reading and full-text search (FR-16), email/UserMessage search (FR-17), single-record and pipeline read tools — `get_company`, `get_contact`, `get_job_submissions` (FR-18), a paginated-envelope response format across all list/search/query tools (FR-19), Candidate record updates via `update_record` (FR-20), tearsheet (hotlist) management tools (FR-21), a read-only external people search via Perplexity for sourcing candidates not yet in Bullhorn (FR-22), reviewed CV parsing that writes work history, education and skills (FR-15 Amendment 2), candidate duplicate detection by weighted evidence (FR-23), attaching uploaded files that are not CVs to records, with file text previewed and fetched in full on demand (FR-24), and a job start date that defaults to today and is stored the way the Bullhorn UI stores it (FR-13 Amendment).
 
 The MCP serves two classes of consumer:
 
@@ -160,6 +160,12 @@ The MCP shall provide first-class tools for creating and updating JobOrder recor
 - `update_job` shall update an existing JobOrder using only caller-supplied fields after metadata/alias resolution.
 - JobOrder aliases shall include `"published description"` and `"public description"` resolving to `publicDescription`, and `"publish on website"` resolving to `customText12`.
 - `update_job` shall not strip or block the `title` field; `title` is valid on JobOrder.
+
+### FR-13 Amendment: Job Start Date (CR49)
+
+- `create_job` shall set the JobOrder start date to today's date when none is given, so a job is never created without one. "Today" is the date in the consultants' time zone (Ireland), not the server's or Bullhorn's.
+- A start date, whether given or defaulted, shall be stored the way the Bullhorn UI stores it (midnight America/New_York on that date), so the UI shows the same date that was given.
+- `create_job` and `update_job` shall accept the start date as a `YYYY-MM-DD` date or as epoch milliseconds, and shall refuse any other value with a clear error. On `update_job`, a start date that is explicitly empty is set to today, and an update that does not mention the start date leaves the existing one unchanged.
 
 ### FR-14: JobSubmission (Shortlist) Create Tools
 
@@ -318,6 +324,8 @@ The MCP shall provide a `people_search_perplexity` tool for finding people (cand
 - `attach_file(entity, entity_id, upload_id, type?, description?)` shall attach an uploaded file, without parsing it, to a Candidate, ClientContact, ClientCorporation, JobOrder, Placement or Opportunity, under the file's original name.
 - A `type` label is optional. If given, it shall be one of the values Bullhorn allows for that entity's attachments, read from the tenant's file type settings; any other value shall be refused with the allowed list.
 - The CV tools shall accept only CV file types and shall point to `attach_file` for anything else.
+- Read tools that return file attachments shall return at most the first 500 characters of each file's description, marked as truncated with its full length (CR50). Bullhorn's stored description is never changed.
+- `get_file_text(entity, entity_id, file_id)` shall return one attached file's full description text, in pages when it is long, so no detail is lost to the truncation (CR50).
 
 ## 7. Non-Functional Requirements
 
@@ -517,11 +525,15 @@ As a consultant or AI-assisted workflow, I want to create a Bullhorn JobOrder fr
 
 **US-25: JobOrder creation applies safe defaults**
 As a consultant, I want common JobOrder defaults to be applied when omitted, so that created jobs have the expected initial state.
-- **Acceptance**: Omitting `status`, `isOpen`, `customText12`, or owner causes `create_job` to send `"Accepting Candidates"`, `true`, `0`, and the authenticated user's Bullhorn owner respectively. Caller-provided owner always wins.
+- **Acceptance**: Omitting `status`, `isOpen`, `customText12`, or owner causes `create_job` to send `"Accepting Candidates"`, `true`, `0`, and the authenticated user's Bullhorn owner respectively. Caller-provided owner always wins. Omitting the start date sets today (US-55).
 
 **US-26: Update a JobOrder**
 As a consultant or AI-assisted workflow, I want to update JobOrder fields through a dedicated tool, so that reviewed job descriptions and website settings can be written back to Bullhorn.
 - **Acceptance**: Calling `update_job(job_id, {"published description": "..."})` resolves the alias to `publicDescription`, updates the JobOrder, and returns the full updated record. Updating `title` on a JobOrder succeeds without ClientContact title stripping.
+
+**US-55: A job's start date defaults to today and shows correctly**
+As a consultant, I want a new job's start date to default to today unless I state one, and any date I state to show in Bullhorn exactly as I gave it, so that jobs created through Claude look the same as jobs I enter in the Bullhorn UI.
+- **Acceptance**: `create_job` without a start date creates a job whose Start Date in the Bullhorn UI is today's date in Ireland, including just after midnight Irish time. `create_job` or `update_job` with `"Start Date": "2027-02-01"` shows 01/02/2027 in the UI, in summer and winter alike. `update_job` without a start date leaves the job's existing date unchanged. Claude never has to work out a timestamp.
 
 ### JobSubmission Writes
 
@@ -576,6 +588,10 @@ As a consultant, after Claude builds the letterheaded JD for a new job, I want C
 **US-54: Attach a document that isn't a CV**
 As a consultant, I want to attach a cover letter, reference, contract, fee agreement or similar document to the right candidate, contact, company or placement, so that it's on the record without being run through the CV parser.
 - **Acceptance**: `attach_file` attaches the file with the `type` I ask for when it's valid for that record (for example `Cover Letter` on a Candidate, `Fee Agreement` on a ClientCorporation). An invalid label is refused with the allowed list. A Lead is refused with a clear message. Nothing is parsed, and no Candidate fields change.
+
+**US-56: Read a file's text only when I need it**
+As a consultant, I want Claude to see only a short preview of each attached file's text when it reads a record, and to fetch one file's full text when the task needs it, so that a record with many CVs or contracts doesn't flood or break the chat, and no detail is out of reach.
+- **Acceptance**: `get_company` on a company with large files returns every file with at most 500 characters of description, `description_truncated: true` and `description_length`. `get_file_text` on one of those files returns its whole text (in pages over the page size). The Files tab in Bullhorn is unchanged.
 
 ### Note Reading and Search
 
