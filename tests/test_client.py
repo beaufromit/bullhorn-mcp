@@ -1323,19 +1323,20 @@ class TestMetadataDrivenIsDeletedGate:
     @respx.mock
     def test_meta_result_is_cached(self, mock_auth, mock_session):
         """_entity_has_isdeleted() fetches /meta once and caches the result."""
-        meta_route = respx.get(f"{mock_session.rest_url}/meta/Placement").mock(
+        # Not Placement: it is on the static denylist, so /meta is never read for it.
+        meta_route = respx.get(f"{mock_session.rest_url}/meta/JobSubmission").mock(
             return_value=httpx.Response(200, json={
-                "entity": "Placement",
+                "entity": "JobSubmission",
                 "fields": [{"name": "id", "type": "ID"}],
             })
         )
-        respx.get(f"{mock_session.rest_url}/query/Placement").mock(
+        respx.get(f"{mock_session.rest_url}/query/JobSubmission").mock(
             return_value=httpx.Response(200, json={"data": []})
         )
         client = BullhornClient(mock_auth)
         # Call twice
-        client.query("Placement", "id > 0")
-        client.query("Placement", "id > 1")
+        client.query("JobSubmission", "id > 0")
+        client.query("JobSubmission", "id > 1")
         # /meta should only have been called once
         assert meta_route.call_count == 1
 
@@ -1788,6 +1789,21 @@ class TestFileTypes:
 
         assert client.get_file_types("ClientCorporation") == self.SETTINGS["clientCorporationFileTypeList"]
         assert route.call_count == 2
+
+    @respx.mock
+    def test_get_file_types_lock_not_held_during_http(self, mock_auth, mock_session):
+        """The /settings read runs outside the lock, so a cold call never queues behind it."""
+        client = BullhornClient(mock_auth)
+        held = []
+
+        def answer(request):
+            held.append(client._file_type_lock.locked())
+            return httpx.Response(200, json=self.SETTINGS)
+
+        respx.get(f"{mock_session.rest_url}{self.URL_PATH}").mock(side_effect=answer)
+
+        assert client.get_file_types("Candidate") == self.SETTINGS["fileTypeList"]
+        assert held == [False]
 
 
 class TestGetEntityFiles:

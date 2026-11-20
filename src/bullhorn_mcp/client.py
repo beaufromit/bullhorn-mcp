@@ -21,7 +21,9 @@ def _escape_where_literal(value: str) -> str:
 
 # Entities that do not expose an isDeleted field on /search or /query.
 # The auto-exclude-deleted clause is silently skipped for these entities.
-_ENTITIES_WITHOUT_ISDELETED: frozenset[str] = frozenset({"ClientCorporation", "UserMessage"})
+# Placement: /meta has no isDeleted and fields=isDeleted answers 400 (checked live
+# 2026-11-20); listed so a /meta outage does not make attach_file ask for it.
+_ENTITIES_WITHOUT_ISDELETED: frozenset[str] = frozenset({"ClientCorporation", "Placement", "UserMessage"})
 
 # Default fields for common entities
 DEFAULT_FIELDS = {
@@ -354,27 +356,33 @@ class BullhornClient:
         Returns:
             A copy of the label list (so callers cannot mutate the cache).
         """
-        with self._file_type_lock:
-            if self._file_type_lists is None:
-                result = self._request(
-                    "GET", "/settings/fileTypeList,clientCorporationFileTypeList"
-                )
-                lists = {}
-                for name in ("fileTypeList", "clientCorporationFileTypeList"):
-                    value = result.get(name)
-                    # A missing or malformed list would make every label look
-                    # invalid for the life of the process, so it is treated as a
-                    # failed read (raised, not cached) rather than an empty list.
-                    if not isinstance(value, list):
-                        raise BullhornAPIError(f"Settings response has no {name} list")
-                    lists[name] = [str(v) for v in value]
-                self._file_type_lists = lists
-            key = (
-                "clientCorporationFileTypeList"
-                if entity == "ClientCorporation"
-                else "fileTypeList"
+        # The lock guards only the cache write, never the HTTP read: two cold
+        # calls may both read /settings (harmless), but none waits on another's
+        # request, 401 refresh and retry.
+        lists = self._file_type_lists
+        if lists is None:
+            result = self._request(
+                "GET", "/settings/fileTypeList,clientCorporationFileTypeList"
             )
-            return list(self._file_type_lists[key])
+            lists = {}
+            for name in ("fileTypeList", "clientCorporationFileTypeList"):
+                value = result.get(name)
+                # A missing or malformed list would make every label look
+                # invalid for the life of the process, so it is treated as a
+                # failed read (raised, not cached) rather than an empty list.
+                if not isinstance(value, list):
+                    raise BullhornAPIError(f"Settings response has no {name} list")
+                lists[name] = [str(v) for v in value]
+            with self._file_type_lock:
+                if self._file_type_lists is None:
+                    self._file_type_lists = lists
+                lists = self._file_type_lists
+        key = (
+            "clientCorporationFileTypeList"
+            if entity == "ClientCorporation"
+            else "fileTypeList"
+        )
+        return list(lists[key])
 
     def get_entity_files(self, entity: str, entity_id: int) -> list[dict[str, Any]]:
         """List the files attached to a record via ``GET /entityFiles/{entity}/{id}``.

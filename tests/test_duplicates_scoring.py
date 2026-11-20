@@ -333,6 +333,30 @@ class TestEducation:
         expected = min(2 * spec["school_and_year"], cfg["caps"]["education_points"])
         assert pts(res, "education") == pytest.approx(expected, abs=0.01)
 
+    def test_education_same_school_two_spellings_one_reason(self, cfg):
+        """m3: rows paired by the fuzzy match merge even when spelled differently."""
+        a = prof(ed=[edu("Tarnmoor Institute", "BSc", 2008), edu("Tarnmoor Institute of Technology", "MSc", 2010)])
+        b = prof(ed=[edu("Tarnmoor Institute of Technology", "BA", 2008), edu("Tarnmoor Institute", "MA", 2010)])
+        res = run(a, b, cfg)
+        assert len(entries(res, "education")) == 1
+        spec = cfg["education"]
+        expected = min(2 * spec["school_and_year"], cfg["caps"]["education_points"])
+        assert pts(res, "education") == pytest.approx(expected, abs=0.01)
+
+    def test_education_merged_reason_true_of_every_pair(self, cfg):
+        """m4: a within-a-year pair merged with a plain one drops the year clause."""
+        a = prof(ed=[edu("Tarnmoor Institute", "BSc", 2008), edu("Tarnmoor Institute", "PhD", 2020)])
+        b = prof(ed=[edu("Tarnmoor Institute", "BA", 2008), edu("Tarnmoor Institute", "MA", 2012)])
+        res = run(a, b, cfg)
+        [entry] = entries(res, "education")
+        assert entry["reason"] == "Studied at the same school (Tarnmoor Institute)"
+
+    def test_education_reason_keeps_year_when_every_pair_is_close(self, cfg):
+        a = prof(ed=[edu("Tarnmoor Institute", "BSc", 2008), edu("Tarnmoor Institute", "MSc", 2010)])
+        b = prof(ed=[edu("Tarnmoor Institute", "BA", 2008), edu("Tarnmoor Institute", "MA", 2010)])
+        [entry] = entries(run(a, b, cfg), "education")
+        assert entry["reason"] == "Studied at the same school (Tarnmoor Institute), graduating within a year"
+
 
 # ---------------------------------------------------------------------------
 # Identifier differ reasons (F1)

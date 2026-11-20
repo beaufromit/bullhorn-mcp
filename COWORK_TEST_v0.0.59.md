@@ -51,7 +51,7 @@ Create these in your working folder. Use real files, not renamed text.
 
 For each step: upload as in rule 4 (with the `entity` and `entity_id` hint where shown), call `attach_file`, then check `get_file_upload` and read the files back where you can.
 
-1.1 **JD on a job, no label.** `request_file_upload(filename="cr45_t448_jd.docx", entity="JobOrder", entity_id=51437)`. The response echoes `entity` and `entity_id`. Then `attach_file(entity="JobOrder", entity_id=51437, upload_id=..., description="CR45 acceptance JD")` with no `type`.
+1.1 **JD on a job, no label.** `request_file_upload(filename="cr45_t448_jd.docx", entity="JobOrder", entity_id=51437)`. After the file is sent, `get_file_upload(upload_id)` shows `entity` JobOrder and `entity_id` 51437 (`request_file_upload` itself does not echo them). Then `attach_file(entity="JobOrder", entity_id=51437, upload_id=..., description="CR45 acceptance JD")` with no `type`.
 - Expected: `attached: true`, a `file_id`, `filename` `cr45_t448_jd.docx`, `type` empty or null, no warnings. Job 51437 now has 5 files, the new one has no type, and the four baseline files are unchanged.
 - [ ] PASS  [ ] FAIL  [ ] BLOCKED
 
@@ -121,7 +121,7 @@ For each step: upload as in rule 4 (with the `entity` and `entity_id` hint where
 - Expected: `parse_cv` works on the new upload; additions are written and any differing field comes back in `pending_overwrites` and is NOT changed (do not accept any). The CV is attached with `type` `Original CV`. skillSet still holds Excel, IFRS and Power BI, each once. `get_file_upload` shows `attached_entity` Candidate and `attached_entity_id` 173063.
 - [ ] PASS  [ ] FAIL  [ ] BLOCKED
 
-4.2 Confirm the hint from 4.1 was echoed by `request_file_upload` (`entity` Candidate, `entity_id` 173063) and that the CV kept the label `Original CV` after `attach_cv`.
+4.2 Confirm `get_file_upload` shows the hint from 4.1 (`entity` Candidate, `entity_id` 173063; `request_file_upload` itself does not echo it) and that the CV kept the label `Original CV` after `attach_cv`.
 - [ ] PASS  [ ] FAIL  [ ] BLOCKED
 
 ## Part 5: the journal (owner runs this on the server)

@@ -5369,10 +5369,11 @@ class TestCR16DeletedRecordFilter:
                 captured["url"] = str(request.url)
                 return httpx.Response(200, json={"data": []})
 
-            respx.get(f"{mock_session.rest_url}/search/Placement").mock(side_effect=capture)
+            # Not Placement: it has no isDeleted field and is on the client's denylist.
+            respx.get(f"{mock_session.rest_url}/search/JobOrder").mock(side_effect=capture)
 
             with patch.object(server, "get_client", return_value=real_client):
-                server.search_entities(entity="Placement", query="status:Approved")
+                server.search_entities(entity="JobOrder", query="status:Accepting")
 
         assert "isDeleted" in captured["url"]
 
@@ -10097,6 +10098,17 @@ class TestConfigureLogging:
         server.upload_box_resource()
         assert "MCP App resource read" in stream.getvalue()
         assert "INFO bullhorn_mcp.server" in stream.getvalue()
+
+    def test_logger_name_does_not_depend_on_module_name(self):
+        """Under `python -m bullhorn_mcp.server` __name__ is "__main__"; the logger must
+        still sit under bullhorn_mcp so _configure_logging's handler receives its lines."""
+        import runpy
+        import warnings
+        with patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}), warnings.catch_warnings():
+            # runpy warns that the module is already imported; expected here.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            ns = runpy.run_module("bullhorn_mcp.server", run_name="__not_the_package__")
+        assert ns["_logger"].name == "bullhorn_mcp.server"
 
     def test_main_logging_idempotent(self):
         server._configure_logging()

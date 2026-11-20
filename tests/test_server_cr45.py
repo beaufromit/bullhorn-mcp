@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from bullhorn_mcp import server
+from bullhorn_mcp import uploads as server_uploads
 from bullhorn_mcp.client import BullhornClient
 # Autouse / shared fixtures and helpers live in test_server.py and test_server_cr46.py.
 from tests.test_server import (  # noqa: F401
@@ -132,8 +133,12 @@ class _FileBullhorn:
     """respx dispatcher for attach_file: records every request and answers like Bullhorn."""
 
     def __init__(self, records=None, deleted=(), files=None, files_status=200, settings_status=200,
-                 put_status=200, types=None, record_status=200):
+                 put_status=200, types=None, record_status=200, record_error="server error",
+                 files_error="nope", meta_status=200):
         self.record_status = record_status  # non-200: the record read fails this way
+        self.record_error = record_error
+        self.files_error = files_error
+        self.meta_status = meta_status
         self.records = records  # {(entity, id)} that exist; None = every id exists
         self.deleted = set(deleted)
         self.files = files or []
@@ -149,6 +154,8 @@ class _FileBullhorn:
         self.requests.append((method, path, request))
         parts = path.strip("/").split("/")
         if method == "GET" and parts[0] == "meta":
+            if self.meta_status != 200:
+                return httpx.Response(self.meta_status, json={"errorMessage": "meta down"})
             fields = [] if parts[1] in _NO_ISDELETED else [{"name": "isDeleted", "type": "SCALAR"}]
             return httpx.Response(200, json={"entity": parts[1], "fields": fields})
         if method == "GET" and parts[0] == "settings":
@@ -160,7 +167,7 @@ class _FileBullhorn:
         if method == "GET" and parts[0] == "entity" and len(parts) == 3:
             entity, eid = parts[1], int(parts[2])
             if self.record_status != 200:
-                return httpx.Response(self.record_status, json={"errorMessage": "server error"})
+                return httpx.Response(self.record_status, json={"errorMessage": self.record_error})
             if self.records is not None and (entity, eid) not in self.records:
                 return httpx.Response(404, json={"errorMessage": "Entity not found."})
             data = {"id": eid}
@@ -169,7 +176,7 @@ class _FileBullhorn:
             return httpx.Response(200, json={"data": data})
         if method == "GET" and parts[0] == "entityFiles":
             if self.files_status != 200:
-                return httpx.Response(self.files_status, json={"errorMessage": "nope"})
+                return httpx.Response(self.files_status, json={"errorMessage": self.files_error})
             return httpx.Response(200, json={"EntityFiles": self.files})
         if method == "PUT" and parts[0] == "file":
             if self.put_status != 200:
@@ -342,6 +349,24 @@ class TestAttachFile:
         assert bh.find("GET", "/entity/Placement/11")[0].url.params["fields"] == "id"
         assert bh.find("GET", "/entity/Opportunity/12")[0].url.params["fields"] == "id,isDeleted"
 
+    def test_placement_no_isdeleted_field_requested_when_meta_down(self, fstack):
+        bh = _FileBullhorn(meta_status=500)
+        data, _ = _attach(fstack, bh, entity="Placement", entity_id=11)
+
+        assert data["attached"] is True
+        assert bh.find("GET", "/entity/Placement/11")[0].url.params["fields"] == "id"
+
+    @pytest.mark.parametrize("status", [400, 403, 500])
+    def test_non_404_error_with_404_in_body_is_not_record_not_found(self, fstack, status):
+        bh = _FileBullhorn(record_status=status, record_error="request 404-140455 failed")
+        upload_id = _jd()
+        raw = fstack(bh, server.attach_file, entity="JobOrder", entity_id=140455, upload_id=upload_id)
+
+        assert raw.startswith("ERROR:") and str(status) in raw
+        assert "record_not_found" not in raw
+        assert bh.writes() == []
+        assert _status(upload_id) == "received"
+
     def test_upload_not_found(self, fstack):
         bh = _FileBullhorn()
         data = fstack.json(bh, server.attach_file, entity="JobOrder", entity_id=1, upload_id="nope")
@@ -352,9 +377,11 @@ class TestAttachFile:
     def test_upload_expired(self, fstack):
         bh = _FileBullhorn()
         upload_id = _jd()
-        rec = server.upload_store._uploads[upload_id]
-        rec.status = "expired"
-        data, _ = _attach(fstack, bh, upload_id=upload_id)
+        # Drive the store's own clock past the received file's lifetime.
+        real_clock = server.upload_store._clock
+        later = real_clock() + server_uploads.FILE_TTL_SECONDS + 1
+        with patch.object(server.upload_store, "_clock", lambda: later):
+            data, _ = _attach(fstack, bh, upload_id=upload_id)
 
         assert data["error"] == "upload_expired"
         assert bh.requests == []
@@ -483,6 +510,16 @@ class TestAttachFile:
         assert "could not read existing files" in logged
         assert "JD.docx" not in logged
 
+    def test_entity_files_read_failure_log_leaves_out_bullhorn_body(self, fstack, caplog):
+        bh = _FileBullhorn(files_status=500, files_error="Jane Doe 0871234567")
+        with caplog.at_level("WARNING"):
+            data, _ = _attach(fstack, bh)
+
+        assert data["attached"] is True
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert "could not read existing files of JobOrder 51437" in logged and "500" in logged
+        assert "Jane" not in logged and "0871234567" not in logged
+
     def test_write_payload_exact(self, fstack):
         bh = _FileBullhorn()
         upload_id = _seed_upload(filename="Photo ID.png", data=PNG_BYTES)
@@ -500,6 +537,20 @@ class TestAttachFile:
         assert b'filename="Photo ID.png"' in body
         assert b"Content-Type: image/png" in body
         assert PNG_BYTES in body
+
+    @pytest.mark.parametrize("description, sent", [
+        ("  Passport scan  ", "Passport scan"),
+        ("", None),
+        ("   ", None),
+    ])
+    def test_description_stripped_and_blank_left_out(self, fstack, description, sent):
+        bh = _FileBullhorn()
+        _attach(fstack, bh, description=description)
+
+        params = dict(bh.find("PUT", "/file/")[0].url.params)
+        assert params.get("description") == sent
+        if sent is None:
+            assert "description" not in params
 
     def test_no_candidate_fields_written(self, fstack):
         bh = _FileBullhorn()

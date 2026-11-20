@@ -990,6 +990,9 @@ def _score_employers(a, b, context, n, config, breakdown) -> None:
         breakdown.append(_entry("employer", points, reason))
 
 
+_WITHIN_A_YEAR = ", graduating within a year"
+
+
 def _score_education(a, b, config, breakdown) -> None:
     """A capped tiebreaker that is never negative (CR44 design, D4)."""
     spec = config["education"]
@@ -1001,7 +1004,7 @@ def _score_education(a, b, config, breakdown) -> None:
             if sx and sy and _employers_match(sx, sy, config):
                 close = x.year is not None and y.year is not None and abs(x.year - y.year) <= spec["year_tolerance"]
                 if close:
-                    pairs.append((spec["school_and_year"], i, j, f"Studied at the same school ({x.school}), graduating within a year", ("school", sx, sy)))
+                    pairs.append((spec["school_and_year"], i, j, f"Studied at the same school ({x.school}){_WITHIN_A_YEAR}", ("school", sx, sy)))
                 else:
                     pairs.append((spec["school"], i, j, f"Studied at the same school ({x.school})", ("school", sx, sy)))
                 continue
@@ -1017,10 +1020,23 @@ def _score_education(a, b, config, breakdown) -> None:
         used_b.add(j)
         points = min(points, remaining)
         remaining -= points
-        if pair_key in shown:
+        # Schools were paired with the fuzzy employer match, so the same school
+        # spelled two ways must merge too (exact keys only for degrees).
+        same = next((k for k in shown if k == pair_key or (
+            k[0] == "school" == pair_key[0]
+            and _employers_match(k[1], pair_key[1], config)
+            and _employers_match(k[2], pair_key[2], config)
+        )), None)
+        if same is not None:
             # Points still count (capped above); the reason is not repeated.
-            shown[pair_key]["_raw"] += points
-            shown[pair_key]["points"] = round(shown[pair_key]["_raw"], 2)
+            entry = shown[same]
+            entry["_raw"] += points
+            entry["points"] = round(entry["_raw"], 2)
+            if same[0] == "school" and entry["reason"].endswith(_WITHIN_A_YEAR) \
+                    and not reason.endswith(_WITHIN_A_YEAR):
+                # Merged pairs say different things (one graduated within a year,
+                # one did not): keep only what is true of all of them.
+                entry["reason"] = entry["reason"][: -len(_WITHIN_A_YEAR)]
             continue
         shown[pair_key] = _entry("education", points, reason)
         breakdown.append(shown[pair_key])

@@ -46,7 +46,9 @@ from .uploads import (
 from dotenv import load_dotenv
 load_dotenv()
 
-_logger = logging.getLogger(__name__)
+# Named explicitly, not from __name__: under `python -m bullhorn_mcp.server` __name__ is
+# "__main__", which is outside the bullhorn_mcp logger that _configure_logging sets up.
+_logger = logging.getLogger("bullhorn_mcp.server")
 
 
 def _name_replaced_warning(entity: str) -> str:
@@ -3051,7 +3053,7 @@ def request_file_upload(filename: str, entity: str | None = None, entity_id: int
 
     Args:
         filename: The file's original name exactly as the user attached it (e.g. "Jane_Doe_CV.pdf").
-        entity: Optional record the file is for: Candidate, ClientContact, ClientCorporation, JobOrder, Placement or Opportunity. Give it with entity_id or not at all.
+        entity: Optional record the file is for: Candidate, ClientContact, ClientCorporation, JobOrder, Placement or Opportunity (spelled exactly so, case included). Give it with entity_id or not at all.
         entity_id: Optional id of that record.
     """
     unavailable = _uploads_unavailable()
@@ -3163,7 +3165,7 @@ def attach_file(
     with no label. A CV to be parsed uses parse_cv and the CV tools instead.
 
     Args:
-        entity: The record type to attach to.
+        entity: The record type to attach to, spelled exactly as listed above (case included).
         entity_id: The record's id.
         upload_id: The id from request_file_upload; its status must be 'received'.
         type: Optional file type label (matched ignoring case).
@@ -3215,7 +3217,9 @@ def attach_file(
                 fields="id,isDeleted" if client._entity_has_isdeleted(entity) else "id",
             )
         except BullhornAPIError as e:
-            if "404" in str(e):
+            # Match the status only: the message also carries the response body,
+            # which can contain "404" on a 400/403/500.
+            if str(e).startswith("API request failed: 404 "):
                 record = None
             else:
                 return f"ERROR: {e}"
@@ -3240,12 +3244,17 @@ def attach_file(
                     f"(file id {', '.join(same)}). The new file was added alongside it."
                 )
         except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as e:
-            # Best effort: no filename or personal data in the log.
-            _logger.warning("attach_file: could not read existing files of %s %s: %s", entity, entity_id, e)
+            # Best effort: no filename or personal data in the log, so the
+            # Bullhorn response body (after " - ") is left out.
+            _logger.warning(
+                "attach_file: could not read existing files of %s %s: %s",
+                entity, entity_id, str(e).split(" - ", 1)[0],
+            )
         result = client.attach_file(
             entity, entity_id, upload["data"], filename,
             client._guess_content_type(upload["extension"]),
-            external_id=_CV_FILE_EXTERNAL_ID, file_type=label, description=description,
+            external_id=_FILE_EXTERNAL_ID, file_type=label,
+            description=(description or "").strip() or None,
         )
         file_id = (result or {}).get("fileId")
         upload_store.mark_attached(upload_id, file_id, entity, entity_id)
@@ -3498,6 +3507,9 @@ def create_candidate_from_cv(
 # 500 DUPLICATE_VALUE, and fileType is ignored. These two values attach exactly
 # like a consultant's upload (type "Original CV", externalID "Portfolio").
 _CV_FILE_EXTERNAL_ID = "Portfolio"
+# attach_file sends the same externalID for every file; named apart so it does
+# not read as CV-only.
+_FILE_EXTERNAL_ID = _CV_FILE_EXTERNAL_ID
 _CV_FILE_TYPE = "Original CV"
 
 # Keys the parser emits that are never Candidate fields; dropped by name when /meta

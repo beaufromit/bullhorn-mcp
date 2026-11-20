@@ -12,7 +12,7 @@ import respx
 from bullhorn_mcp import duplicate_retrieval as dr
 from bullhorn_mcp.auth import BullhornAuth
 from bullhorn_mcp.client import BullhornClient
-from bullhorn_mcp.duplicates import CandidateProfile, WorkEntry, default_match_config
+from bullhorn_mcp.duplicates import CandidateProfile, WorkEntry, _agree_points, default_match_config
 
 CONFIG = default_match_config()
 
@@ -540,3 +540,61 @@ class TestEmployerCountFromTitle:
         dr.match_candidates(bh.client, p)
         employer_searches = queries_matching(bh, "workHistories.companyName")
         assert 1 <= len(employer_searches) <= CONFIG["caps"]["max_employers"]
+
+    @pytest.mark.parametrize("searched, expected", [(0, 3), (1, 2), (2, 1), (3, 0)])
+    def test_title_employer_count_capped_by_room_left(self, searched, expected):
+        """Searches already run for the profile's own employers use up max_employers."""
+        assert CONFIG["caps"]["max_employers"] == 3
+        title_keys = ["alpha", "bravo", "charlie", "delta", "echo"]
+        run = Mock(return_value={"total": 4, "ids": []})
+        context = dr.MatchContext()
+        with patch.object(dr, "employers_in_titles", return_value=title_keys), \
+             patch.object(dr, "_run_search", run):
+            dr._count_title_employers(None, None, [], context, [], searched, CONFIG)
+        assert run.call_count == expected
+        assert sorted(context.employer_counts) == title_keys[:expected]
+
+    def test_title_employer_count_skips_keys_already_counted(self):
+        """An employer counted by the main lookup is not searched again or charged to room."""
+        run = Mock(return_value={"total": 4, "ids": []})
+        context = dr.MatchContext()
+        context.employer_counts["alpha"] = 9
+        with patch.object(dr, "employers_in_titles", return_value=["alpha", "bravo", "charlie", "delta"]), \
+             patch.object(dr, "_run_search", run):
+            dr._count_title_employers(None, None, [], context, [], 1, CONFIG)
+        assert run.call_count == 2
+        assert context.employer_counts == {"alpha": 9, "bravo": 4, "charlie": 4}
+
+    def _employer_entry(self, bh, p):
+        out = dr.match_candidates(bh.client, p)
+        return next(e for e in out["matches"][0]["breakdown"] if e["signal"] == "employer")
+
+    def test_title_employer_points_use_the_count(self, bh, log):
+        """M1 (cycle 1 review): F3 also changes the points, not only the reason.
+
+        A title-found employer is now scored from its count (7 of n=5000), as a
+        company-field employer already was, instead of employer.default_u.
+        """
+        p = self._setup(bh)
+        counted = self._employer_entry(bh, p)["points"]
+        with patch.object(dr, "_count_title_employers"):
+            uncounted = self._employer_entry(bh, self._parse_profile())["points"]
+        spec = CONFIG["employer"]
+        delta = _agree_points(spec["m"], 7 / bh.n_total) - _agree_points(spec["m"], spec["default_u"])
+        assert counted == pytest.approx(10.24, abs=0.01)
+        assert uncounted == pytest.approx(8.41, abs=0.01)
+        assert counted - uncounted == pytest.approx(delta, abs=0.02)
+
+    def test_common_title_employer_scores_below_default(self, bh, log):
+        """A widely listed employer found in a title now scores lower than default_u gave."""
+        p = self._parse_profile()
+        bh.on_search(lambda q: "email:" in q and "isDeleted:0" in q, ids=[11])
+        bh.on_search(lambda q: "workHistories.companyName" in q and "email:" not in q, ids=[11], total=400)
+        bh.candidates = {11: {"id": 11, "firstName": "Testcase", "lastName": "Cr-Fortyone",
+                              "email": "testcase.cr41@example.com", "companyName": None}}
+        bh.child_rows["CandidateWorkHistory"] = [
+            {"id": 1, "candidate": {"id": 11}, "companyName": "Sample Gadgets Ireland",
+             "title": "Accountant", "startDate": 1496332800000, "endDate": 1606842000000},
+        ]
+        common = self._employer_entry(bh, p)["points"]
+        assert common < 8.41
