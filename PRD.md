@@ -591,7 +591,7 @@ As a consultant, I want to attach a cover letter, reference, contract, fee agree
 
 **US-56: Read a file's text only when I need it**
 As a consultant, I want Claude to see only a short preview of each attached file's text when it reads a record, and to fetch one file's full text when the task needs it, so that a record with many CVs or contracts doesn't flood or break the chat, and no detail is out of reach.
-- **Acceptance**: `get_company` on a company with large files returns every file with at most 500 characters of description, `description_truncated: true` and `description_length`. `get_file_text` on one of those files returns its whole text (in pages over the page size). The Files tab in Bullhorn is unchanged.
+- **Acceptance**: Every file a read returns (for example `get_company` with `fields="fileAttachments[50](id,name,description)"`; Bullhorn returns only the first 5 files unless the field asks for more) carries at most 500 characters of description, plus `description_truncated: true` and `description_length` when it was cut. `get_file_text` on one of those files returns its whole text (in pages over the page size). The Files tab in Bullhorn is unchanged.
 
 ### Note Reading and Search
 

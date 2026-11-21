@@ -2,7 +2,15 @@
 
 ## PRD Validation Notes
 
-**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29), deployed 2026-09-29; T40.8 live acceptance found CV parsing broken since CR19 and is blocked on CR42. **Sprint 40B (CR42 resume parser parameters) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.53 at 843 tests passing** (2026-09-29). T40B.3 live smoke check passed. v0.0.53 is deployed; the T40B.4 (T40.8) re-run created test Candidate 173063 and then crashed on skills, which led to CR43. **Sprint 41 (CR43) is COMPLETE, reviewed (3 cycles; owner asked for minors fixed too), and tagged v0.0.54 at 931 tests passing** (2026-10-02), not deployed (only v0.0.56 is deployed). **Sprint 42 (CR44 part 1, pure scorer) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.55 at 1,198 tests passing** (2026-10-02), not deployed. **Sprint 42B (CR44 part 2) is REVIEWED (3 cycles) and tagged v0.0.56 at 1,294 tests (2026-10-06)**, deployed 2026-10-06; its acceptance test failed on the CV write path, which became CR46. **Sprint 42C (CR47 list_tearsheets) is COMPLETE, reviewed (2 cycles), tagged v0.0.57 at 1,306 tests and deployed** (2026-11-11). **Sprint 43 (CR46 acceptance fixes, plus CR48) is COMPLETE, reviewed (5 cycles), tagged v0.0.58 at 1,417 tests, deployed, T43.15 passed** (2026-11-13). 42 MCP tools. **Sprint 44 (CR45 generic file upload and `attach_file`, plus carried fixes F1 to F10) is COMPLETE, reviewed (3 cycles; owner asked for all minors fixed), and tagged v0.0.59 at 1,546 tests passing** (2026-11-20), deployed 2026-11-20, **T44.8 passed** (2026-11-20). 43 tools. CR49 (Sprint 45, v0.0.60) and CR50 (Sprint 46, v0.0.61) are APPROVED, not yet planned.
+**Current baseline:** All sprints through Sprint 37B (CR39 apostrophe escaping) are implemented, tested, and tagged. **Sprint 37 (CR36 housekeeping) is COMPLETE, reviewed, and tagged v0.0.48 at 719 tests passing** (2026-09-23). **Sprint 37B (CR39 apostrophe escaping) is COMPLETE, reviewed (1 clean cycle), and tagged v0.0.49 at 720 tests passing** (2026-09-23). **Sprint 38 (CR38 `people_search_perplexity`) is COMPLETE, reviewed, and tagged v0.0.50 at 743 tests passing** (2026-09-23). Sprint 36 (CR37) is COMPLETE: `note_action` on the three list tools, the `/search/Note` empty-route probe, and three enrichment field-selection fixes. 39 MCP tools are present in `server.py` (CR38 added `people_search_perplexity`; CR37 added parameters, not tools). **Sprint 39 (CR40 add_note personReference and company notes) is COMPLETE, reviewed (2 cycles), and tagged v0.0.51 at 762 tests passing** (2026-09-23). **Sprint 40 (CR41 CV upload tickets) is COMPLETE, reviewed (3 cycles), and tagged v0.0.52 at 838 tests passing** (2026-09-29), deployed 2026-09-29; T40.8 live acceptance found CV parsing broken since CR19 and is blocked on CR42. **Sprint 40B (CR42 resume parser parameters) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.53 at 843 tests passing** (2026-09-29). T40B.3 live smoke check passed. v0.0.53 is deployed; the T40B.4 (T40.8) re-run created test Candidate 173063 and then crashed on skills, which led to CR43. **Sprint 41 (CR43) is COMPLETE, reviewed (3 cycles; owner asked for minors fixed too), and tagged v0.0.54 at 931 tests passing** (2026-10-02), not deployed (only v0.0.56 is deployed). **Sprint 42 (CR44 part 1, pure scorer) is COMPLETE, reviewed (2 cycles; owner asked for minors fixed too), and tagged v0.0.55 at 1,198 tests passing** (2026-10-02), not deployed. **Sprint 42B (CR44 part 2) is REVIEWED (3 cycles) and tagged v0.0.56 at 1,294 tests (2026-10-06)**, deployed 2026-10-06; its acceptance test failed on the CV write path, which became CR46. **Sprint 42C (CR47 list_tearsheets) is COMPLETE, reviewed (2 cycles), tagged v0.0.57 at 1,306 tests and deployed** (2026-11-11). **Sprint 43 (CR46 acceptance fixes, plus CR48) is COMPLETE, reviewed (5 cycles), tagged v0.0.58 at 1,417 tests, deployed, T43.15 passed** (2026-11-13). 42 MCP tools. **Sprint 44 (CR45 generic file upload and `attach_file`, plus carried fixes F1 to F10) is COMPLETE, reviewed (3 cycles; owner asked for all minors fixed), and tagged v0.0.59 at 1,546 tests passing** (2026-11-20), deployed 2026-11-20, **T44.8 passed** (2026-11-20). 43 tools. CR49 (Sprint 45, v0.0.60) and CR50 (Sprint 46, v0.0.61) are APPROVED and **PLANNED** (replan 2026-11-20).
+
+**Replan validation (2026-11-20, post-CR45; CR49 and CR50):** Re-reconciled PRD, user stories, CRs, and source code. **1,546 tests passing, tagged v0.0.59** (`.venv/bin/pytest -q`: 1546 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
+- **CR49** (job start date) is planned as **Sprint 45** (v0.0.60) and **CR50** (upload follow-ups) as **Sprint 46** (v0.0.61), one sprint each (CR50 Q6). Both PRD amendments were applied and pushed before the replan (5c964d5). Code search confirms nothing in either CR is implemented (see each sprint's Current state).
+- Coverage: 33 FRs/NFRs (FR-1 to FR-24, NFR-1 to NFR-9) plus 7 amendments, 58 user stories (US-1 to US-56, plus US-7A and US-15A). FR-13 Amendment maps to US-55 (and the US-25 acceptance line); the two CR50 FR-24 bullets to US-56; CR50 F1 and F7 to the FR-15 Amendment / US-48, US-49; F3 to F6 to FR-24 / US-53, US-54. No user stories without a requirement.
+- **Discrepancy (resolved with the owner):** US-56 said `get_company` "returns every file", but Bullhorn returns only the first 5 rows of `fileAttachments` unless the field asks for more (`fileAttachments[50](...)`; checked live on company 10666: 5 of 23). The owner chose to reword the acceptance to "every file a read returns", with no row-limit change. PRD.md US-56 and CR50.md updated. CR50's "23 files capped" corrected to 15 (15 of 23 descriptions are over 500 characters).
+- Read-only live checks (2026-11-20): `resolve_fields` passes the `Start Date` value through untouched; all six file entities use `fileAttachments` (Candidate also `parsedResumeFile`); `/entityFiles` description lengths equal the record's `fileAttachments` lengths; `/query/*FileAttachment` returns `description` at top level, so the cap also covers `query_entities` file rows (Sprint 46 P2).
+- Found in code: `create_job`'s outer `except ValueError` maps to `owner_not_found` and `update_job` has no `ValueError` handler, so the CR49 helper's errors are caught locally (Sprint 45 P1).
+- Sprint 44 leftover m12 (the build's `tests/test_client.py` diff was never independently reviewed) stays open; not a task. CR35 still reserved and unspecced. `bha-expired-list-ids.md` still has no PRD requirement.
 
 **Replan validation (2026-11-13, post-CR46; CR45):** Re-reconciled PRD, user stories, CRs, and source code. **1,417 tests passing, tagged v0.0.58** (`.venv/bin/pytest -q`: 1417 passed). No skips, xfails, TODOs, or FIXMEs in `src/` or `tests/`. Findings:
 - **CR45** (generic file upload, `attach_file`, owner-APPROVED 2026-11-11) plus the Sprint 43 carried fixes F1 to F10 are planned as **Sprint 44** (v0.0.59). The CR45 PRD amendment (FR-24, NFR-9 Amendment, US-53, US-54) was applied and pushed before the replan (6b13896). Code search confirms nothing in CR45 or F1 to F10 is implemented (see Sprint 44 Current state).
@@ -166,6 +174,8 @@ For per-sprint technical detail, see the individual sprint sections below.
 | Sprint 42C | **COMPLETE, reviewed (2 cycles; owner asked for all minors fixed), pushed, tagged v0.0.57** (1,306 tests, 2026-11-11); deployed 2026-11-11 | CR47 (patch): `list_tearsheets` moves from `/search/Tearsheet` (does not exist) to `/query/Tearsheet`; `query` replaced by `name`, `owner_id`, `where`. FR-21 Amendment, US-40. Ships ahead of CR46. Target v0.0.57. |
 | Sprint 43 | **REVIEWED (5 cycles, owner asked for all minors fixed; 4 cycle 5 minors logged by owner decision), pushed, tagged v0.0.58** (1,417 tests, 2026-11-13; build 5acdf53 plus review fixes 58b2e14, 008a6c8, 5d70bd6, 717da5a; T43.13 live check run; deployed, T43.15 passed 2026-11-13) | CR46: v0.0.56 acceptance fixes, plus CR48 (per-field overwrite choice on attach_cv, `overwrite` replaces `confirm`). Writable-field filter on the CV paths, CV attaches as `Original CV` with `externalID=Portfolio`, child rows read back with explicit fields, `skillSet` list handling (B8), current company from work history, outcomes logged under the passed `match_check_id`, `duplicate_check` on every create, percentages only, placeholder employers, upload box fixed, plus B10 (re-attach no longer duplicates the current work history row). FR-15 Amendment 2, FR-23, US-49 to US-52. Target v0.0.58. |
 | Sprint 44 | **COMPLETE** (reviewed, 3 cycles; tagged v0.0.59 at 1,546 tests, 2026-11-20) | CR45: one upload ticket system for any file (tools renamed to `request_file_upload`, `get_file_upload`, `show_upload_box`; `candidate_id` hint becomes `entity` / `entity_id`), new `attach_file` tool for six entities with the `type` label checked against the tenant's file type settings, CV tools refuse non-CV files; plus Sprint 43 carried fixes F1 to F10. FR-24, NFR-9 Amendment, US-53, US-54. 1,526 tests passing, 43 tools. Target v0.0.59. |
+| Sprint 45 | **PLANNED** (replan 2026-11-20) | CR49: `create_job` defaults the job start date to today (Irish date) and both job tools store a start date as midnight America/New_York, accepting `YYYY-MM-DD` or epoch ms; `tzdata` added. FR-13 Amendment, US-55. Target v0.0.60. |
+| Sprint 46 | **PLANNED** (replan 2026-11-20) | CR50: upload box always offered (F1), file descriptions capped at 500 on every response plus new `get_file_text` tool (F2, tool 44), next_steps follow the hint (F3), `attach_cv` reports type (F4), `attach_file` echoes description (F5), wording (F6), box URI rename (F7). FR-24, FR-15 Amendment, US-56. Target v0.0.61. |
 
 ### Sprint 15 post-tag regression note
 
@@ -4546,4 +4556,170 @@ Previous: 1,417 (v0.0.58). Planned: about 7 (T44.2) + 10 (T44.3) + 8 (T44.4) + 3
 
 **Actual: 1,526 passing, 0 failing** (+109 over 1,417). Measured 2026-11-13. After review: **1,546 passing** (+20 review tests), measured 2026-11-20.
 
-**Next after Sprint 44:** T44.8 PASSED 2026-11-20. Next: replan CR49 as Sprint 45 (v0.0.60), then CR50 as Sprint 46 (v0.0.61). At deploy, check Cowork skills and prompts for the renamed upload tools (`request_file_upload`, `get_file_upload`, `show_upload_box`) and for `passed_match_check_id`. CR35 is still reserved and unspecced.
+**Next after Sprint 44:** T44.8 PASSED 2026-11-20. Replanned 2026-11-20: CR49 is Sprint 45 (v0.0.60), CR50 is Sprint 46 (v0.0.61). Next: build Sprint 45. At deploy, check Cowork skills and prompts for the renamed upload tools (`request_file_upload`, `get_file_upload`, `show_upload_box`) and for `passed_match_check_id`. CR35 is still reserved and unspecced.
+
+## Sprint 45: CR49 job start date defaults to today, stored as midnight New York - PLANNED (replan 2026-11-20)
+
+**Change request:** CR49.md (APPROVED 2026-11-20; owner answers Q1 to Q4)
+**PRD requirement:** FR-13 Amendment: Job Start Date (CR49)
+**User stories:** US-55 (new); US-25 (acceptance gains "Omitting the start date sets today")
+**Dependency:** Sprint 44 complete (v0.0.59, 1,546 tests, deployed, T44.8 passed 2026-11-20).
+**Risk:** Low to medium. Every `create_job` payload gains `startDate`, so existing exact-payload tests change. A wrong time zone rule would shift every new job's date by a day in the UI, the bug this CR fixes. One new runtime dependency (`tzdata`).
+
+### Current state (verified by code search and read-only live checks, 2026-11-20)
+
+Nothing in CR49 is implemented. Evidence:
+- No `zoneinfo`, `ZoneInfo` or `tzdata` anywhere in `src/` or `pyproject.toml` (dependencies at `pyproject.toml:7-13`). No `_job_start_date_ms`, `_BULLHORN_DATE_TZ` or `_CONSULTANT_TZ`.
+- `create_job` (`server.py:1699`): `merged = {**resolved_defaults, **resolved_caller}` at `:1781`, the `BULLHORN_JOBORDER_REQUIRED` check at `:1783-1796`, `client.create("JobOrder", merged)` at `:1798`. Its try block ends in `except ValueError` returning **`owner_not_found`** (`:1801-1802`), so a helper `ValueError` raised inside the try would be misreported.
+- `update_job` (`server.py:1808`): `resolve_fields` then `client.update("JobOrder", ...)` at `:1825`; it catches only `AuthenticationError`/`BullhornAPIError`, so a `ValueError` would escape as an unhandled exception.
+- These are the only JobOrder write sites (`grep 'client\.\(create\|update\)("JobOrder"'`), as CR49 says.
+- `_iso_to_epoch_ms` (`server.py:336`) stays as is (CR49 non-goal).
+- Live: `resolve_fields("JobOrder", {"Start Date": "2027-02-01"})` gives `{"startDate": "2027-02-01"}` (the value is passed through untouched), and `{"start date": None}` gives `{"startDate": None}`. With both a label and the API name, the later key wins. Job 51437's `startDate` is `1793491200000` (2026-11-01 00:00 UTC, one of the four midnight-UTC jobs).
+- `2027-02-01` at midnight New York is `1801458000000`, matching CR49's test value.
+- `tests/test_server.py:3029` pins the tool count (43, unchanged by this sprint). 29 tests in `tests/test_server.py`/`tests/test_client.py` mention `create_job`/`update_job`.
+
+### Decisions and assumptions
+
+- **P1 (error handling).** `_job_start_date_ms` raises `ValueError`. Both tools call it in a local `try/except ValueError` that returns `invalid_start_date` (CR49 Design 3) before any API call. It never reaches `create_job`'s outer `except ValueError` (`owner_not_found`). Numbers that cannot become a date (NaN, infinity, out of range: `OverflowError`, `OSError`, `ValueError` from `datetime.fromtimestamp`) are turned into `ValueError` inside the helper.
+- **P2 (clock seam).** "Today" comes from a module-level `_now_utc()` (returns `datetime.now(timezone.utc)`), which the helper calls when `now` is not passed. Tests patch `server._now_utc`, so existing exact-payload tests can assert a fixed `startDate`.
+- **P3 (constants at import).** `ZoneInfo(...)` is built at import. With `tzdata` declared, it cannot fail on a box without the system database, so the import-time safety invariant holds. Developers re-run `uv pip install -e ".[dev]"` after pulling.
+- **P4 (docstrings, NFR-8).** One sentence in the `fields` Args entry of `create_job` and `update_job`. Args text becomes the parameter's schema description (Sprint 44 build note), so `scripts/measure_descriptions.py` will not show it; record the Args character delta by hand.
+- **P5 (US-25 / defaults).** Precedence: caller, then `BULLHORN_JOBORDER_DEFAULTS`, then today. The normalisation runs on the merged dict before the required-fields check (CR49 Design 3).
+
+### Tasks
+
+#### T45.1 `tzdata` dependency
+**Files:** `pyproject.toml` (CRLF, mostly; check before editing). Add `"tzdata>=2024.1"` to `dependencies`. **Test:** `test_time_zones_load` (helper class below): both `ZoneInfo` constants resolve.
+
+#### T45.2 `_job_start_date_ms` helper and constants
+**Files:** `src/bullhorn_mcp/server.py` (LF). `_BULLHORN_DATE_TZ`, `_CONSULTANT_TZ`, `_now_utc()`, `_job_start_date_ms(value, *, now=None)` exactly as CR49 Design 2 (None/"" today in Dublin; strict `YYYY-MM-DD`; int/float epoch ms read as the Dublin calendar day; bool, dict, list and other strings raise), plus P1.
+**Tests** (`tests/test_server.py`, CRLF, class `TestJobStartDateMs`; use Read/Edit tools, the privacy plugin blocks shell reads of this file): `test_none_and_blank_default_to_today_dublin`, `test_just_after_midnight_dublin_uses_dublin_date`, `test_iso_date_winter_is_0500_utc`, `test_iso_date_summer_is_0400_utc`, `test_gap_weeks`, `test_midnight_utc_epoch_is_corrected`, `test_midnight_dublin_summer_epoch_keeps_date`, `test_already_correct_value_is_unchanged`, `test_rejects_datetime_string_bool_and_junk`, `test_rejects_nan_inf_and_out_of_range_numbers`, `test_default_now_uses_now_utc_seam`, plus `test_time_zones_load` (T45.1).
+
+#### T45.3 `create_job` wiring
+**Files:** `src/bullhorn_mcp/server.py`. After `merged = ...` (`:1781`): `merged["startDate"] = _job_start_date_ms(merged.get("startDate"))` in a local `try/except ValueError` returning `{"error": "invalid_start_date", "message": ..., "hint": "Pass the date as YYYY-MM-DD, or leave it out for today."}`. Docstring sentence (P4).
+**Tests** (`tests/test_server.py`, respx, POST/PUT body assertions): `test_create_job_omitted_start_date_sends_today`, `test_create_job_label_start_date_is_normalised` (`{"Start Date": "2027-02-01"}` sends `1801458000000`), `test_create_job_env_default_start_date_used_and_caller_wins`, `test_create_job_invalid_start_date_returns_error_no_api_call`, `test_create_job_invalid_start_date_is_not_owner_not_found`, `test_create_job_start_date_satisfies_required_config`.
+
+#### T45.4 `update_job` wiring
+**Files:** `src/bullhorn_mcp/server.py`. After `resolve_fields`, only when `"startDate"` is in the resolved dict: normalise (None or "" becomes today, Q1), same error shape. Docstring sentence (P4).
+**Tests:** `test_update_job_start_date_normalised`, `test_update_job_without_start_date_does_not_add_one`, `test_update_job_null_and_blank_start_date_default_to_today`, `test_update_job_invalid_start_date_returns_error_no_api_call`.
+
+#### T45.5 Existing tests that pin the create payload
+**Files:** `tests/test_server.py`, `tests/test_client.py` (both CRLF; Read/Edit tools only). Find every `create_job` test that asserts the exact create body (Grep for `create_job(` then read each). Patch `server._now_utc` and add the expected `startDate`, or relax only where the test is about another field. No test is deleted.
+
+#### T45.6 Build-time live check (owner approval required)
+Runs before deploy, by calling the `create_job`/`update_job` tool functions from an inline `.venv/bin/python` script against the live tenant (stdio-style, no Entra identity, so `create_job` needs an explicit `owner`, e.g. the API user's id or the owner's CorporateUser id). With the owner's approval at build: `update_job(51437, {"Start Date": "<a date>"})` on the safe test job, read back (04:00 or 05:00 UTC), owner confirms the UI. Then `create_job` with no start date on company 10666 / contact 145635, confirm today, soft-delete the job. Record ids and values here.
+
+#### T45.7 End to end and docs
+- E2E (`tests/test_server.py`): `create_job` through the real tool with a frozen clock just after midnight Dublin (New York still the day before) sends today's Dublin date at 05:00 UTC; `update_job` with a midnight-UTC epoch (51533's shape) writes the corrected value. Prior sprints' E2E suites (`tests/test_cv_write_e2e.py`, `tests/test_server_cr45.py`) still pass.
+- README `create_job`/`update_job` rows: one line on the start date default and `YYYY-MM-DD`. CR49 Status flips to COMPLETE at the post-tag doc sync.
+
+### Verification
+
+- [ ] `.venv/bin/pytest` green; measured count recorded below.
+- [ ] `grep -rn "zoneinfo" src/` shows only `server.py`; `tzdata` in `pyproject.toml`.
+- [ ] Tool count unchanged at 43. Args delta recorded (P4).
+- [ ] Line endings: `server.py` LF; `tests/test_server.py`, `tests/test_client.py`, `pyproject.toml`, this file CRLF. Check `git show HEAD:<file> | grep -c $'\r'` before editing.
+- [ ] T45.6 run (or declined) and recorded.
+- [ ] Local commit `feat: CR49 ...`. No push. Then `PROMPT_iterate.md`, push, tag **v0.0.60**.
+- [ ] At deploy: install the updated dependencies on the box (the new `tzdata`) **before** the restart, since the `ZoneInfo` constants are built at import; then `python -c "from zoneinfo import ZoneInfo; ZoneInfo('America/New_York'); ZoneInfo('Europe/Dublin')"` on the box, and the owner simplifies the Cowork skill to send `YYYY-MM-DD` (CR49 Rollout).
+
+### Expected test count after Sprint 45
+
+Previous: 1,546 (v0.0.59). Planned: about 12 (T45.1/T45.2) + 6 (T45.3) + 4 (T45.4) + 2 (T45.7), about 24, plus edited existing tests. **To be measured, not predicted.**
+
+## Sprint 46: CR50 file upload follow-ups (box always offered, file description cap, `get_file_text`, next_steps, wording, box URI) - PLANNED (replan 2026-11-20)
+
+**Change request:** CR50.md (APPROVED 2026-11-20; owner answers Q1 to Q6; replan US-56 rewording 2026-11-20)
+**PRD requirement:** FR-24 (two CR50 bullets: description cap, `get_file_text`), FR-15 Amendment (upload box fallback, F1). F3 to F7 are fixes inside FR-24, the FR-15 Amendment, US-53 and US-54.
+**User stories:** US-56 (new; acceptance reworded at this replan, owner decision); US-48, US-49 (F1, F7); US-53, US-54 (F3 to F6)
+**Dependency:** Sprint 45 complete (v0.0.60). Owner Q6: its own sprint.
+**Risk:** Medium. The cap runs on every tool response, so a wrong walker could hide data or cut the wrong field. F1 and F7 change what Cowork sees for the upload box, which only started rendering there at T43.15. Tool count 43 to 44 adds description tokens (NFR-8).
+
+### Current state (verified by code search and read-only live checks, 2026-11-20)
+
+Nothing in CR50 is implemented. Evidence:
+- F1: `_client_supports_ui()` (`server.py:2556`) gates the fallback in `request_file_upload` (`:3086-3096`). It is patched in four tests: `tests/test_server.py:3045`, `:9188`, `:9451`; `tests/test_server_cr46.py:830`. No INFO line records the client's extension support.
+- F2: every read tool returns through `format_response` (`server.py:331`, `json.dumps` only, 126 call sites), and nothing caps file descriptions. No `get_file_text`, `_cap_file_descriptions`, `_FILE_DESCRIPTION_PREVIEW` or `_FILE_TEXT_PAGE`. `client.get_entity_files` (`client.py:387`) exists (Sprint 44). One internal `json.loads(format_response(result))` (`server.py:2401`, `create_candidate`) only adds keys to the output, so capping there is safe.
+- F3: `use_step` (`server.py:3076-3085`) always carries the CV text; the `upload_already_received` hint in `show_upload_box` (`:3334-3341`) likewise.
+- F4: `written["file"]` at `server.py:3843`, `:4150`, `:4158` (already_attached), `:4219` (already_attached), `:4228` has no `type`. `_CV_FILE_TYPE = "Original CV"` at `:3513`.
+- F5: the `attach_file` success response (`server.py:3261-3269`) has no `description`.
+- F6: `server.py:3244` says "(file id {...})" for any count; the `unsupported_file_type` hint (`server.py:2569`) repeats the list already in `uploads.py:249`'s message.
+- F7: `_UPLOAD_BOX_URI = "ui://bullhorn/cv-upload-box.html"` (`server.py:2519`). Pinned at `tests/test_upload_box.py:91-94`, `tests/test_server_cr46.py:806`, `tests/test_server.py:9389`, plus Sprint 44's `test_upload_box_uri_unchanged`. `upload_box.html:123` has `appInfo.name: "bullhorn-cv-upload-box"`. `COWORK_TEST_v0.0.59.md:130` names the old URI (historical, left alone).
+- Tool count: `tests/test_server.py:3029` asserts 43; README line 40 says 43 tools.
+- Live (read-only, 2026-11-20):
+  - All six entities name the to-many `fileAttachments` (`CandidateFileAttachment`, `ClientContactFileAttachment`, `ClientCorporationFileAttachment`, `JobOrderFileAttachment`, `PlacementFileAttachment`, `OpportunityFileAttachment`). Candidate also has a to-one `parsedResumeFile` (`CandidateFileAttachment`).
+  - `get("ClientCorporation", 10666, fields="id,fileAttachments(id,name,description)")` returns `{"total": 23, "data": [5 rows]}`: Bullhorn returns 5 rows unless the field asks for more (`fileAttachments[50](...)`). This led to the US-56 rewording.
+  - Company 10666: 23 files, 15 descriptions over 500 characters (max 10,619). CR50's "23 files capped" corrected to 15.
+  - `/entityFiles/ClientCorporation/10666` description lengths equal those from `fileAttachments[50](id,description)` for all 23 files, so `/entityFiles` is a faithful source for `get_file_text`. Its rows carry `isDeleted`.
+  - `/query/ClientCorporationFileAttachment` and `/query/CandidateFileAttachment` work and return `description` at top level (e.g. ids 902, 901, 900), so `query_entities` can return file rows that are not under a `fileAttachments` key.
+  - No `isDeleted` file rows on company 10666, job 51437 or candidate 173063 (`/entityFiles`), so deleted-row listing behaviour is unverified (P3).
+- No TODO, FIXME, skip or xfail in `src/` or `tests/` (`grep -rnE "TODO|FIXME|pytest.mark.skip|xfail" src/ tests/` empty, 2026-11-20).
+
+### Decisions and assumptions
+
+- **P1 (task order, R3 precedent).** Build order: T46.1 (F2 cap), T46.2 (`get_file_text`), T46.3 (F1), then T46.4 to T46.7. If the context runs short, only the wording tasks carry forward.
+- **P2 (cap hook point).** One choke point: `format_response` calls `_cap_file_descriptions(data)` before `json.dumps`. Every tool output goes through it, so no read tool can be missed, and write results that echo records are capped the same way. The walker:
+  - acts only on values under the keys `fileAttachments` (a to-many envelope `{"total", "data": [...]}` or a plain list) and `parsedResumeFile` (a single dict), at any depth;
+  - plus, for `search_entities` and `query_entities` when `entity` ends with `FileAttachment`, the top-level result rows (a `file_rows=True` argument, passed by those two tools to the same helper before `format_response`);
+  - caps `description` over `_FILE_DESCRIPTION_PREVIEW = 500` to its first 500 characters, adding `description_truncated: true` and `description_length`;
+  - copies what it changes and never mutates its input. Any other `description` is left alone, including the Candidate's own and `attach_cv` previews.
+  `get_file_text`'s own `text` key is not touched.
+  Four write paths build their JSON with `json.dumps` directly instead of `format_response` (`server.py:1689` `create_contact`, `:1889` `update_record`, `:2408` and `:2425` `create_candidate`). They return default-field records, which do not request file rows, but the build routes them through `format_response` (or the helper) so the choke point has no gaps. The `parsedResumeFile` shape (a single dict) is assumed from `/meta` (TO_ONE); it was null on 173063.
+- **P3 (`get_file_text` serves whatever a read can truncate).** Rule: anything a read tool can truncate, `get_file_text` must serve. `client.get` has no isDeleted gate (Sprint 44 P1), so `get_candidate` on a soft-deleted record still returns capped previews; therefore there is **no parent record check**. The only Bullhorn call is `client.get_entity_files(entity, entity_id)` (CR50 Source); a 404 there gives `record_not_found`, matched on the `"API request failed: 404 "` prefix, not the body (Sprint 44 M4). Any row with the requested id is served, and the response echoes its `isDeleted` (no deleted rows exist on the test records, so whether the record's `fileAttachments` lists them is unverified). Entity check reuses `_unsupported_entity_error` (Lead refused). `file_not_found` lists the record's file ids and names. Other Bullhorn errors use the uniform `ERROR: ...` string.
+- **P4 (`get_file_text` paging).** `offset` defaults to 0; a negative or non-integer offset, or one past the end, gives `invalid_offset`. `text` is `_FILE_TEXT_PAGE = 20000` characters; `next_offset` is null on the last page. An empty description returns `text: ""` with a note. The response is not passed through the cap (its keys are not file keys). Not added to `TOOL_ENTITY_MAP` (as `attach_file`, Sprint 44 P6).
+- **P5 (F1 logging, "once per session").** `_client_supports_ui()` is kept as the source for the log line (simpler than rewriting four tests' patches; they change only in what they assert about next_steps). `request_file_upload` logs at INFO `client advertises MCP Apps: <True|False>` the first time it runs in a session. The key is `get_context().session_id` (the attribute exists on FastMCP 3.2.4's `Context`; the server does not set stateless HTTP, so sessions should persist; verify at build, and if session ids turn out per-request, fall back to once per process), falling back to `"no-session"` when there is no context (stdio). It is kept in a module-level set bounded at 1,000 entries, cleared when full. No token, identity, filename or session id in the line.
+- **P6 (F7 scope).** The resource URI, its tool `_meta`, the result `_meta`, and `upload_box.html`'s `appInfo.name` (to `bullhorn-upload-box`) all change. `test_upload_box_uri_unchanged` is renamed and rewritten to pin the new URI. Historical docs (`COWORK_TEST_v0.0.59.md`, older plan sections) keep the old URI.
+- **P7 (NFR-8).** Measure tool descriptions before and after with `scripts/measure_descriptions.py` and record the Args delta by hand. Target: under +800 characters net for `get_file_text` plus the reworded upload text.
+- **P8 (F3 rule).** CV path text when the extension is in `CV_EXTENSIONS` and the hint is Candidate or absent; otherwise only the `attach_file` step, naming the hinted record when there is one. The same rule in one helper serves `request_file_upload`'s `use_step` and `show_upload_box`'s `upload_already_received` hint.
+
+### Tasks
+
+#### T46.1 F2 cap on every response
+**Files:** `src/bullhorn_mcp/server.py`. `_FILE_DESCRIPTION_PREVIEW`, `_cap_file_descriptions(data, file_rows=False)`, the `format_response` hook, and the `file_rows=True` calls in `search_entities`/`query_entities` (P2).
+**Tests** (`tests/test_server_cr50.py`, new, LF): `test_cap_envelope_fileattachments`, `test_cap_plain_list_fileattachments`, `test_cap_parsed_resume_file`, `test_short_description_unchanged_no_flag`, `test_exactly_500_not_flagged`, `test_candidate_own_description_not_capped`, `test_nested_search_row_capped`, `test_input_not_mutated`, `test_query_entities_file_attachment_rows_capped`, `test_query_entities_other_entity_rows_not_capped`, `test_get_company_fileattachments_capped_end_to_end` (respx, 23 rows), `test_get_candidate_and_get_job_capped` (respx).
+
+#### T46.2 `get_file_text` tool (tool 44)
+**Files:** `src/bullhorn_mcp/server.py` (P3, P4), `README.md` tool table.
+**Tests** (`tests/test_server_cr50.py`): `test_full_text_under_page`, `test_paging_next_offset_then_null`, `test_invalid_offset`, `test_file_not_found_lists_ids_and_names`, `test_deleted_file_row_served_with_isdeleted`, `test_entity_files_404_record_not_found`, `test_no_entity_get_call` (only `/entityFiles` is read), `test_lead_refused`, `test_unknown_entity_refused`, `test_empty_description_note`, `test_bullhorn_error_uniform_surface`, `test_text_not_capped`. Update `tests/test_server.py:3029` to 44 and any tool-list test that enumerates tools.
+
+#### T46.3 F1 box always offered, plus the INFO line
+**Files:** `src/bullhorn_mcp/server.py`. One fallback step, CR50 F1 text verbatim (box sentence, then the "If no box appears ... stop" sentence). INFO line per P5.
+**Tests:** `test_next_steps_offer_box_whatever_client_advertises` (parametrised, `_client_supports_ui` True and False), `test_stop_sentence_follows_box_sentence`, `test_ui_support_logged_once_per_session` (two calls, one line; a second session id logs again), `test_ui_support_log_has_no_token_or_identity`, `test_ui_support_log_set_bounded`. Update the four existing tests that patch `_client_supports_ui` (`tests/test_server.py:3045`, `:9188`, `:9451`; `tests/test_server_cr46.py:830`) to the single fallback text.
+
+#### T46.4 F3 next_steps follow the hint and the extension
+**Files:** `src/bullhorn_mcp/server.py` (one helper, P8).
+**Tests:** `test_joborder_hint_docx_no_cv_text` (names `attach_file(entity='JobOrder', entity_id=51437, ...)`), `test_png_no_hint_no_cv_text`, `test_docx_no_hint_keeps_cv_path`, `test_docx_candidate_hint_keeps_cv_path`, `test_eml_candidate_hint_no_cv_text`, `test_show_upload_box_received_hint_same_rule` (parametrised). Update existing tests that pin the old `use_step` text (find with Grep/Read).
+
+#### T46.5 F4 and F5 report what was stored
+**Files:** `src/bullhorn_mcp/server.py`. `"type": _CV_FILE_TYPE` at all five `written["file"]` sites; `attach_file` success gains `"description"` (what was sent after stripping, or null).
+**Tests:** `test_attach_cv_file_has_type` (parametrised over the new-file, create-from-cv and both `already_attached` paths), `test_attach_file_echoes_description`, `test_attach_file_blank_description_echoed_null`.
+
+#### T46.6 F6 wording
+**Files:** `src/bullhorn_mcp/server.py`. "file id 1" for one, "file ids 1, 2" for several; `unsupported_file_type` hint: "Use one of the allowed types listed above, or convert the file (for example a .md file to .txt)."
+**Tests:** `test_same_name_warning_one_id_singular`, `test_same_name_warning_two_ids_plural`, `test_unsupported_file_type_hint_does_not_repeat_list`.
+
+#### T46.7 F7 box URI rename
+**Files:** `src/bullhorn_mcp/server.py`, `src/bullhorn_mcp/upload_box.html` (P6), `README.md` if it names the URI.
+**Tests:** `test_upload_box_uri_renamed` (replaces `test_upload_box_uri_unchanged`), `test_tool_meta_and_result_meta_carry_new_uri`, `test_resource_read_log_names_new_uri`. Update `tests/test_upload_box.py:91-94`, `tests/test_server_cr46.py:806`, `tests/test_server.py:9389`.
+
+#### T46.8 End to end and live read-only check
+- E2E (`tests/test_server_cr50.py`, real upload route plus respx): a docx with a JobOrder hint goes `request_file_upload` (no CV text, box step present) → POST `/upload/{token}` → `attach_file` (echoes description) → `get_job` with fileAttachments (description capped) → `get_file_text` (full text, two pages). Prior E2E suites (`tests/test_cv_write_e2e.py`, `tests/test_server_cr45.py`) still pass.
+- Live, read-only, at build: `get_company(10666, fields="fileAttachments[50](id,name,description)")` fits, with 15 files capped; `get_file_text` on company file 899 and on the 10,619-character file pages correctly.
+
+#### T46.9 Deploy and acceptance (owner)
+After the owner deploys v0.0.61 and reconnects the connector in Cowork and on the web: a short `COWORK_TEST_v0.0.61.md` covering F1 to F7 (CR50 Verification), including the journal INFO line from P5 and `MCP App resource read: ui://bullhorn/upload-box.html`. Record which hosts advertise MCP Apps.
+
+### Verification
+
+- [ ] `.venv/bin/pytest` green; measured count recorded below.
+- [ ] `grep -rn "cv-upload-box" src/ tests/ README.md` returns nothing.
+- [ ] Tool count 44; `get_file_text` not in `TOOL_ENTITY_MAP`; description delta measured (P7).
+- [ ] No new `.info(` line carries a token, identity, filename or session id.
+- [ ] Line endings: `server.py`, `upload_box.html`, `README.md`, `CR50.md`, new test files LF; `tests/test_server.py` and this file CRLF.
+- [ ] T46.8 live read-only check run and recorded.
+- [ ] Local commit `feat: CR50 ...`. No push. Then `PROMPT_iterate.md`, push, tag **v0.0.61**.
+- [ ] T46.9 after the owner's deploy.
+
+### Expected test count after Sprint 46
+
+Previous: Sprint 45's measured count. Planned: about 12 (T46.1) + 12 (T46.2) + 6 (T46.3) + 6 (T46.4) + 4 (T46.5) + 3 (T46.6) + 3 (T46.7) + 1 (T46.8), about 47, plus edited existing tests. **To be measured, not predicted.**
