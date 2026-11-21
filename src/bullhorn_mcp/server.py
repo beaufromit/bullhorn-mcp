@@ -12,6 +12,7 @@ import httpx
 from importlib import resources as _pkg_resources
 from typing import Any
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -348,6 +349,64 @@ def _iso_to_epoch_ms(date_str: str) -> int:
     from datetime import datetime, timezone
     dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     return int(dt.timestamp() * 1000)
+
+
+# CR49: JobOrder.startDate is date-only. The Bullhorn UI stores the picked date
+# as midnight America/New_York (04:00 UTC in summer, 05:00 in winter); a value
+# sent as midnight UTC shows a day early in the UI. "Today" and the calendar day
+# of a timestamp are read in the consultants' zone (Ireland), because the UI uses
+# the consultant's date, not New York's. Fixed constants (owner, CR49 Q2); built
+# at import, which is safe because tzdata is a declared dependency (CR49 Q3).
+_BULLHORN_DATE_TZ = ZoneInfo("America/New_York")
+_CONSULTANT_TZ = ZoneInfo("Europe/Dublin")
+_ISO_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _now_utc() -> datetime:
+    """Current time in UTC. A seam so tests can freeze "today" (CR49 P2)."""
+    return datetime.now(timezone.utc)
+
+
+def _job_start_date_ms(value: Any, *, now: datetime | None = None) -> int:
+    """Return epoch ms for midnight New York on the intended JobOrder start date.
+
+    - None or "": today's date in Europe/Dublin.
+    - "YYYY-MM-DD" (exactly): that date.
+    - int/float epoch ms (not bool): the calendar day in Europe/Dublin. This
+      reads every encoding seen on the tenant as the intended date (midnight
+      UTC, midnight or noon New York, midnight Dublin), and a correct value
+      comes back unchanged, so reading a job and writing its date back is safe.
+
+    Raises:
+        ValueError: for any other value, including dates that cannot exist and
+            numbers that cannot become a date (NaN, infinity, out of range).
+    """
+    if value is None or value == "":
+        day = (now or _now_utc()).astimezone(_CONSULTANT_TZ).date()
+    elif isinstance(value, str):
+        if not _ISO_DATE_RE.fullmatch(value):
+            raise ValueError(f"Start date {value!r} is not a YYYY-MM-DD date.")
+        try:
+            day = datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError(f"Start date {value!r} is not a real date.") from None
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            day = datetime.fromtimestamp(value / 1000, tz=_CONSULTANT_TZ).date()
+        except (OverflowError, OSError, ValueError):
+            raise ValueError(f"Start date {value!r} is not a valid epoch-millisecond timestamp.") from None
+    else:
+        raise ValueError(f"Start date must be a YYYY-MM-DD string or epoch milliseconds, not {type(value).__name__}.")
+    midnight = datetime(day.year, day.month, day.day, tzinfo=_BULLHORN_DATE_TZ)
+    return int(midnight.timestamp() * 1000)
+
+
+def _invalid_start_date_error(e: ValueError) -> str:
+    return format_response({
+        "error": "invalid_start_date",
+        "message": str(e),
+        "hint": "Pass the date as YYYY-MM-DD, or leave it out for today.",
+    })
 
 
 def _paginate_envelope(meta: dict, start: int, count: int) -> dict:
@@ -1713,7 +1772,8 @@ def create_job(
                 (BULLHORN_JOBORDER_ALIASES). Owner defaults to the authenticated
                 caller's Bullhorn CorporateUser when absent. Instance-specific
                 defaults (BULLHORN_JOBORDER_DEFAULTS) are applied before caller
-                values, so caller values always win.
+                values, so caller values always win. Pass startDate as
+                "YYYY-MM-DD"; it is today when left out.
 
     Returns:
         JSON object with changedEntityId, changeType, and full created JobOrder data.
@@ -1780,6 +1840,16 @@ def create_job(
         resolved_defaults = metadata.resolve_fields("JobOrder", get_joborder_defaults())
         merged = {**resolved_defaults, **resolved_caller}
 
+        # CR49: always send a start date, stored the way the UI stores it.
+        # Runs on the resolved, merged dict (catches labels and aliases, and
+        # applies caller > env default > today) and before the required check.
+        # Its ValueError is caught here so the outer handler cannot misreport
+        # it as owner_not_found.
+        try:
+            merged["startDate"] = _job_start_date_ms(merged.get("startDate"))
+        except ValueError as e:
+            return _invalid_start_date_error(e)
+
         # Validate env-defined required fields (beyond the hardcoded three above)
         env_required = get_joborder_required()
         if env_required:
@@ -1811,6 +1881,7 @@ def update_job(job_id: int, fields: dict) -> str:
     Args:
         job_id: Bullhorn JobOrder ID to update.
         fields: Dictionary of JobOrder field names or display labels to update.
+                Pass startDate as "YYYY-MM-DD"; an empty one sets today.
 
     Returns:
         JSON object with changedEntityId, changeType, and full updated JobOrder data.
@@ -1822,6 +1893,13 @@ def update_job(job_id: int, fields: dict) -> str:
     try:
         client = get_client()
         resolved = get_metadata().resolve_fields("JobOrder", fields)
+        # CR49: normalise only a start date the caller mentioned; an update
+        # without one leaves the job's existing date alone (owner, Q1).
+        if "startDate" in resolved:
+            try:
+                resolved["startDate"] = _job_start_date_ms(resolved["startDate"])
+            except ValueError as e:
+                return _invalid_start_date_error(e)
         result = client.update("JobOrder", job_id, resolved)
         return format_response(result)
 

@@ -503,6 +503,8 @@ update_job(12345, {
 
 `publicDescription` is Bullhorn's published job description field. In this local Bullhorn configuration, `customText12` controls "Publish on website" and defaults to `0`, meaning not published. Existing generic `update_record` remains available for backward compatibility, but JobOrder callers should use `update_job`.
 
+**Start date (CR49).** Pass `startDate` (or "Start Date") as `YYYY-MM-DD`; epoch milliseconds are also accepted. `create_job` sets today's date (Irish time) when none is given, and `update_job` sets today when the value is empty but leaves the date alone when it is not mentioned. Both store the date as midnight America/New_York, the way the Bullhorn UI does, so the UI shows the date that was given.
+
 ### Shortlist candidates to a job
 
 Shortlist a single candidate:

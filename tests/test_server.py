@@ -1957,7 +1957,7 @@ class TestSprint21JobOrderE2E:
         }
 
     def test_e2e_create_job_minimal(self, mock_auth, mock_session):
-        """Minimal create_job call sends only the 3 required params plus owner; no placeholder keys."""
+        """Minimal create_job call sends only the 3 required params plus owner and startDate; no placeholder keys."""
         import httpx
         import respx
         from bullhorn_mcp.client import BullhornClient
@@ -1981,9 +1981,12 @@ class TestSprint21JobOrderE2E:
                 return_value=httpx.Response(200, json={"data": {"id": 1, "title": "Engineer"}})
             )
 
+            from datetime import datetime, timezone
+            frozen_now = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
             with patch.object(server, "get_client", return_value=real_client), \
                  patch.object(server, "get_metadata", return_value=real_metadata), \
-                 patch.object(server, "resolve_caller", return_value={"id": 42}):
+                 patch.object(server, "resolve_caller", return_value={"id": 42}), \
+                 patch.object(server, "_now_utc", return_value=frozen_now):
                 result = server.create_job(
                     clientCorporation={"id": 1},
                     clientContact={"id": 2},
@@ -1992,12 +1995,14 @@ class TestSprint21JobOrderE2E:
 
         data = json.loads(result)
         assert data["changedEntityId"] == 1
-        # Raw PUT body must be exactly these 4 keys — no website_* or other injected keys
+        # Raw PUT body must be exactly these 5 keys — no website_* or other injected keys.
+        # startDate is always sent (CR49): today (20 Nov 2026) at midnight New York, 05:00 UTC.
         assert captured["body"] == {
             "clientCorporation": {"id": 1},
             "clientContact": {"id": 2},
             "title": "Engineer",
             "owner": {"id": 42},
+            "startDate": 1795150800000,
         }
 
     def test_e2e_create_job_with_defaults(self, mock_auth, mock_session, monkeypatch):
