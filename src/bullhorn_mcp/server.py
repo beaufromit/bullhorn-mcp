@@ -360,6 +360,19 @@ def _iso_to_epoch_ms(date_str: str) -> int:
 _BULLHORN_DATE_TZ = ZoneInfo("America/New_York")
 _CONSULTANT_TZ = ZoneInfo("Europe/Dublin")
 _ISO_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# A believable job start date. Rejects epoch seconds and other non-millisecond
+# numbers (they land in January 1970) and typo years such as 0202.
+_START_DATE_MIN_YEAR = 1980
+_START_DATE_MAX_YEAR = 2100
+_HINT_CREATE = "Pass the date as YYYY-MM-DD, or leave it out for today."
+_HINT_UPDATE = (
+    "Pass the date as YYYY-MM-DD; an empty value sets today. "
+    "Leaving startDate out keeps the job's current start date."
+)
+_HINT_ENV_DEFAULT = (
+    "The startDate in the server's BULLHORN_JOBORDER_DEFAULTS is invalid; "
+    "ask the administrator to fix it, or pass startDate as YYYY-MM-DD."
+)
 
 
 def _now_utc() -> datetime:
@@ -378,8 +391,9 @@ def _job_start_date_ms(value: Any, *, now: datetime | None = None) -> int:
       comes back unchanged, so reading a job and writing its date back is safe.
 
     Raises:
-        ValueError: for any other value, including dates that cannot exist and
-            numbers that cannot become a date (NaN, infinity, out of range).
+        ValueError: for any other value, including dates that cannot exist,
+            numbers that cannot become a date (NaN, infinity, out of range),
+            and dates outside 1980-2100 (e.g. epoch seconds, year 0202).
     """
     if value is None or value == "":
         day = (now or _now_utc()).astimezone(_CONSULTANT_TZ).date()
@@ -397,15 +411,20 @@ def _job_start_date_ms(value: Any, *, now: datetime | None = None) -> int:
             raise ValueError(f"Start date {value!r} is not a valid epoch-millisecond timestamp.") from None
     else:
         raise ValueError(f"Start date must be a YYYY-MM-DD string or epoch milliseconds, not {type(value).__name__}.")
+    if not _START_DATE_MIN_YEAR <= day.year <= _START_DATE_MAX_YEAR:
+        raise ValueError(
+            f"Start date {value!r} is {day.isoformat()}, outside {_START_DATE_MIN_YEAR}-{_START_DATE_MAX_YEAR}. "
+            "Numbers must be epoch milliseconds, not seconds."
+        )
     midnight = datetime(day.year, day.month, day.day, tzinfo=_BULLHORN_DATE_TZ)
     return int(midnight.timestamp() * 1000)
 
 
-def _invalid_start_date_error(e: ValueError) -> str:
+def _invalid_start_date_error(e: ValueError, hint: str) -> str:
     return format_response({
         "error": "invalid_start_date",
         "message": str(e),
-        "hint": "Pass the date as YYYY-MM-DD, or leave it out for today.",
+        "hint": hint,
     })
 
 
@@ -1773,7 +1792,8 @@ def create_job(
                 caller's Bullhorn CorporateUser when absent. Instance-specific
                 defaults (BULLHORN_JOBORDER_DEFAULTS) are applied before caller
                 values, so caller values always win. Pass startDate as
-                "YYYY-MM-DD"; it is today when left out.
+                "YYYY-MM-DD" (or a number of epoch milliseconds); when left
+                out or empty it is the configured default, else today.
 
     Returns:
         JSON object with changedEntityId, changeType, and full created JobOrder data.
@@ -1841,14 +1861,18 @@ def create_job(
         merged = {**resolved_defaults, **resolved_caller}
 
         # CR49: always send a start date, stored the way the UI stores it.
-        # Runs on the resolved, merged dict (catches labels and aliases, and
-        # applies caller > env default > today) and before the required check.
-        # Its ValueError is caught here so the outer handler cannot misreport
-        # it as owner_not_found.
+        # Runs on the resolved dicts (catches labels and aliases) and before
+        # the required check. Precedence: caller > env default > today; an
+        # empty caller value counts as not given. Its ValueError is caught here
+        # so the outer handler cannot misreport it as owner_not_found.
+        start = resolved_caller.get("startDate")
+        from_default = start is None or start == ""
+        if from_default:
+            start = resolved_defaults.get("startDate")
         try:
-            merged["startDate"] = _job_start_date_ms(merged.get("startDate"))
+            merged["startDate"] = _job_start_date_ms(start)
         except ValueError as e:
-            return _invalid_start_date_error(e)
+            return _invalid_start_date_error(e, _HINT_ENV_DEFAULT if from_default else _HINT_CREATE)
 
         # Validate env-defined required fields (beyond the hardcoded three above)
         env_required = get_joborder_required()
@@ -1881,7 +1905,8 @@ def update_job(job_id: int, fields: dict) -> str:
     Args:
         job_id: Bullhorn JobOrder ID to update.
         fields: Dictionary of JobOrder field names or display labels to update.
-                Pass startDate as "YYYY-MM-DD"; an empty one sets today.
+                Pass startDate as "YYYY-MM-DD" (or a number of epoch
+                milliseconds); an empty one sets today.
 
     Returns:
         JSON object with changedEntityId, changeType, and full updated JobOrder data.
@@ -1899,7 +1924,7 @@ def update_job(job_id: int, fields: dict) -> str:
             try:
                 resolved["startDate"] = _job_start_date_ms(resolved["startDate"])
             except ValueError as e:
-                return _invalid_start_date_error(e)
+                return _invalid_start_date_error(e, _HINT_UPDATE)
         result = client.update("JobOrder", job_id, resolved)
         return format_response(result)
 

@@ -4593,11 +4593,11 @@ Nothing in CR49 is implemented. Evidence:
 
 #### T45.2 `_job_start_date_ms` helper and constants
 **Files:** `src/bullhorn_mcp/server.py` (LF). `_BULLHORN_DATE_TZ`, `_CONSULTANT_TZ`, `_now_utc()`, `_job_start_date_ms(value, *, now=None)` exactly as CR49 Design 2 (None/"" today in Dublin; strict `YYYY-MM-DD`; int/float epoch ms read as the Dublin calendar day; bool, dict, list and other strings raise), plus P1.
-**Tests** (`tests/test_server.py`, CRLF, class `TestJobStartDateMs`; use Read/Edit tools, the privacy plugin blocks shell reads of this file): `test_none_and_blank_default_to_today_dublin`, `test_just_after_midnight_dublin_uses_dublin_date`, `test_iso_date_winter_is_0500_utc`, `test_iso_date_summer_is_0400_utc`, `test_gap_weeks`, `test_midnight_utc_epoch_is_corrected`, `test_midnight_dublin_summer_epoch_keeps_date`, `test_already_correct_value_is_unchanged`, `test_rejects_datetime_string_bool_and_junk`, `test_rejects_nan_inf_and_out_of_range_numbers`, `test_default_now_uses_now_utc_seam`, plus `test_time_zones_load` (T45.1).
+**Tests** (`tests/test_server_cr49.py`, LF, class `TestJobStartDateMs`): `test_none_and_blank_default_to_today_dublin`, `test_just_after_midnight_dublin_uses_dublin_date`, `test_iso_date_winter_is_0500_utc`, `test_iso_date_summer_is_0400_utc`, `test_gap_weeks`, `test_midnight_utc_epoch_is_corrected`, `test_midnight_dublin_summer_epoch_keeps_date`, `test_already_correct_value_is_unchanged`, `test_rejects_datetime_string_bool_and_junk`, `test_rejects_nan_inf_and_out_of_range_numbers`, `test_default_now_uses_now_utc_seam`, plus `test_time_zones_load` (T45.1).
 
 #### T45.3 `create_job` wiring
 **Files:** `src/bullhorn_mcp/server.py`. After `merged = ...` (`:1781`): `merged["startDate"] = _job_start_date_ms(merged.get("startDate"))` in a local `try/except ValueError` returning `{"error": "invalid_start_date", "message": ..., "hint": "Pass the date as YYYY-MM-DD, or leave it out for today."}`. Docstring sentence (P4).
-**Tests** (`tests/test_server.py`, respx, POST/PUT body assertions): `test_create_job_omitted_start_date_sends_today`, `test_create_job_label_start_date_is_normalised` (`{"Start Date": "2027-02-01"}` sends `1801458000000`), `test_create_job_env_default_start_date_used_and_caller_wins`, `test_create_job_invalid_start_date_returns_error_no_api_call`, `test_create_job_invalid_start_date_is_not_owner_not_found`, `test_create_job_start_date_satisfies_required_config`.
+**Tests** (`tests/test_server_cr49.py`, respx, POST/PUT body assertions): `test_create_job_omitted_start_date_sends_today`, `test_create_job_label_start_date_is_normalised` (`{"Start Date": "2027-02-01"}` sends `1801458000000`), `test_create_job_env_default_start_date_used_and_caller_wins`, `test_create_job_invalid_start_date_returns_error_no_api_call`, `test_create_job_invalid_start_date_is_not_owner_not_found`, `test_create_job_start_date_satisfies_required_config`.
 
 #### T45.4 `update_job` wiring
 **Files:** `src/bullhorn_mcp/server.py`. After `resolve_fields`, only when `"startDate"` is in the resolved dict: normalise (None or "" becomes today, Q1), same error shape. Docstring sentence (P4).
@@ -4610,7 +4610,7 @@ Nothing in CR49 is implemented. Evidence:
 Runs before deploy, by calling the `create_job`/`update_job` tool functions from an inline `.venv/bin/python` script against the live tenant (stdio-style, no Entra identity, so `create_job` needs an explicit `owner`, e.g. the API user's id or the owner's CorporateUser id). With the owner's approval at build: `update_job(51437, {"Start Date": "<a date>"})` on the safe test job, read back (04:00 or 05:00 UTC), owner confirms the UI. Then `create_job` with no start date on company 10666 / contact 145635, confirm today, soft-delete the job. Record ids and values here.
 
 #### T45.7 End to end and docs
-- E2E (`tests/test_server.py`): `create_job` through the real tool with a frozen clock just after midnight Dublin (New York still the day before) sends today's Dublin date at 05:00 UTC; `update_job` with a midnight-UTC epoch (51533's shape) writes the corrected value. Prior sprints' E2E suites (`tests/test_cv_write_e2e.py`, `tests/test_server_cr45.py`) still pass.
+- E2E (`tests/test_server_cr49.py`): `create_job` through the real tool with a frozen clock just after midnight Dublin (New York still the day before) sends today's Dublin date at 05:00 UTC; `update_job` with a midnight-UTC epoch (51533's shape) writes the corrected value. Prior sprints' E2E suites (`tests/test_cv_write_e2e.py`, `tests/test_server_cr45.py`) still pass.
 - README `create_job`/`update_job` rows: one line on the start date default and `YYYY-MM-DD`. CR49 Status flips to COMPLETE at the post-tag doc sync.
 
 ### Build notes (2026-11-21)
@@ -4630,7 +4630,7 @@ Runs before deploy, by calling the `create_job`/`update_job` tool functions from
 - [x] Tool count unchanged at 43. Args delta recorded (P4).
 - [x] Line endings: `server.py` LF; `tests/test_server.py`, `pyproject.toml` CRLF; `tests/test_server_cr49.py` LF (new). Checked.
 - [ ] T45.6 run (or declined) and recorded.
-- [ ] Local commit `feat: CR49 ...`. No push. Then `PROMPT_iterate.md`, push, tag **v0.0.60**.
+- [x] Local commit `feat: CR49 ...` (f497e16). No push. Then `PROMPT_iterate.md`, push, tag **v0.0.60**.
 - [ ] At deploy: install the updated dependencies on the box (the new `tzdata`) **before** the restart, since the `ZoneInfo` constants are built at import; then `python -c "from zoneinfo import ZoneInfo; ZoneInfo('America/New_York'); ZoneInfo('Europe/Dublin')"` on the box, and the owner simplifies the Cowork skill to send `YYYY-MM-DD` (CR49 Rollout).
 
 ### Expected test count after Sprint 45

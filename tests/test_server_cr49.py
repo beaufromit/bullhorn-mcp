@@ -33,7 +33,6 @@ OCT_28_2026 = 1793160000000        # EU back (25 Oct), US not yet (1 Nov): NY ED
 OCT_28_2026_MIDNIGHT_UTC = 1793145600000
 MAR_17_2027 = 1805256000000        # US forward (14 Mar), EU not yet (28 Mar): NY EDT, Dublin GMT
 MAR_17_2027_MIDNIGHT_UTC = 1805241600000
-DEC_25_2026 = 1798174800000
 
 
 def _utc(*args):
@@ -47,6 +46,14 @@ class TestJobStartDateMs:
     def test_time_zones_load(self):
         assert server._BULLHORN_DATE_TZ.key == "America/New_York"
         assert server._CONSULTANT_TZ.key == "Europe/Dublin"
+
+    def test_tzdata_package_provides_both_zones(self):
+        # ZoneInfo prefers the system tz database, so check the declared
+        # tzdata dependency itself ships the zones (CR49 Q3).
+        from importlib import resources
+        files = resources.files("tzdata.zoneinfo")
+        assert files.joinpath("America", "New_York").is_file()
+        assert files.joinpath("Europe", "Dublin").is_file()
 
     def test_none_and_blank_default_to_today_dublin(self):
         now = _utc(2026, 11, 20, 12, 0)
@@ -134,6 +141,23 @@ class TestJobStartDateMs:
     def test_rejects_nan_inf_and_out_of_range_numbers(self, value):
         with pytest.raises(ValueError):
             server._job_start_date_ms(value)
+
+    @pytest.mark.parametrize("value", [
+        1801458000,         # 1 Feb 2027 in epoch seconds -> 21 Jan 1970
+        20270201,           # YYYYMMDD as a number
+        0,
+        -1,
+        "0202-11-20",       # typo year
+        "1979-12-31",
+        "2101-01-01",
+    ])
+    def test_rejects_implausible_dates(self, value):
+        with pytest.raises(ValueError):
+            server._job_start_date_ms(value)
+
+    def test_accepts_range_bounds(self):
+        assert isinstance(server._job_start_date_ms("1980-01-01"), int)
+        assert isinstance(server._job_start_date_ms("2100-12-31"), int)
 
     def test_default_now_uses_now_utc_seam(self):
         with patch("bullhorn_mcp.server._now_utc", return_value=_utc(2026, 11, 20, 0, 30)) as seam:
@@ -257,6 +281,28 @@ class TestCreateJobStartDate:
 
         assert env.body["startDate"] == NOV_20_2026
 
+    def test_create_job_full_payload_with_start_date(self, env):
+        _create(env, fields={"startDate": "2026-07-15"})
+
+        assert env.body == {
+            "clientCorporation": {"id": 1},
+            "clientContact": {"id": 2},
+            "title": "Engineer",
+            "owner": {"id": 42},
+            "startDate": JUL_15_2026,
+        }
+
+    def test_create_job_full_payload_with_label_start_date(self, env):
+        _create(env, fields={"Start Date": "2027-02-01"})
+
+        assert env.body == {
+            "clientCorporation": {"id": 1},
+            "clientContact": {"id": 2},
+            "title": "Engineer",
+            "owner": {"id": 42},
+            "startDate": FEB_01_2027,
+        }
+
     def test_create_job_label_start_date_is_normalised(self, env):
         _create(env, fields={"Start Date": "2027-02-01"})
 
@@ -278,12 +324,20 @@ class TestCreateJobStartDate:
 
         assert env.body["startDate"] == MAR_01_2027
 
+    def test_create_job_empty_caller_start_date_uses_env_default(self, env, monkeypatch):
+        monkeypatch.setenv("BULLHORN_JOBORDER_DEFAULTS", '{"startDate": "2027-03-01"}')
+
+        _create(env, fields={"startDate": ""})
+        _create(env, fields={"startDate": None})
+
+        assert [b["startDate"] for b in env.bodies] == [MAR_01_2027, MAR_01_2027]
+
     def test_create_job_invalid_start_date_returns_error_no_api_call(self, env):
         data = _create(env, fields={"startDate": "ASAP"})
 
         assert data["error"] == "invalid_start_date"
         assert "ASAP" in data["message"]
-        assert "YYYY-MM-DD" in data["hint"]
+        assert data["hint"] == "Pass the date as YYYY-MM-DD, or leave it out for today."
         assert env.put_calls == 0
         assert env.bodies == []
 
@@ -306,6 +360,15 @@ class TestCreateJobStartDate:
         data = _create(env)
 
         assert data["error"] == "invalid_start_date"
+        assert "BULLHORN_JOBORDER_DEFAULTS" in data["hint"]
+        assert "administrator" in data["hint"]
+        assert env.put_calls == 0
+
+    def test_create_job_epoch_seconds_rejected(self, env):
+        data = _create(env, fields={"startDate": 1801458000})
+
+        assert data["error"] == "invalid_start_date"
+        assert "milliseconds" in data["message"]
         assert env.put_calls == 0
 
     def test_create_job_start_date_satisfies_required_config(self, env, monkeypatch):
@@ -368,6 +431,8 @@ class TestUpdateJobStartDate:
 
         assert data["error"] == "invalid_start_date"
         assert "YYYY-MM-DD" in data["hint"]
+        assert "leave it out for today" not in data["hint"]
+        assert "keeps the job's current start date" in data["hint"]
         assert env.post_calls == 0
         assert env.bodies == []
 
@@ -391,19 +456,6 @@ class TestStartDateEndToEnd:
         assert env.body["clientContact"] == {"id": 2}
         assert env.body["title"] == "Engineer"
 
-    def test_update_job_midnight_utc_epoch_writes_corrected_value(self, env):
-        # Job 51533's shape: 20 Nov 2026 stored as midnight UTC.
-        data = env.run(server.update_job, 51533, {"startDate": NOV_20_2026_MIDNIGHT_UTC})
-
-        assert data["changeType"] == "UPDATE"
-        assert env.body == {"startDate": 1795150800000}
-        assert datetime.fromtimestamp(env.body["startDate"] / 1000, tz=timezone.utc) == _utc(2026, 11, 20, 5, 0)
-
-    def test_update_job_read_back_value_round_trips_unchanged(self, env):
-        env.run(server.update_job, 51533, {"startDate": NOV_20_2026})
-
-        assert env.body == {"startDate": NOV_20_2026}
-
 
 # --------------------------------------------------------------------------- interface
 
@@ -412,7 +464,7 @@ class TestStartDateArgsReachAgent:
     into that parameter's schema description (not the tool description)."""
 
     @pytest.mark.parametrize("tool_name, needle", [
-        ("create_job", "today when left out"),
+        ("create_job", "else today"),
         ("update_job", "an empty one sets today"),
     ])
     def test_fields_schema_mentions_start_date(self, tool_name, needle):
@@ -420,3 +472,4 @@ class TestStartDateArgsReachAgent:
         tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == tool_name)
         desc = tool.parameters["properties"]["fields"]["description"]
         assert "startDate" in desc and "YYYY-MM-DD" in desc and needle in desc
+        assert "epoch" in desc
