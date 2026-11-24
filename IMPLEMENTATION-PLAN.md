@@ -4610,7 +4610,7 @@ Nothing in CR49 is implemented. Evidence:
 Runs before deploy, by calling the `create_job`/`update_job` tool functions from an inline `.venv/bin/python` script against the live tenant (stdio-style, no Entra identity, so `create_job` needs an explicit `owner`, e.g. the API user's id or the owner's CorporateUser id). With the owner's approval at build: `update_job(51437, {"Start Date": "<a date>"})` on the safe test job, read back (04:00 or 05:00 UTC), owner confirms the UI. Then `create_job` with no start date on company 10666 / contact 145635, confirm today, soft-delete the job. Record ids and values here.
 
 #### T45.7 End to end and docs
-- E2E (`tests/test_server_cr49.py`): `create_job` through the real tool with a frozen clock just after midnight Dublin (New York still the day before) sends today's Dublin date at 05:00 UTC; `update_job` with a midnight-UTC epoch (51533's shape) writes the corrected value. Prior sprints' E2E suites (`tests/test_cv_write_e2e.py`, `tests/test_server_cr45.py`) still pass.
+- E2E (`tests/test_server_cr49.py`): `create_job` through the real tool with a frozen clock just after midnight Dublin (New York still the day before) sends today's Dublin date at 05:00 UTC; `update_job` with a midnight-UTC epoch (51533's shape) writes the corrected value (covered by `TestUpdateJobStartDate::test_update_job_start_date_normalised`; the duplicate E2E test was removed in review). Prior sprints' E2E suites (`tests/test_cv_write_e2e.py`, `tests/test_server_cr45.py`) still pass.
 - README `create_job`/`update_job` rows: one line on the start date default and `YYYY-MM-DD`. CR49 Status flips to COMPLETE at the post-tag doc sync.
 
 ### Build notes (2026-11-21)
@@ -4625,7 +4625,7 @@ Runs before deploy, by calling the `create_job`/`update_job` tool functions from
 
 ### Verification
 
-- [x] `.venv/bin/pytest` green; measured count recorded below (1,615 passed).
+- [x] `.venv/bin/pytest` green; measured count recorded below (1,615 passed at build; 1,628 after review).
 - [x] `grep -rn "zoneinfo" src/` shows only `server.py`; `tzdata` in `pyproject.toml`.
 - [x] Tool count unchanged at 43. Args delta recorded (P4).
 - [x] Line endings: `server.py` LF; `tests/test_server.py`, `pyproject.toml` CRLF; `tests/test_server_cr49.py` LF (new). Checked.
@@ -4637,7 +4637,7 @@ Runs before deploy, by calling the `create_job`/`update_job` tool functions from
 
 Previous: 1,546 (v0.0.59). Planned: about 12 (T45.1/T45.2) + 6 (T45.3) + 4 (T45.4) + 2 (T45.7), about 24, plus edited existing tests. **To be measured, not predicted.**
 
-**Actual: 1,615 passing, 0 failing** (1,546 + 69 new in tests/test_server_cr49.py; one existing test edited).
+**Actual: 1,615 passing, 0 failing** (1,546 + 69 new in tests/test_server_cr49.py; one existing test edited). **After review: 1,628 passing, 0 failing** (1,546 + 82 in tests/test_server_cr49.py).
 
 ## Sprint 46: CR50 file upload follow-ups (box always offered, file description cap, `get_file_text`, next_steps, wording, box URI) - PLANNED (replan 2026-11-20)
 

@@ -155,6 +155,15 @@ class TestJobStartDateMs:
         with pytest.raises(ValueError):
             server._job_start_date_ms(value)
 
+    def test_out_of_range_message_mentions_milliseconds_only_for_numbers(self):
+        with pytest.raises(ValueError) as num:
+            server._job_start_date_ms(1801458000)
+        with pytest.raises(ValueError) as text:
+            server._job_start_date_ms("0202-11-20")
+        assert "milliseconds" in str(num.value)
+        assert "milliseconds" not in str(text.value)
+        assert "0202-11-20" in str(text.value)
+
     def test_accepts_range_bounds(self):
         assert isinstance(server._job_start_date_ms("1980-01-01"), int)
         assert isinstance(server._job_start_date_ms("2100-12-31"), int)
@@ -433,6 +442,14 @@ class TestUpdateJobStartDate:
         assert "YYYY-MM-DD" in data["hint"]
         assert "leave it out for today" not in data["hint"]
         assert "keeps the job's current start date" in data["hint"]
+        assert env.post_calls == 0
+        assert env.bodies == []
+
+    def test_update_job_epoch_seconds_rejected(self, env):
+        data = self._update(env, {"startDate": 1801458000})
+
+        assert data["error"] == "invalid_start_date"
+        assert "milliseconds" in data["message"]
         assert env.post_calls == 0
         assert env.bodies == []
 

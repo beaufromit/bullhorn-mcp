@@ -412,10 +412,10 @@ def _job_start_date_ms(value: Any, *, now: datetime | None = None) -> int:
     else:
         raise ValueError(f"Start date must be a YYYY-MM-DD string or epoch milliseconds, not {type(value).__name__}.")
     if not _START_DATE_MIN_YEAR <= day.year <= _START_DATE_MAX_YEAR:
-        raise ValueError(
-            f"Start date {value!r} is {day.isoformat()}, outside {_START_DATE_MIN_YEAR}-{_START_DATE_MAX_YEAR}. "
-            "Numbers must be epoch milliseconds, not seconds."
-        )
+        msg = f"Start date {value!r} is {day.isoformat()}, outside {_START_DATE_MIN_YEAR}-{_START_DATE_MAX_YEAR}."
+        if not isinstance(value, str):
+            msg += " Numbers must be epoch milliseconds, not seconds."
+        raise ValueError(msg)
     midnight = datetime(day.year, day.month, day.day, tzinfo=_BULLHORN_DATE_TZ)
     return int(midnight.timestamp() * 1000)
 
