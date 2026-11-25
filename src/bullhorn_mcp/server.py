@@ -38,7 +38,6 @@ from .duplicate_retrieval import match_candidates
 from .duplicates import CandidateProfile, profile_from_fields, profile_from_parse, public_match_result
 from .perplexity import search_people, PerplexityError
 from .uploads import (
-    ALLOWED_EXTENSIONS,
     CV_EXTENSIONS,
     MAX_UPLOAD_BYTES,
     UploadError,
@@ -329,9 +328,92 @@ def get_metadata() -> BullhornMetadata:
     return _metadata
 
 
+# CR50 F2: a file's ``description`` holds its extracted text and can run to tens of
+# thousands of characters. Reads return only a preview; get_file_text pages the rest.
+_FILE_DESCRIPTION_PREVIEW = 500
+_FILE_ROW_KEYS = ("fileAttachments", "parsedResumeFile")
+
+
+def _cap_file_row(row):
+    """Return ``row`` with an over-long ``description`` previewed; the row itself is never mutated."""
+    if not isinstance(row, dict):
+        return row
+    description = row.get("description")
+    if not isinstance(description, str) or len(description) <= _FILE_DESCRIPTION_PREVIEW:
+        return row
+    capped = dict(row)
+    capped["description"] = description[:_FILE_DESCRIPTION_PREVIEW]
+    capped["description_truncated"] = True
+    capped["description_length"] = len(description)
+    return capped
+
+
+def _cap_file_rows(rows: list):
+    """Cap every row of a list; return the same list object when nothing changed."""
+    capped = [_cap_file_row(r) for r in rows]
+    if any(new is not old for new, old in zip(capped, rows)):
+        return capped
+    return rows
+
+
+def _cap_file_value(value):
+    """Cap the value of a file key: an envelope ``{"total", "data": [...]}``, a plain list or one row."""
+    if isinstance(value, list):
+        return _cap_file_rows(value)
+    if isinstance(value, dict):
+        if isinstance(value.get("data"), list):
+            rows = _cap_file_rows(value["data"])
+            if rows is value["data"]:
+                return value
+            return {**value, "data": rows}
+        return _cap_file_row(value)
+    return value
+
+
+def _cap_walk(node):
+    if isinstance(node, list):
+        items = [_cap_walk(n) for n in node]
+        if any(new is not old for new, old in zip(items, node)):
+            return items
+        return node
+    if isinstance(node, dict):
+        changed = {}
+        for key, value in node.items():
+            new = _cap_file_value(value) if key in _FILE_ROW_KEYS else _cap_walk(value)
+            if new is not value:
+                changed[key] = new
+        return {**node, **changed} if changed else node
+    return node
+
+
+def _cap_file_descriptions(data, file_rows: bool = False):
+    """Preview long file descriptions in a result (CR50 F2, P2).
+
+    Only values under the keys ``fileAttachments`` and ``parsedResumeFile`` are
+    touched, at any depth. With ``file_rows=True`` the top-level rows are file rows
+    too (search/query on a ``*FileAttachment`` entity). Descriptions over
+    ``_FILE_DESCRIPTION_PREVIEW`` characters are cut to that length and gain
+    ``description_truncated`` and ``description_length``. Anything that changes is
+    copied; the input is never mutated. All other values pass through untouched.
+    """
+    if file_rows:
+        if isinstance(data, list):
+            data = _cap_file_rows(data)
+        elif isinstance(data, dict) and isinstance(data.get("data"), list):
+            rows = _cap_file_rows(data["data"])
+            if rows is not data["data"]:
+                data = {**data, "data": rows}
+    return _cap_walk(data)
+
+
+def _is_file_entity(entity) -> bool:
+    """True for a ``*FileAttachment`` entity, whose result rows are themselves file rows."""
+    return isinstance(entity, str) and entity.strip().endswith("FileAttachment")
+
+
 def format_response(data: list | dict) -> str:
-    """Format API response as readable JSON."""
-    return json.dumps(data, indent=2, default=str)
+    """Format API response as readable JSON, with long file descriptions previewed (CR50 F2)."""
+    return json.dumps(_cap_file_descriptions(data), indent=2, default=str)
 
 
 def _iso_to_epoch_ms(date_str: str) -> int:
@@ -1422,7 +1504,7 @@ def search_entities(
         ):
             envelope["warnings"] = [_NOTE_INDEX_EMPTY_WARNING]
 
-        return format_response(envelope)
+        return format_response(_cap_file_descriptions(envelope, file_rows=_is_file_entity(entity)))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -1489,7 +1571,9 @@ def query_entities(
             order_by=order_by,
         )
 
-        return format_response(_paginate_envelope(meta, start, limit))
+        return format_response(
+            _cap_file_descriptions(_paginate_envelope(meta, start, limit), file_rows=_is_file_entity(entity))
+        )
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -1764,7 +1848,7 @@ def create_contact(fields: dict, force: bool = False) -> str:
         if warnings:
             data = json.loads(response)
             data["warnings"] = warnings
-            return json.dumps(data, indent=2)
+            return format_response(data)
         return response
 
     except ValueError as e:
@@ -1989,7 +2073,7 @@ def update_record(entity: str, entity_id: int, fields: dict) -> str:
         if warnings:
             data = json.loads(response)
             data["warnings"] = warnings
-            return json.dumps(data, indent=2)
+            return format_response(data)
         return response
 
     except (AuthenticationError, BullhornAPIError) as e:
@@ -2508,7 +2592,7 @@ def create_candidate(
         if not has_children:
             if warnings:
                 data["warnings"] = warnings
-            return json.dumps(data, indent=2)
+            return format_response(data)
 
         # The Candidate exists from here on: nothing below may hide its id (CR43 goal 5).
         candidate_id = result["changedEntityId"]
@@ -2525,7 +2609,7 @@ def create_candidate(
         data["written"] = written
         if warnings:
             data["warnings"] = warnings
-        return json.dumps(data, indent=2, default=str)
+        return format_response(data)
 
     except ValueError as e:
         return format_response({"error": "owner_not_found", "message": str(e)})
@@ -2617,9 +2701,9 @@ def find_duplicate_candidates(
 # box), and the CV tools and attach_file take the resulting upload_id. Uploads are bound to the
 # Entra `sub`, so they need HTTP mode (stdio has no token and no upload listener).
 
-# The URI keeps its CV-era name (CR45 P5): a risk-avoidance choice, not a known host
-# requirement. The box only just started rendering in Cowork, and the URI is not user-facing.
-_UPLOAD_BOX_URI = "ui://bullhorn/cv-upload-box.html"
+# CR50 F7: renamed from the CV-era ui://bullhorn/cv-upload-box.html (kept through CR45 P5
+# while the box was new in Cowork) once it had rendered in Cowork and on the web (T44.8).
+_UPLOAD_BOX_URI = "ui://bullhorn/upload-box.html"
 
 # Entities Bullhorn accepts files on (CR45 D1). Lead is refused with its own message.
 ATTACHABLE_ENTITIES = (
@@ -2664,12 +2748,55 @@ def _client_supports_ui() -> bool:
         return False
 
 
+_UI_LOGGED_SESSIONS: set[str] = set()
+_UI_LOGGED_MAX = 1000
+
+
+def _log_ui_support_once() -> None:
+    """Log at INFO, once per session, whether the client advertised MCP Apps (boolean only)."""
+    try:
+        key = get_context().session_id
+    except Exception:
+        key = "no-session"
+    if key in _UI_LOGGED_SESSIONS:
+        return
+    if len(_UI_LOGGED_SESSIONS) >= _UI_LOGGED_MAX:
+        _UI_LOGGED_SESSIONS.clear()
+    _UI_LOGGED_SESSIONS.add(key)
+    _logger.info("client advertises MCP Apps: %s", _client_supports_ui())
+
+
+def _upload_next_step(
+    upload_id: str, filename: str, entity: str | None, entity_id: int | None, received: bool = False
+) -> str:
+    """The follow-on step after the file arrives: the CV path only for a CV file going on a Candidate.
+
+    ``received=True`` (show_upload_box on an upload that already has its file) drops the
+    get_file_upload status check, which would tell Claude to confirm what it was just told.
+    """
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    check = "" if received else f"Then call get_file_upload(upload_id='{upload_id}') and check status is 'received'. "
+    if ext in CV_EXTENSIONS and entity in (None, "Candidate"):
+        return (
+            check
+            + f"For a CV going on a Candidate, call parse_cv(upload_id='{upload_id}') and review the parse against the CV itself: "
+            "fix names, the current employer (companyName), job titles with the employer merged in, "
+            "dates (an ongoing role has no endDate) and skills that are not in the CV. "
+            f"Then call create_candidate_from_cv(upload_id='{upload_id}', <your corrections>) for a new "
+            f"candidate, or attach_cv(candidate_id=..., upload_id='{upload_id}', <your corrections>) for an "
+            "existing one, and tell the user exactly what was written. "
+            f"For anything else, call attach_file(entity, entity_id, upload_id='{upload_id}', type?, description?)."
+        )
+    target = f"entity='{entity}', entity_id={entity_id}" if entity and entity_id is not None else "entity, entity_id"
+    return check + f"{'Then call' if check else 'Call'} attach_file({target}, upload_id='{upload_id}', type?, description?)."
+
+
 def _upload_error(e: UploadError) -> str:
     hints = {
         "upload_not_found": "Call request_file_upload to start a new upload.",
         "upload_expired": "The upload expired. Call request_file_upload again and resend the file.",
         "upload_already_used": "This upload has already been used. Call request_file_upload for a new one.",
-        "unsupported_file_type": "Allowed file types: " + ", ".join(sorted(ALLOWED_EXTENSIONS)) + ".",
+        "unsupported_file_type": "Use one of the allowed types listed above, or convert the file (for example a .md file to .txt).",
         "invalid_entity_hint": "Pass both entity and entity_id, or neither.",
         "too_many_uploads": "Use or finish the uploads already started; unused ones expire after 15 minutes.",
         "upload_in_use": "Wait for the other call on this upload to finish, then check get_file_upload(upload_id).",
@@ -3176,27 +3303,14 @@ def request_file_upload(filename: str, entity: str | None = None, entity_id: int
         return _upload_error(e)
 
     upload_url = _upload_url(token)
-    use_step = (
-        f"Then call get_file_upload(upload_id='{upload_id}') and check status is 'received'. "
-        f"For a CV going on a Candidate, call parse_cv(upload_id='{upload_id}') and review the parse against the CV itself: "
-        "fix names, the current employer (companyName), job titles with the employer merged in, "
-        "dates (an ongoing role has no endDate) and skills that are not in the CV. "
-        f"Then call create_candidate_from_cv(upload_id='{upload_id}', <your corrections>) for a new "
-        f"candidate, or attach_cv(candidate_id=..., upload_id='{upload_id}', <your corrections>) for an "
-        "existing one, and tell the user exactly what was written. "
-        f"For anything else, call attach_file(entity, entity_id, upload_id='{upload_id}', type?, description?)."
+    use_step = _upload_next_step(upload_id, filename, entity, entity_id)
+    fallback = (
+        f"If curl fails or you cannot run shell commands, call show_upload_box(upload_id='{upload_id}') "
+        "so the user can drop the file into the chat. Showing the box replaces this upload URL, "
+        "so do not curl the old one afterwards. If no box appears, tell the user the file could not "
+        "be sent and stop. Do not paste, retype or base64-encode the file."
     )
-    if _client_supports_ui():
-        fallback = (
-            f"If curl fails or you cannot run shell commands, call "
-            f"show_upload_box(upload_id='{upload_id}') so the user can drop the file into the chat. "
-            "Showing the box replaces this upload URL: the old URL stops working, so do not curl it afterwards."
-        )
-    else:
-        fallback = (
-            "If curl fails or you cannot run shell commands, tell the user the file could not "
-            "be sent and stop. Do not paste, retype or base64-encode the file."
-        )
+    _log_ui_support_once()
     return format_response({
         "upload_id": upload_id,
         "upload_url": upload_url,
@@ -3342,9 +3456,10 @@ def attach_file(
                 and (row.get("name") or "").strip().lower() == filename.strip().lower()
             ]
             if same:
+                id_word = "file id" if len(same) == 1 else "file ids"
                 warnings.append(
                     f"A file named '{filename}' is already on {entity} {entity_id} "
-                    f"(file id {', '.join(same)}). The new file was added alongside it."
+                    f"({id_word} {', '.join(same)}). The new file was added alongside it."
                 )
         except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as e:
             # Best effort: no filename or personal data in the log, so the
@@ -3353,11 +3468,12 @@ def attach_file(
                 "attach_file: could not read existing files of %s %s: %s",
                 entity, entity_id, str(e).split(" - ", 1)[0],
             )
+        sent_description = (description or "").strip() or None
         result = client.attach_file(
             entity, entity_id, upload["data"], filename,
             client._guess_content_type(upload["extension"]),
             external_id=_FILE_EXTERNAL_ID, file_type=label,
-            description=(description or "").strip() or None,
+            description=sent_description,
         )
         file_id = (result or {}).get("fileId")
         upload_store.mark_attached(upload_id, file_id, entity, entity_id)
@@ -3368,6 +3484,7 @@ def attach_file(
             "file_id": file_id,
             "filename": filename,
             "type": label,
+            "description": sent_description,
             "warnings": warnings,
         })
     except (AuthenticationError, BullhornAPIError, httpx.HTTPError) as e:
@@ -3436,10 +3553,8 @@ def show_upload_box(upload_id: str) -> str | ToolResult:
             return format_response({
                 "error": "upload_already_received",
                 "message": f"Upload '{upload_id}' has already received its file, so no upload box is needed.",
-                "hint": (
-                    f"Carry on: a CV goes to parse_cv, then create_candidate_from_cv(upload_id='{upload_id}') "
-                    f"or attach_cv(candidate_id=..., upload_id='{upload_id}'); any other file goes to "
-                    f"attach_file(entity, entity_id, upload_id='{upload_id}')."
+                "hint": "Carry on: " + _upload_next_step(
+                    upload_id, rec["filename"], rec.get("entity"), rec.get("entity_id"), received=True
                 ),
             })
         # The store keeps only token hashes, so the box gets a fresh token for the
@@ -3943,7 +4058,7 @@ def _create_candidate_from_cv(
                     "Candidate", candidate_id, upload["data"], upload["filename"], content_mime,
                     external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
                 )
-                written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
+                written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"], "type": _CV_FILE_TYPE}
                 upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id)
             except Exception as exc:
                 warnings.append(f"CV file attachment failed: {exc}")
@@ -4250,7 +4365,7 @@ def _attach_cv(
                     "Candidate", candidate_id, upload["data"], upload["filename"], content_mime,
                     external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
                 )
-                written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
+                written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"], "type": _CV_FILE_TYPE}
                 upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id)
             except Exception as exc:
                 warnings.append(
@@ -4258,7 +4373,7 @@ def _attach_cv(
                     f"upload_id='{upload_id}'); the upload is kept until it expires."
                 )
         else:
-            written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "already_attached": True}
+            written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "type": _CV_FILE_TYPE, "already_attached": True}
     except Exception as exc:
         _logger.exception("attach_cv: failure part way through writing Candidate %s", candidate_id)
         result["partial"] = True
@@ -4319,7 +4434,7 @@ def _attach_created_cv_file(
     written: dict = {"fields": [], "work_history": [], "education": [], "skill_set": [], "primary_skills": [], "file": None}
     result: dict = {"committed": True, "candidate_id": candidate_id, "written": written}
     if upload["status"] != "received":
-        written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "already_attached": True}
+        written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "type": _CV_FILE_TYPE, "already_attached": True}
     else:
         try:
             client = get_client()
@@ -4328,7 +4443,7 @@ def _attach_created_cv_file(
                 "Candidate", candidate_id, upload["data"], upload["filename"], content_mime,
                 external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
             )
-            written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"]}
+            written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"], "type": _CV_FILE_TYPE}
             upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id)
         except Exception as exc:
             warnings.append(
@@ -5024,6 +5139,79 @@ def people_search_perplexity(
         ),
         "results": results,
     })
+
+
+# CR50 F2: one page of a file's extracted text, in characters.
+_FILE_TEXT_PAGE = 20000
+
+
+@mcp.tool()
+def get_file_text(
+    entity: str,
+    entity_id: int,
+    file_id: int,
+    offset: int = 0,
+) -> str:
+    """Read the full text of a file on a record, one page at a time. Use when a record's file preview says description_truncated and the task needs the full text.
+
+    Args:
+        entity: The record type the file is on (Candidate, ClientContact, ClientCorporation, JobOrder, Placement or Opportunity).
+        entity_id: The record's id.
+        file_id: The file's id, as shown in the record's file list.
+        offset: Character to start from (default 0). Pass next_offset from the previous page to continue.
+    """
+    refused = _unsupported_entity_error(entity)
+    if refused:
+        return refused
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return format_response({
+            "error": "invalid_offset",
+            "message": f"offset must be a whole number of 0 or more, got {offset!r}.",
+        })
+    try:
+        rows = get_client().get_entity_files(entity, entity_id)
+    except BullhornAPIError as e:
+        # Match the status only: the message also carries the response body.
+        if str(e).startswith("API request failed: 404 "):
+            return format_response({
+                "error": "record_not_found",
+                "message": f"{entity} {entity_id} was not found.",
+            })
+        return f"ERROR: {e}"
+    except AuthenticationError as e:
+        return f"ERROR: {e}"
+    row = next((r for r in rows if r.get("id") == file_id), None)
+    if row is None:
+        return format_response({
+            "error": "file_not_found",
+            "message": f"{entity} {entity_id} has no file with id {file_id}.",
+            "files": [{"id": r.get("id"), "name": r.get("name")} for r in rows],
+        })
+    text = row.get("description")
+    text = text if isinstance(text, str) else ""
+    length = len(text)
+    if offset > 0 and offset >= length:
+        return format_response({
+            "error": "invalid_offset",
+            "message": f"offset {offset} is past the end of the text (length {length}).",
+            "length": length,
+        })
+    end = offset + _FILE_TEXT_PAGE
+    result = {
+        "entity": entity,
+        "entity_id": entity_id,
+        "file_id": file_id,
+        "name": row.get("name"),
+        "type": row.get("type"),
+        "isDeleted": row.get("isDeleted"),
+        "length": length,
+        "offset": offset,
+        "text": text[offset:end],
+        "next_offset": end if end < length else None,
+    }
+    if length == 0:
+        result["note"] = "Bullhorn holds no text for this file (for example an image or an email)."
+    return format_response(result)
 
 
 # CR41: POST /upload/{token}. The token is the only authorisation (the route sits

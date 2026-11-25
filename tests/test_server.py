@@ -3031,7 +3031,7 @@ class TestMCPServerSetup:
         tools = {t.name for t in asyncio.run(server.mcp.list_tools())}
 
         assert {"request_file_upload", "get_file_upload", "show_upload_box", "attach_file"} <= tools
-        assert len(tools) == 43
+        assert len(tools) == 44  # CR50 added get_file_text
 
     def test_old_upload_tool_names_absent(self):
         """No tool, instruction, description, parameter text or next_steps still says the old names."""
@@ -6893,7 +6893,7 @@ class TestCreateCandidateFromCv:
         assert data["candidate_id"] == 200
         assert [w["id"] for w in data["written"]["work_history"]] == [201, 202]
         assert [e["id"] for e in data["written"]["education"]] == [203, 204]
-        assert data["written"]["file"] == {"file_id": 55, "name": "Jane_Doe_CV.pdf"}
+        assert data["written"]["file"] == {"file_id": 55, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
 
         # The full derivation chain must be tested on the Candidate payload.
         from unittest.mock import call
@@ -7035,7 +7035,7 @@ class TestCreateCandidateFromCv:
         assert data["written"]["education"] == []
         assert data["written"]["primary_skills"] == []
         # The file is still attached after the child failures
-        assert data["written"]["file"] == {"file_id": 70, "name": "Jane_Doe_CV.pdf"}
+        assert data["written"]["file"] == {"file_id": 70, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
 
     def test_source_auto_stamped_when_not_provided(self, mock_client, mock_metadata, sample_parsed_resume):
         """create_candidate_from_cv stamps source=get_mcp_source() when caller omits source."""
@@ -7195,7 +7195,7 @@ class TestCreateCandidateFromCv:
             retried = json.loads(server.attach_cv(candidate_id=candidate_id, upload_id=upload_id))
 
         assert retried["committed"] is True
-        assert retried["written"]["file"] == {"file_id": 56, "name": "Jane_Doe_CV.pdf"}
+        assert retried["written"]["file"] == {"file_id": 56, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
         assert mock_client.create.call_count == creates_before
         mock_client.update.assert_not_called()
         mock_client.add_association.assert_not_called()
@@ -7232,7 +7232,7 @@ class TestCreateCandidateFromCv:
         assert retried == {
             "committed": True, "candidate_id": candidate_id,
             "written": {"fields": [], "work_history": [], "education": [], "skill_set": [],
-                        "primary_skills": [], "file": {"file_id": 56, "name": "Jane_Doe_CV.pdf"}},
+                        "primary_skills": [], "file": {"file_id": 56, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}},
         }
         mock_client.create.assert_not_called()
         mock_client.update.assert_not_called()
@@ -7257,7 +7257,7 @@ class TestCreateCandidateFromCv:
              patch.object(server, "get_metadata", return_value=mock_metadata):
             again = json.loads(server.attach_cv(candidate_id=candidate_id, upload_id=upload_id, skills=["Python"]))
 
-        assert again["written"]["file"] == {"file_id": 55, "name": "Jane_Doe_CV.pdf", "already_attached": True}
+        assert again["written"]["file"] == {"file_id": 55, "name": "Jane_Doe_CV.pdf", "type": "Original CV", "already_attached": True}
         assert "Corrections were ignored" in again["warnings"][0]
         for m in (mock_client.create, mock_client.update, mock_client.add_association, mock_client.attach_file):
             m.assert_not_called()
@@ -7687,7 +7687,7 @@ class TestCreateCandidateFromCv:
                 ],
                 "skill_set": ["EXCEL", "ANNUAL BUDGET", "IFRS"],
                 "primary_skills": [1000125, 1000200],
-                "file": {"file_id": 55, "name": "Jane_Doe_CV.pdf"},
+                "file": {"file_id": 55, "name": "Jane_Doe_CV.pdf", "type": "Original CV"},
             },
             "duplicate_check": _match_result(),
         }
@@ -7958,7 +7958,7 @@ class TestAttachCv:
 
         data = self._attach(mock_client, mock_metadata, upload_id=upload_id, match_check_id="chk-9")
 
-        assert data["written"]["file"] == {"file_id": 80, "name": "Jane_Doe_CV.pdf"}
+        assert data["written"]["file"] == {"file_id": 80, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
         match_stub.log.assert_called_once()
         assert match_stub.log.call_args.args == ("chk-9", "attached_to", self.CID)
 
@@ -8001,7 +8001,7 @@ class TestAttachCv:
             "Financial Accountant Sample Gadgets Ireland", "Assistant Accountant",
         ]
         assert len(data["written"]["education"]) == 2
-        assert data["written"]["file"] == {"file_id": 80, "name": "Jane_Doe_CV.pdf"}
+        assert data["written"]["file"] == {"file_id": 80, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
         mock_client.add_association.assert_called_once_with("Candidate", self.CID, "primarySkills", [1000125, 1000200])
         mock_client.attach_file.assert_called_once_with(
             "Candidate", self.CID, _CV_BYTES, "Jane_Doe_CV.pdf", "application/pdf", external_id="Portfolio", file_type="Original CV"
@@ -8380,7 +8380,7 @@ class TestAttachCv:
 
         data = self._attach(mock_client, mock_metadata, upload_id=upload_id)
 
-        assert data["written"]["file"] == {"file_id": 82, "name": "Jane_Doe_CV.pdf"}
+        assert data["written"]["file"] == {"file_id": 82, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
         rec = server.upload_store.get(upload_id, "user-a")
         assert rec["status"] == "attached"
         assert rec["data"] is None
@@ -9220,12 +9220,12 @@ class TestRequestFileUpload:
         text = " ".join(data["next_steps"])
         assert f"show_upload_box(upload_id='{data['upload_id']}')" in text
 
-    def test_next_steps_omit_upload_box_when_ui_unsupported(self):
-        """Without MCP Apps support there is no mention of the box, and the agent is told to stop."""
+    def test_next_steps_offer_upload_box_when_ui_unsupported(self):
+        """CR50 F1: the box is offered whatever the client advertises, and the agent is told to stop if none appears."""
         data = self._request(ui=False)
 
         text = " ".join(data["next_steps"])
-        assert "show_upload_box" not in text
+        assert f"show_upload_box(upload_id='{data['upload_id']}')" in text
         assert "stop" in text.lower()
 
     def test_next_steps_curl_line_contains_url(self):
@@ -9304,14 +9304,18 @@ class TestRequestFileUpload:
         assert server.upload_store._uploads == {}
 
     def test_next_steps_point_non_cv_to_attach_file(self):
-        """next_steps send a CV to parse_cv and create/attach, and any other file to attach_file."""
+        """next_steps send a non-CV file only to attach_file; a CV keeps the CV path plus attach_file (CR50 F3)."""
         data = self._request(filename="photo.png")
         upload_id = data["upload_id"]
 
         text = " ".join(data["next_steps"])
         assert f"attach_file(entity, entity_id, upload_id='{upload_id}'" in text
-        assert f"parse_cv(upload_id='{upload_id}')" in text
-        assert text.index("parse_cv(") < text.index("attach_file(")
+        assert "parse_cv" not in text
+
+        cv = self._request(filename="Jane_Doe_CV.pdf")
+        cv_text = " ".join(cv["next_steps"])
+        assert f"attach_file(entity, entity_id, upload_id='{cv['upload_id']}'" in cv_text
+        assert cv_text.index("parse_cv(") < cv_text.index("attach_file(")
 
     def test_request_file_upload_next_steps_mention_review(self):
         """next_steps tell the agent to parse_cv, review and correct the parse, then create or attach."""
@@ -9391,7 +9395,7 @@ class TestGetFileUpload:
 class TestShowUploadBox:
     """Tests for the show_upload_box tool and its MCP App resource (CR41)."""
 
-    BOX_URI = "ui://bullhorn/cv-upload-box.html"
+    BOX_URI = "ui://bullhorn/upload-box.html"
 
     def _show(self, upload_id, sub="user-a"):
         with _http_as(sub), patch.dict(os.environ, {"MCP_BASE_URL": "https://mcp.example.com"}):

@@ -37,7 +37,7 @@ Typical use cases:
 
 ## MCP Tools
 
-43 tools, grouped by family below. Each tool's full parameter and field reference is in its live MCP description (enriched from Bullhorn `/meta` at startup), which is the authoritative interface.
+44 tools, grouped by family below. Each tool's full parameter and field reference is in its live MCP description (enriched from Bullhorn `/meta` at startup), which is the authoritative interface.
 
 ### Read tools
 
@@ -55,6 +55,7 @@ Typical use cases:
 - `query_entities`
 - `search_emails`
 - `get_entity_fields`
+- `get_file_text` (pages the full text of a file whose read preview says `description_truncated`; reads cap each file `description` at 500 characters)
 
 ### Note tools
 
@@ -323,7 +324,7 @@ Files never travel through a tool argument. The server issues a single-use uploa
 
 `create_candidate(fields, work_history=..., education=..., skills=..., primary_skills=...)` writes the same child records for a candidate found without a CV (LinkedIn, `people_search_perplexity`).
 
-**Fallback:** if `curl` cannot reach the server, Claude calls `show_upload_box(upload_id)`, which renders an upload box in the chat (an MCP App, resource `ui://bullhorn/cv-upload-box.html`, which keeps its CV-era name) when the client supports MCP Apps. The consultant picks the file there and the box shows `received`. The box is never blank: if its handshake fails it shows an error. Showing the box replaces the earlier upload URL, so the old one stops working. `request_file_upload` and `show_upload_box` return `expires_in_seconds`. If the client does not support MCP Apps, Claude reports the failure and stops.
+**Fallback:** if `curl` cannot reach the server, Claude calls `show_upload_box(upload_id)`, which renders an upload box in the chat (an MCP App, resource `ui://bullhorn/upload-box.html`) when the client supports MCP Apps. The consultant picks the file there and the box shows `received`. The box is never blank: if its handshake fails it shows an error. Showing the box replaces the earlier upload URL, so the old one stops working. `request_file_upload` and `show_upload_box` return `expires_in_seconds`. `request_file_upload` always offers this step, whatever the client advertises (Cowork renders the box without advertising MCP Apps). If no box appears, Claude reports the failure and stops.
 
 **Cowork egress setting:** set network egress to "Package managers only" and add `mcp.thepanel.com` to Additional allowed domains. This was verified sufficient on 2026-09-29.
 

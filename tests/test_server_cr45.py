@@ -237,7 +237,7 @@ class TestAttachFile:
 
         assert data == {
             "attached": True, "entity": entity, "entity_id": 77, "file_id": 4321,
-            "filename": "JD.docx", "type": None, "warnings": [],
+            "filename": "JD.docx", "type": None, "description": None, "warnings": [],
         }
         assert len(bh.find("PUT", f"/file/{entity}/77/raw")) == 1
         assert _status(upload_id) == "attached"

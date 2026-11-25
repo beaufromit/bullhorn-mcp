@@ -84,11 +84,11 @@ class TestUploadBoxGeneric:
         for stale in ("Drop the CV", "uploaded the CV", "show_cv_upload_box", "<title>CV upload"):
             assert stale not in html
 
-    def test_upload_box_uri_unchanged(self):
+    def test_upload_box_uri_renamed(self):
         import asyncio
         from bullhorn_mcp import server
 
-        assert server._UPLOAD_BOX_URI == "ui://bullhorn/cv-upload-box.html"
+        assert server._UPLOAD_BOX_URI == "ui://bullhorn/upload-box.html"
         resources = {str(r.uri): r for r in asyncio.run(server.mcp.list_resources())}
-        assert resources["ui://bullhorn/cv-upload-box.html"].name == "upload_box"
-        assert resources["ui://bullhorn/cv-upload-box.html"].description == "In-chat file upload box (MCP App)."
+        assert resources["ui://bullhorn/upload-box.html"].name == "upload_box"
+        assert resources["ui://bullhorn/upload-box.html"].description == "In-chat file upload box (MCP App)."

@@ -190,14 +190,14 @@ class TestCvFileAttach:
         upload_id = _upload_with_parse(PARSE)
         data = stack(bh, server.create_candidate_from_cv, upload_id=upload_id)
         _assert_original_cv_put(bh)
-        assert data["written"]["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf"}
+        assert data["written"]["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
         assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
 
     def test_attach_cv_attaches_original_cv(self, stack, clean_upload_store):
         bh = _Bullhorn(existing={"firstName": "Jane", "lastName": "Doe"})
         data, upload_id = _attach(stack, bh)
         _assert_original_cv_put(bh)
-        assert data["written"]["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf"}
+        assert data["written"]["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
         assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
 
     def test_attach_created_cv_file_attaches_original_cv(self, stack, clean_upload_store):
@@ -206,7 +206,7 @@ class TestCvFileAttach:
         server.upload_store.mark_created(upload_id, CID)
         data = stack(bh, server.attach_cv, candidate_id=CID, upload_id=upload_id)
         _assert_original_cv_put(bh)
-        assert data["written"]["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf"}
+        assert data["written"]["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
         assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
 
 
@@ -803,7 +803,7 @@ class TestNoPointsInResponses:
 
 # --- T43.11: the upload box result carries ui.resourceUri, expiry in seconds ----------------
 
-BOX_URI = "ui://bullhorn/cv-upload-box.html"
+BOX_URI = "ui://bullhorn/upload-box.html"
 
 
 class TestUploadBoxResult:

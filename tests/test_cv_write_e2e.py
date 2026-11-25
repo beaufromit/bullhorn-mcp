@@ -106,7 +106,7 @@ class TestCvWriteE2E:
 
         # written matches what was sent
         written = data["written"]
-        assert written["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf"}
+        assert written["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
         assert [w["companyName"] for w in written["work_history"]] == [b["companyName"] for b in wh_bodies]
         assert len(written["education"]) == 2
         assert set(written["fields"]) == set(body) - {"description"}
@@ -177,7 +177,7 @@ class TestCvWriteE2E:
         data = stack(bh, server.attach_cv, candidate_id=CID, upload_id=upload_id)
 
         _assert_original_cv_put(bh)
-        assert data["written"]["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf"}
+        assert data["written"]["file"] == {"file_id": 77, "name": "Jane_Doe_CV.pdf", "type": "Original CV"}
         writes = [(m, p) for m, p, _ in bh.requests if m in ("POST", "PUT", "DELETE")]
         assert writes == [("PUT", f"/file/Candidate/{CID}/raw")]
         assert server.upload_store.get(upload_id, "user-a")["status"] == "attached"
