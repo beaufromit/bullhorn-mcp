@@ -4621,7 +4621,7 @@ Runs before deploy, by calling the `create_job`/`update_job` tool functions from
 - P4 Args delta: +58 characters on create_job `fields`, +56 on update_job `fields` (114 total, about 30 tokens). Not visible to scripts/measure_descriptions.py because Args text is the parameter schema description.
 - Pinned behaviours for the owner to note: an invalid start date in `BULLHORN_JOBORDER_DEFAULTS` also returns `invalid_start_date` with no API call. `update_job` with an explicit None or "" overwrites the job's date with today (CR49 Q1).
 - Open notes (not bugs per spec, for the owner): a bare number is always read as epoch milliseconds, so epoch seconds or `20270201` would silently become a January 1970 date (fixed in review, M1: dates outside 1980-2100 are refused). A numeric string like "1801458000000" is rejected, so the interim Cowork prompt must send a JSON number, not a string.
-- T45.6 live check: PENDING owner approval (not run).
+- T45.6 live check: RUN 2026-11-25 with owner approval, through the tool functions (v0.0.60 code). `update_job(51437, {"Start Date": "2026-12-01"})` read back `1796101200000` (2026-12-01 05:00 UTC); before it, 51437 held `1793491200000` (2026-11-01 midnight UTC, the bad encoding). `create_job` on company 10666 / contact 145635, owner 142235, no start date, created job 51537, read back `1795582800000` (2026-11-25 05:00 UTC = today). 51537 then soft-deleted (`isDeleted: true`). Owner UI check of 51437 showing 1 Dec 2026: pending.
 
 ### Review (2026-11-24, 3 cycles)
 
@@ -4637,7 +4637,7 @@ Runs before deploy, by calling the `create_job`/`update_job` tool functions from
 - [x] `grep -rn "zoneinfo" src/` shows only `server.py`; `tzdata` in `pyproject.toml`.
 - [x] Tool count unchanged at 43. Args delta recorded (P4).
 - [x] Line endings: `server.py` LF; `tests/test_server.py`, `pyproject.toml` CRLF; `tests/test_server_cr49.py` LF (new). Checked.
-- [ ] T45.6 run (or declined) and recorded.
+- [x] T45.6 run (or declined) and recorded (2026-11-25; owner UI check pending).
 - [x] Local commit `feat: CR49 ...` (f497e16). `PROMPT_iterate.md` done (3 cycles), pushed, tagged **v0.0.60**.
 - [ ] At deploy: install the updated dependencies on the box (the new `tzdata`) **before** the restart, since the `ZoneInfo` constants are built at import; then `python -c "from zoneinfo import ZoneInfo; ZoneInfo('America/New_York'); ZoneInfo('Europe/Dublin')"` on the box, and the owner simplifies the Cowork skill to send `YYYY-MM-DD` (CR49 Rollout).
 
