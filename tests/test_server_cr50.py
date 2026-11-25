@@ -13,7 +13,7 @@ import pytest
 import respx
 
 from bullhorn_mcp import server
-from bullhorn_mcp.auth import BullhornAuth
+from bullhorn_mcp.auth import AuthenticationError, BullhornAuth
 from bullhorn_mcp.client import BullhornClient
 
 # Shared fixtures and helpers from earlier suites.
@@ -238,17 +238,19 @@ class TestCapEndToEnd:
 
         assert out["data"][0]["description"] == LONG
 
-    def test_search_entities_file_attachment_rows_capped(self, client):
-        body = {"data": [_file(5)], "total": 1}
-        with respx.mock:
-            respx.get(f"{REST}/search/CandidateFileAttachment").mock(
-                return_value=httpx.Response(200, json=body)
-            )
-            out = json.loads(server.search_entities(
-                entity="CandidateFileAttachment", query="id:5", fields="id,description"
-            ))
+    @pytest.mark.parametrize("tool", ["search", "query"])
+    def test_search_and_query_cap_once(self, client, tool):
+        # Review m7: the envelope is walked once, not once in the tool and again in format_response.
+        body = {"data": [{"id": 1, "fileAttachments": [_file(1)]}], "total": 1}
+        with respx.mock, patch.object(server, "_cap_walk", wraps=server._cap_walk) as walk:
+            respx.get(f"{REST}/{tool}/Candidate").mock(return_value=httpx.Response(200, json=body))
+            if tool == "search":
+                server.search_entities(entity="Candidate", query="id:1", fields="id")
+            else:
+                server.query_entities(entity="Candidate", where="id=1", fields="id")
 
-        assert out["data"][0]["description_length"] == 1200
+        top_level = [c for c in walk.call_args_list if isinstance(c.args[0], dict) and "pagination" in c.args[0]]
+        assert len(top_level) == 1
 
     def test_search_entities_nested_row_capped(self, client):
         body = {"data": [{"id": 1, "fileAttachments": [_file(1)]}], "total": 1}
@@ -320,11 +322,21 @@ class TestGetFileText:
 
     def test_file_not_found_lists_ids_and_names(self, client):
         with respx.mock:
-            _entity_files([{"id": 1, "name": "one.txt"}, {"id": 2, "name": "two.txt"}])
+            _entity_files([{"id": 1, "name": "one.txt", "isDeleted": True}, {"id": 2, "name": "two.txt", "isDeleted": False}])
             out = _text(file_id=999)
 
         assert out["error"] == "file_not_found"
-        assert out["files"] == [{"id": 1, "name": "one.txt"}, {"id": 2, "name": "two.txt"}]
+        assert out["files"] == [
+            {"id": 1, "name": "one.txt", "isDeleted": True},
+            {"id": 2, "name": "two.txt", "isDeleted": False},
+        ]
+
+    def test_auth_error_is_uniform_error(self):
+        # Review m4: an auth failure returns the uniform ERROR string.
+        with patch.object(server, "get_client", side_effect=AuthenticationError("REST login failed")):
+            raw = server.get_file_text("ClientCorporation", 10666, 899)
+
+        assert raw == "ERROR: REST login failed"
 
     def test_deleted_file_row_served_with_isdeleted(self, client):
         with respx.mock:
@@ -537,13 +549,16 @@ class TestNextStepsFollowHintAndExtension:
     def test_docx_no_hint_keeps_cv_path(self):
         step = _request("Jane.docx")["next_steps"][1]
 
-        assert "parse_cv(" in step and "create_candidate_from_cv(" in step and "attach_cv(" in step
-        assert "attach_file(" in step
+        assert "parse_cv(" in step and "create_candidate_from_cv(" in step and "attach_cv(candidate_id=..., " in step
+        assert "attach_file(entity, entity_id, upload_id=" in step
 
     def test_docx_candidate_hint_keeps_cv_path(self):
         step = _request("Jane.docx", "Candidate", 173063)["next_steps"][1]
 
         assert "parse_cv(" in step and "attach_cv(" in step
+        # Review m6: the hinted Candidate is named, in both calls.
+        assert "attach_cv(candidate_id=173063, " in step
+        assert "attach_file(entity='Candidate', entity_id=173063, upload_id=" in step
 
     def test_eml_candidate_hint_no_cv_text(self):
         step = _request("mail.eml", "Candidate", 173063)["next_steps"][1]
@@ -557,7 +572,7 @@ class TestNextStepsFollowHintAndExtension:
             ("Spec.docx", "JobOrder", 51437, False, "entity='JobOrder', entity_id=51437"),
             ("photo.png", None, None, False, "attach_file(entity, entity_id,"),
             ("Jane.pdf", None, None, True, "attach_file(entity, entity_id,"),
-            ("Jane.pdf", "Candidate", 5, True, "attach_file(entity, entity_id,"),
+            ("Jane.pdf", "Candidate", 5, True, "attach_file(entity='Candidate', entity_id=5,"),
         ],
     )
     def test_show_upload_box_received_hint_same_rule(self, filename, entity, entity_id, cv_text, named):
@@ -641,18 +656,31 @@ class TestAttachCvFileHasType:
             data, _ = _attach_cv(stack, _Bullhorn(existing=existing))
         elif path == "attach_already_attached":
             upload_id = _upload_with_parse(PARSE)
-            server.upload_store.mark_attached(upload_id, 77, "Candidate", CID)
+            server.upload_store.mark_attached(upload_id, 77, "Candidate", CID, "Original CV")
             data, _ = _attach_cv(stack, _Bullhorn(existing=existing), upload_id=upload_id)
         else:
             upload_id = _upload_with_parse(PARSE)
             server.upload_store.mark_created(upload_id, CID)
             if path == "created_already_attached":
-                server.upload_store.mark_attached(upload_id, 77, "Candidate", CID)
+                server.upload_store.mark_attached(upload_id, 77, "Candidate", CID, "Original CV")
             data = stack(_Bullhorn(), server.attach_cv, candidate_id=CID, upload_id=upload_id)
 
         assert data["written"]["file"]["type"] == "Original CV"
         assert data["written"]["file"]["file_id"] == 77
         assert data["written"]["file"].get("already_attached", False) is path.endswith("already_attached")
+
+    @pytest.mark.parametrize("label", [None, "Cover Letter"])
+    def test_attach_cv_after_attach_file_reports_stored_type(self, stack, fstack, label):
+        # Review M1: a file attach_file put on the Candidate keeps the type it was given.
+        upload_id = _upload_with_parse(PARSE)
+        kw = {"type": label} if label else {}
+        filed, _ = _attach_file(fstack, _FileBullhorn(), upload_id=upload_id, entity="Candidate", entity_id=CID, **kw)
+        assert filed["type"] == label
+
+        data, _ = _attach_cv(stack, _Bullhorn(existing={"firstName": "Jane", "lastName": "Doe"}), upload_id=upload_id)
+
+        assert data["written"]["file"]["already_attached"] is True
+        assert data["written"]["file"]["type"] == label
 
 
 @pytest.mark.usefixtures("clean_upload_store")

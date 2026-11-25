@@ -4703,7 +4703,7 @@ Nothing in CR50 is implemented. Evidence:
 - P7 description size: the delta was measured offline with `server.mcp.list_tools()` without enrichment (description plus parameter schema): 52,635 characters at 43 tools before, 53,388 at 44 after, +753 net (target under +800), all of it `get_file_text`. No tool description was reworded: the F1/F3 text changes are in tool results, not descriptions, so `request_file_upload`, `attach_file`, `show_upload_box` and `attach_cv` measure the same before and after. Live after the build, `scripts/measure_descriptions.py` gives TOTAL 72,698 chars, ~18,174 estimated tokens across 44 tools (`get_file_text` 155 chars / 38 tokens enriched). No live before-total was taken.
 - Pre-commit fixes: the `upload_already_received` hint no longer starts with "check status is 'received'" (`_upload_next_step(..., received=True)`), pinned in `test_show_upload_box_received_hint_same_rule`; README's fallback paragraph now says the box step is always offered. Live read-only error paths checked: an unknown file id on 10666 gives `file_not_found` with the file list, and ClientCorporation 999999999 gives `record_not_found` (so `/entityFiles` 404s for a missing record, as mocked).
 - T46.8 live read-only check (2026-11-25) PASSED: `get_company(10666, fields="id,fileAttachments[50](id,name,description)")` returned 13,152 characters (about 115,000 before), 23 files, 15 capped, max description_length 10,619. `get_file_text` returned file 899 (235 characters, 1 page) and file 530 (10,619 characters, 1 page) whole. Paging past 20,000 characters is covered by the E2E test (`TestCr50EndToEnd`), since no live file on 10666 exceeds a page.
-- The verification grep `grep -rn "cv-upload-box" src/ tests/ README.md` returns only two negative assertions in `tests/test_server_cr50.py` (they pin that the old URI and app name are gone).
+- The verification grep `grep -rn "cv-upload-box" src/ tests/ README.md` returns the F7 history comment in `src/bullhorn_mcp/server.py` and two negative assertions in `tests/test_server_cr50.py` (they pin that the old URI and app name are gone).
 
 ### Tasks
 
@@ -4745,7 +4745,7 @@ After the owner deploys v0.0.61 and reconnects the connector in Cowork and on th
 ### Verification
 
 - [x] `.venv/bin/pytest` green; measured count recorded below.
-- [x] `grep -rn "cv-upload-box" src/ tests/ README.md` returns nothing.
+- [x] `grep -rn "cv-upload-box" src/ tests/ README.md` returns only the F7 history comment in `src/bullhorn_mcp/server.py` and the two negative assertions in `tests/test_server_cr50.py` (corrected at review, m2).
 - [x] Tool count 44; `get_file_text` not in `TOOL_ENTITY_MAP`; description delta measured (P7).
 - [x] No new `.info(` line carries a token, identity, filename or session id.
 - [x] Line endings: `server.py`, `upload_box.html`, `README.md`, `CR50.md`, new test files LF; `tests/test_server.py` and this file CRLF.

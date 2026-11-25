@@ -157,6 +157,7 @@ class _Upload:
     sha256: str | None = None
     received_at: float | None = None
     file_id: object = None
+    file_type: str | None = None  # Bullhorn file type the attach sent (CR50 review M1)
     remove_at: float | None = None  # set once the record is a tombstone
     parsed: dict | None = None  # stored resume parse (no file bytes)
     # Set by every attach, so a file attached to a job is not mistaken for one
@@ -348,7 +349,7 @@ class UploadStore:
         """Return the record as a dict for its owner; anyone else gets ``UploadNotFound``.
 
         Keys: upload_id, status, filename, extension, format, entity, entity_id
-        (the hint), attached_entity, attached_entity_id, size, sha256, file_id,
+        (the hint), attached_entity, attached_entity_id, size, sha256, file_id, file_type,
         ``parsed`` (stored resume parse or None), ``attached_candidate_id``,
         ``created_candidate_id``, and ``data`` (bytes, only while ``received``).
         """
@@ -369,6 +370,7 @@ class UploadStore:
                 "size": rec.size,
                 "sha256": rec.sha256,
                 "file_id": rec.file_id,
+                "file_type": rec.file_type,
                 "parsed": rec.parsed,
                 "attached_candidate_id": rec.attached_candidate_id,
                 "created_candidate_id": rec.created_candidate_id,
@@ -419,6 +421,7 @@ class UploadStore:
         file_id: object = None,
         entity: str | None = None,
         entity_id: int | None = None,
+        file_type: str | None = None,
     ) -> None:
         """Drop the bytes once Bullhorn holds the file; keep a tombstone until the purge."""
         with self._lock:
@@ -428,6 +431,7 @@ class UploadStore:
             if rec is None:
                 return
             rec.file_id = file_id
+            rec.file_type = file_type
             rec.attached_entity = entity
             rec.attached_entity_id = entity_id
             # The CV paths read the candidate field; keep it in step.

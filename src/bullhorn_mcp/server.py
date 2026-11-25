@@ -411,9 +411,12 @@ def _is_file_entity(entity) -> bool:
     return isinstance(entity, str) and entity.strip().endswith("FileAttachment")
 
 
-def format_response(data: list | dict) -> str:
-    """Format API response as readable JSON, with long file descriptions previewed (CR50 F2)."""
-    return json.dumps(_cap_file_descriptions(data), indent=2, default=str)
+def format_response(data: list | dict, file_rows: bool = False) -> str:
+    """Format API response as readable JSON, with long file descriptions previewed (CR50 F2).
+
+    ``file_rows`` is passed to ``_cap_file_descriptions`` (query on a ``*FileAttachment`` entity).
+    """
+    return json.dumps(_cap_file_descriptions(data, file_rows=file_rows), indent=2, default=str)
 
 
 def _iso_to_epoch_ms(date_str: str) -> int:
@@ -1504,7 +1507,9 @@ def search_entities(
         ):
             envelope["warnings"] = [_NOTE_INDEX_EMPTY_WARNING]
 
-        return format_response(_cap_file_descriptions(envelope, file_rows=_is_file_entity(entity)))
+        # No file_rows here: /search/*FileAttachment does not exist (400 "Unknown
+        # search entity", checked live 2026-11-25), so only nested file keys are capped.
+        return format_response(envelope)
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -1571,9 +1576,7 @@ def query_entities(
             order_by=order_by,
         )
 
-        return format_response(
-            _cap_file_descriptions(_paginate_envelope(meta, start, limit), file_rows=_is_file_entity(entity))
-        )
+        return format_response(_paginate_envelope(meta, start, limit), file_rows=_is_file_entity(entity))
 
     except (AuthenticationError, BullhornAPIError) as e:
         return f"ERROR: {e}"
@@ -2776,18 +2779,20 @@ def _upload_next_step(
     """
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     check = "" if received else f"Then call get_file_upload(upload_id='{upload_id}') and check status is 'received'. "
+    target = f"entity='{entity}', entity_id={entity_id}" if entity and entity_id is not None else "entity, entity_id"
     if ext in CV_EXTENSIONS and entity in (None, "Candidate"):
+        # Review m6: name a hinted Candidate, as the non-CV branch names its record.
+        candidate = entity_id if entity == "Candidate" and entity_id is not None else "..."
         return (
             check
             + f"For a CV going on a Candidate, call parse_cv(upload_id='{upload_id}') and review the parse against the CV itself: "
             "fix names, the current employer (companyName), job titles with the employer merged in, "
             "dates (an ongoing role has no endDate) and skills that are not in the CV. "
             f"Then call create_candidate_from_cv(upload_id='{upload_id}', <your corrections>) for a new "
-            f"candidate, or attach_cv(candidate_id=..., upload_id='{upload_id}', <your corrections>) for an "
+            f"candidate, or attach_cv(candidate_id={candidate}, upload_id='{upload_id}', <your corrections>) for an "
             "existing one, and tell the user exactly what was written. "
-            f"For anything else, call attach_file(entity, entity_id, upload_id='{upload_id}', type?, description?)."
+            f"For anything else, call attach_file({target}, upload_id='{upload_id}', type?, description?)."
         )
-    target = f"entity='{entity}', entity_id={entity_id}" if entity and entity_id is not None else "entity, entity_id"
     return check + f"{'Then call' if check else 'Call'} attach_file({target}, upload_id='{upload_id}', type?, description?)."
 
 
@@ -3476,7 +3481,7 @@ def attach_file(
             description=sent_description,
         )
         file_id = (result or {}).get("fileId")
-        upload_store.mark_attached(upload_id, file_id, entity, entity_id)
+        upload_store.mark_attached(upload_id, file_id, entity, entity_id, label)
         return format_response({
             "attached": True,
             "entity": entity,
@@ -4059,7 +4064,7 @@ def _create_candidate_from_cv(
                     external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
                 )
                 written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"], "type": _CV_FILE_TYPE}
-                upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id)
+                upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id, _CV_FILE_TYPE)
             except Exception as exc:
                 warnings.append(f"CV file attachment failed: {exc}")
     except Exception as exc:
@@ -4366,14 +4371,14 @@ def _attach_cv(
                     external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
                 )
                 written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"], "type": _CV_FILE_TYPE}
-                upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id)
+                upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id, _CV_FILE_TYPE)
             except Exception as exc:
                 warnings.append(
                     f"CV file attachment failed: {exc}. Retry with attach_cv(candidate_id={candidate_id}, "
                     f"upload_id='{upload_id}'); the upload is kept until it expires."
                 )
         else:
-            written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "type": _CV_FILE_TYPE, "already_attached": True}
+            written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "type": upload.get("file_type"), "already_attached": True}
     except Exception as exc:
         _logger.exception("attach_cv: failure part way through writing Candidate %s", candidate_id)
         result["partial"] = True
@@ -4434,7 +4439,7 @@ def _attach_created_cv_file(
     written: dict = {"fields": [], "work_history": [], "education": [], "skill_set": [], "primary_skills": [], "file": None}
     result: dict = {"committed": True, "candidate_id": candidate_id, "written": written}
     if upload["status"] != "received":
-        written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "type": _CV_FILE_TYPE, "already_attached": True}
+        written["file"] = {"file_id": upload.get("file_id"), "name": upload["filename"], "type": upload.get("file_type"), "already_attached": True}
     else:
         try:
             client = get_client()
@@ -4444,7 +4449,7 @@ def _attach_created_cv_file(
                 external_id=_CV_FILE_EXTERNAL_ID, file_type=_CV_FILE_TYPE
             )
             written["file"] = {"file_id": (file_attachment or {}).get("fileId"), "name": upload["filename"], "type": _CV_FILE_TYPE}
-            upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id)
+            upload_store.mark_attached(upload_id, written["file"]["file_id"], "Candidate", candidate_id, _CV_FILE_TYPE)
         except Exception as exc:
             warnings.append(
                 f"CV file attachment failed: {exc}. Retry with attach_cv(candidate_id={candidate_id}, "
@@ -5185,7 +5190,7 @@ def get_file_text(
         return format_response({
             "error": "file_not_found",
             "message": f"{entity} {entity_id} has no file with id {file_id}.",
-            "files": [{"id": r.get("id"), "name": r.get("name")} for r in rows],
+            "files": [{"id": r.get("id"), "name": r.get("name"), "isDeleted": r.get("isDeleted")} for r in rows],
         })
     text = row.get("description")
     text = text if isinstance(text, str) else ""
